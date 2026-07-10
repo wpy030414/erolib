@@ -99,6 +99,7 @@ img {
 .flex-nowrap { flex-wrap: nowrap !important; }
 .flex-grow-1 { flex-grow: 1 !important; }
 .flex-shrink-0 { flex-shrink: 0 !important; }
+.spacer { flex: 1 1 auto !important; }
 .align-center { align-items: center !important; }
 .align-start { align-items: flex-start !important; }
 .align-end { align-items: flex-end !important; }
@@ -206,6 +207,89 @@ img {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 16px;
+}
+
+/* ---- Book card (shared: library + browser views) ---- */
+.book-card {
+  cursor: pointer;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  overflow: hidden;
+  background: var(--md-sys-color-surface);
+  transition:
+    transform 0.15s cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 0.15s cubic-bezier(0.2, 0, 0, 1),
+    border-color 0.15s ease;
+}
+
+.book-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--md-sys-color-outline);
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.book-cover-wrap {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.book-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.book-pages-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font: 500 11px / 1 var(--md-sys-typescale-font);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.book-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.5rem;
+  font-weight: bold;
+  color: var(--md-sys-color-primary);
+  user-select: none;
+}
+
+.md3-card__content {
+  padding: 12px;
+}
+
+.md3-card__title {
+  color: var(--md-sys-color-on-surface);
+  font: var(--md-sys-typescale-title-small-weight)
+    var(--md-sys-typescale-title-small-size) /
+    var(--md-sys-typescale-title-small-line-height)
+    var(--md-sys-typescale-font);
+}
+
+.md3-card__subtitle {
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: 4px;
+  font: var(--md-sys-typescale-body-medium-weight)
+    var(--md-sys-typescale-body-medium-size) /
+    var(--md-sys-typescale-body-medium-line-height)
+    var(--md-sys-typescale-font);
 }
 
 /* ---- Scrollbar (subtle, tonal) ---- */

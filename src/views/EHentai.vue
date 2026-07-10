@@ -1,42 +1,15 @@
 <template>
   <div class="pa-6">
-    <h2 class="text-h5 mb-6">{{ t('nav.ehentai') }}</h2>
-
-    <!-- Login status section -->
-    <div class="md3-card md3-card--outlined mb-6">
-      <div class="md3-card__header">
-        <span class="md3-card__header-avatar">
-          <MdiIcon :path="mdiAlphaE" :size="26" />
-        </span>
-        <div class="md3-card__header-titles">
-          <span class="md3-card__title">{{ t('eh.login.tab') }}</span>
-          <span class="md3-card__subtitle">
-            <span v-if="loggedIn" class="text-success">
-              {{ t('eh.login.loggedIn') }}
-            </span>
-            <span v-else-if="loggingIn" class="d-flex align-center">
-              <md-circular-progress indeterminate class="eh-spin" />
-              {{ t('eh.login.loggingIn') }}
-            </span>
-            <span v-else class="text-medium-emphasis">
-              {{ t('eh.login.notLoggedIn') }}
-            </span>
-          </span>
-        </div>
-        <span class="md3-card__header-action">
-          <md-outlined-button
-            :disabled="loggingIn"
-            @click="startLogin"
-          >
-            <MdiIcon slot="icon" :path="mdiLogin" :size="18" />
-            {{ t('eh.login.openBrowser') }}
-          </md-outlined-button>
-        </span>
-      </div>
-
-      <div class="md3-card__content text-body-2 text-medium-emphasis">
-        {{ t('eh.login.hint') }}
-      </div>
+    <div class="view-header d-flex align-center gap-4 mb-6">
+      <h2 class="text-h5 view-header__title">{{ t('nav.ehentai') }}</h2>
+      <span class="spacer" />
+      <span v-if="loggedIn" class="view-header__user">
+        {{ t('eh.login.loggedIn') }}
+      </span>
+      <md-outlined-button :disabled="loggingIn" @click="startLogin">
+        <MdiIcon slot="icon" :path="loggedIn ? mdiRefresh : mdiArrowTopRight" :size="18" />
+        {{ loggedIn ? t('eh.login.relogin') : t('eh.login.login') }}
+      </md-outlined-button>
     </div>
 
     <!-- Download section -->
@@ -110,9 +83,10 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import {
   mdiAlphaE,
+  mdiArrowTopRight,
   mdiCancel,
   mdiDownload,
-  mdiLogin,
+  mdiRefresh,
 } from '@mdi/js';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '@/services/api';
@@ -123,6 +97,7 @@ const { t } = useI18n();
 
 const loggedIn = ref(false);
 const loggingIn = ref(false);
+const cookie = ref('');
 const galleryUrl = ref('');
 const running = ref(false);
 const phase = ref('idle');
@@ -140,13 +115,15 @@ function pushLog(line: string) {
 }
 
 onMounted(async () => {
-  const cookie = await api.getEHentaiLogin();
-  if (cookie) {
+  const saved = await api.getEHentaiLogin();
+  if (saved) {
+    cookie.value = saved;
     loggedIn.value = true;
   }
 
   unlistenLogin = await listen<{ cookie: string }>('ehentai://login', (evt) => {
     if (evt.payload.cookie) {
+      cookie.value = evt.payload.cookie;
       loggedIn.value = true;
       loggingIn.value = false;
     }
@@ -196,9 +173,16 @@ async function start() {
   logs.value = [];
   running.value = true;
   try {
-    await api.downloadEHentaiGallery(galleryUrl.value.trim());
+    if (!cookie.value) {
+      pushLog(t('eh.login.notLoggedIn'));
+      running.value = false;
+      return;
+    }
+    await api.taskEnqueueEhentaiGallery(cookie.value, galleryUrl.value.trim());
+    pushLog(t('eh.taskQueued'));
   } catch (e) {
     pushLog(t('common.error', { message: String(e) }));
+  } finally {
     running.value = false;
   }
 }
@@ -229,6 +213,17 @@ type ProgressEvent =
 </script>
 
 <style scoped>
+.view-header__title {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.view-header__user {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .md3-card {
   display: flex;
   flex-direction: column;

@@ -114,6 +114,41 @@ impl StorageService {
         None
     }
 
+    /// Read a cover and downscale it to a small JPEG thumbnail (longest edge ≤
+    /// `max_edge`). The library grid ships this over IPC instead of the
+    /// full-res cover — a few KB vs potentially MBs — and the frontend caches
+    /// it in IndexedDB. Falls back to the original bytes if decoding fails so
+    /// the caller still has something to display.
+    pub fn read_cover_thumb(&self, book_id: &str, max_edge: u32) -> Option<Vec<u8>> {
+        let raw = self.read_cover(book_id)?;
+        Some(Self::shrink_to_jpeg(&raw, max_edge))
+    }
+
+    /// Decode `raw` (jpg/png/webp) and re-encode as a JPEG whose longest edge
+    /// is ≤ `max_edge` (aspect ratio preserved). Returns the original bytes on
+    /// any decode/encode failure.
+    fn shrink_to_jpeg(raw: &[u8], max_edge: u32) -> Vec<u8> {
+        use image::imageops::FilterType;
+        use std::io::Cursor;
+        let Ok(img) = image::load_from_memory(raw) else {
+            return raw.to_vec();
+        };
+        let scaled = if img.width() > max_edge || img.height() > max_edge {
+            img.resize(max_edge, max_edge, FilterType::Triangle)
+        } else {
+            img
+        };
+        let mut buf = Cursor::new(Vec::new());
+        if scaled
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .is_ok()
+        {
+            buf.into_inner()
+        } else {
+            raw.to_vec()
+        }
+    }
+
     /// Extract a single page image from a CB7/CBZ archive by index.
     ///
     /// Pages are the image entries within the zip (filtered by extension), in

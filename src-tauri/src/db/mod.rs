@@ -1,4 +1,4 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use tauri::{AppHandle, Manager};
 
 pub struct Database {
@@ -42,13 +42,64 @@ impl Database {
             .await
             .map_err(|e| crate::errors::AppError::Other(format!("pragma foreign_keys: {e}")))?;
 
-        // `sqlx::migrate!` resolves the migrations directory relative to
-        // CARGO_MANIFEST_DIR, so it works under both `tauri dev` and builds.
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|e| crate::errors::AppError::Other(format!("migrations: {e}")))?;
+        // Apply migrations. The `sqlx::migrate!` macro lives in sqlx-macros,
+        // which can't be built in the release profile on this toolchain (see
+        // Cargo.toml), so the SQL is embedded and executed directly. Every
+        // migration is idempotent (`CREATE ... IF NOT EXISTS` /
+        // `DROP ... IF EXISTS`-then-rebuild), so re-running on each launch is a
+        // no-op once applied.
+        for sql in [
+            include_str!("../../migrations/20260709000001_init.sql"),
+            include_str!("../../migrations/20260709000002_fix_fts.sql"),
+            include_str!("../../migrations/20260710000001_tasks.sql"),
+        ] {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .map_err(|e| crate::errors::AppError::Other(format!("migrations: {e}")))?;
+        }
+
+        // books: add source-metadata columns. ALTER TABLE ADD COLUMN has no
+        // IF NOT EXISTS and migrations re-run every launch, so guard each with
+        // a PRAGMA table_info check. New installs get these via init.sql's
+        // CREATE TABLE; this upgrades existing DBs in place.
+        for (col, ddl) in [
+            ("source_post_id", "TEXT"),
+            ("author", "TEXT"),
+            ("author_id", "TEXT"),
+            ("published_at", "TEXT"),
+        ] {
+            ensure_column(&pool, "books", col, ddl).await?;
+        }
 
         Ok(Self { pool })
     }
+}
+
+/// Idempotently add a column: `ALTER TABLE ... ADD COLUMN` has no
+/// `IF NOT EXISTS`, so check `PRAGMA table_info` first.
+async fn ensure_column(
+    pool: &Pool<Sqlite>,
+    table: &str,
+    column: &str,
+    ddl: &str,
+) -> Result<(), crate::errors::AppError> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await
+        .map_err(|e| crate::errors::AppError::Other(format!("pragma table_info {table}: {e}")))?;
+    let exists = rows.iter().any(|r| {
+        r.try_get::<String, _>("name")
+            .map(|n| n == column)
+            .unwrap_or(false)
+    });
+    if !exists {
+        sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                crate::errors::AppError::Other(format!("alter {table}.{column}: {e}"))
+            })?;
+    }
+    Ok(())
 }

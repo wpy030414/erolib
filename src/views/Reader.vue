@@ -10,7 +10,7 @@
         class="icon-btn"
         :title="t('reader.back')"
         :aria-label="t('reader.back')"
-        @click="router.push('/library')"
+        @click="goBack"
       >
         <svg :width="22" :height="22" viewBox="0 0 24 24" fill="currentColor">
           <path :d="mdiArrowLeft" />
@@ -47,7 +47,7 @@
           :src="src"
           :alt="t('reader.page', { page: current + 1 })"
           class="reader-image"
-          :style="fitStyle"
+          :class="{ 'reader-image--fill': zoomMode === 'fill' }"
           draggable="false"
         />
       </template>
@@ -102,6 +102,13 @@ const props = defineProps<{
 const { t } = useI18n();
 const router = useRouter();
 
+/** Return to wherever the reader was opened from (e.g. the Pixiv grid); fall
+ *  back to the library if there's no history. */
+function goBack() {
+  if (window.history.length > 1) router.back();
+  else router.push('/library');
+}
+
 const pageCount = ref<number | null>(null);
 const title = ref('');
 const blobs = ref<Record<number, string>>({});
@@ -114,19 +121,6 @@ watch(zoomMode, (v) => saveZoomMode(v));
 watch(current, (v) => saveBookProgress(props.id, v));
 
 const src = computed(() => blobs.value[current.value]);
-
-const fitStyle = computed(() => {
-  if (zoomMode.value === 'fill') {
-    return { width: '100%', height: '100%', objectFit: 'cover' as const };
-  }
-  return {
-    width: 'auto',
-    height: 'auto',
-    maxWidth: '100%',
-    maxHeight: '100%',
-    objectFit: 'contain' as const,
-  };
-});
 
 function readZoomMode(): ZoomMode {
   try {
@@ -180,6 +174,8 @@ function mimeFromBytes(bytes: number[]): string {
     b[11] === 0x50
   )
     return 'image/webp';
+  // ugoira books are stored as a single gif; the <img> loops it natively.
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
   return 'image/jpeg';
 }
 
@@ -430,10 +426,6 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
 }
 
-.spacer {
-  flex: 1 1 auto;
-}
-
 .reader-page-label {
   min-width: 28px;
   text-align: center;
@@ -454,9 +446,32 @@ onBeforeUnmount(() => {
 
 .reader-image {
   display: block;
+  user-select: none;
+}
+
+/* 贴合内容 (contain, default): image fills the viewport box, then
+   object-fit:contain scales it down to fit entirely (letterbox). Crucially we
+   size the element to 100% (not max-width alone) so LOW-RES images also scale
+   up to the screen instead of sitting at their tiny natural size centered in a
+   sea of margin. */
+.reader-image:not(.reader-image--fill) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* 贴合屏幕 (fill/cover): absolutely cover the viewport — 放大填满、裁剪、无
+   留白。用 absolute 把图拽出 viewport 的 flex 居中流，配显式 top/left + 100%
+   尺寸，确保 object-fit:cover 把低分辨率图也放大到完全贴边、不留 margin。 */
+.reader-image--fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   max-width: none;
   max-height: none;
-  user-select: none;
+  object-fit: cover;
 }
 
 .truncate {

@@ -21,27 +21,20 @@ impl ServerHandle {
     }
 }
 
-#[tauri::command]
+/// Start the OPDS server. Idempotent: if already running, does nothing.
 pub async fn start_opds_server(
     port: u16,
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
+    app_handle: &AppHandle,
+    state: &AppState,
 ) -> Result<String, String> {
-    // Ensure the OPDS server is not already running.
-    if !app_handle
-        .state::<Arc<ServerHandle>>()
-        .opds_shutdown
-        .lock()
-        .unwrap()
-        .is_none()
-    {
+    let handle = app_handle.state::<Arc<ServerHandle>>();
+    if handle.opds_shutdown.lock().unwrap().is_some() {
         return Err("OPDS server is already running".into());
     }
 
     let (tx, rx) = tokio::sync::watch::channel(false);
     {
-        let handle_state = app_handle.state::<Arc<ServerHandle>>();
-        let mut guard = handle_state.opds_shutdown.lock().unwrap();
+        let mut guard = handle.opds_shutdown.lock().unwrap();
         *guard = Some(tx);
     }
 
@@ -60,7 +53,7 @@ pub async fn start_opds_server(
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("OPDS: {e}"))?;
 
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -75,37 +68,20 @@ pub async fn start_opds_server(
     Ok(base_url)
 }
 
-#[tauri::command]
-pub async fn stop_opds_server(app_handle: AppHandle) -> Result<(), String> {
-    let handle = app_handle.state::<Arc<ServerHandle>>();
-    let mut guard = handle.opds_shutdown.lock().unwrap();
-    if let Some(tx) = guard.take() {
-        let _ = tx.send(true);
-    }
-    Ok(())
-}
-
-#[tauri::command]
+/// Start the RSS server. Idempotent: if already running, does nothing.
 pub async fn start_rss_server(
     port: u16,
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
+    app_handle: &AppHandle,
+    state: &AppState,
 ) -> Result<String, String> {
-    // Ensure the RSS server is not already running.
-    if !app_handle
-        .state::<Arc<ServerHandle>>()
-        .rss_shutdown
-        .lock()
-        .unwrap()
-        .is_none()
-    {
+    let handle = app_handle.state::<Arc<ServerHandle>>();
+    if handle.rss_shutdown.lock().unwrap().is_some() {
         return Err("RSS server is already running".into());
     }
 
     let (tx, rx) = tokio::sync::watch::channel(false);
     {
-        let handle_state = app_handle.state::<Arc<ServerHandle>>();
-        let mut guard = handle_state.rss_shutdown.lock().unwrap();
+        let mut guard = handle.rss_shutdown.lock().unwrap();
         *guard = Some(tx);
     }
 
@@ -124,7 +100,7 @@ pub async fn start_rss_server(
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("RSS: {e}"))?;
 
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -139,15 +115,57 @@ pub async fn start_rss_server(
     Ok(base_url)
 }
 
-#[tauri::command]
-pub async fn stop_rss_server(app_handle: AppHandle) -> Result<(), String> {
+/// Stop the OPDS server.
+pub async fn stop_opds_server(app_handle: &AppHandle) {
+    let handle = app_handle.state::<Arc<ServerHandle>>();
+    let mut guard = handle.opds_shutdown.lock().unwrap();
+    if let Some(tx) = guard.take() {
+        let _ = tx.send(true);
+    }
+}
+
+/// Stop the RSS server.
+pub async fn stop_rss_server(app_handle: &AppHandle) {
     let handle = app_handle.state::<Arc<ServerHandle>>();
     let mut guard = handle.rss_shutdown.lock().unwrap();
     if let Some(tx) = guard.take() {
         let _ = tx.send(true);
     }
+}
+
+// ---- Tauri command wrappers ----
+
+#[tauri::command]
+pub async fn start_opds_server_cmd(
+    port: u16,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    start_opds_server(port, &app_handle, &state).await
+}
+
+#[tauri::command]
+pub async fn stop_opds_server_cmd(app_handle: AppHandle) -> Result<(), String> {
+    stop_opds_server(&app_handle).await;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn start_rss_server_cmd(
+    port: u16,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    start_rss_server(port, &app_handle, &state).await
+}
+
+#[tauri::command]
+pub async fn stop_rss_server_cmd(app_handle: AppHandle) -> Result<(), String> {
+    stop_rss_server(&app_handle).await;
+    Ok(())
+}
+
+// ---- Route handlers ----
 
 type ServerState = (Arc<crate::db::Database>, std::path::PathBuf, std::path::PathBuf);
 

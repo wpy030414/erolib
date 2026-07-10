@@ -7,8 +7,8 @@ mod services;
 use std::sync::Arc;
 
 use services::{
-    LibraryService, OpdsService, RssService,
-    SearchService, StorageService,
+    task_manager::TaskManager, LibraryService, OpdsService,
+    RssService, SearchService, StorageService,
 };
 use tauri::Manager;
 
@@ -68,8 +68,24 @@ fn main() {
                 .app_local_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             let storage = Arc::new(StorageService::new(storage_dir.clone()));
-            app.manage(AppState::new(db, storage));
+            let app_state = AppState::new(db.clone(), storage.clone());
+            app.manage(app_state.clone());
             app.manage(Arc::new(commands::server::ServerHandle::new()));
+            // Auto-start OPDS and RSS servers on default ports.
+            let app_for_opds = app_handle.clone();
+            let state_for_opds = app_state.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = commands::server::start_opds_server(5269, &app_for_opds, &state_for_opds).await {
+                    tracing::error!(target: "erolib::server", "auto-start OPDS: {e}");
+                }
+            });
+            let app_for_rss = app_handle.clone();
+            let state_for_rss = app_state;
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = commands::server::start_rss_server(1269, &app_for_rss, &state_for_rss).await {
+                    tracing::error!(target: "erolib::server", "auto-start RSS: {e}");
+                }
+            });
             // Persist the Pixiv login under the app data dir so it survives
             // restarts. A captured login is restored on launch and re-written on
             // every set; only an explicit re-login (clear + new capture) changes
@@ -81,6 +97,18 @@ fn main() {
             app.manage(Arc::new(commands::ehentai::EhentaiSession::with_persist(
                 storage_dir.join("ehentai_session.json"),
             )));
+            // Task manager — must be in an Arc so init_self_ref works.
+            let task_manager = Arc::new(
+                tauri::async_runtime::block_on(async {
+                    TaskManager::new(app_handle.clone(), db.clone(), storage.clone()).await
+                })
+                .map_err(|e| {
+                    tracing::error!(target: "erolib::tasks", %e, "failed to create TaskManager");
+                    e
+                })?,
+            );
+            TaskManager::init_self_ref(&task_manager);
+            app.manage(task_manager);
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
@@ -95,16 +123,18 @@ fn main() {
             commands::book::get_book_page,
             commands::book::get_book_page_count,
             commands::book::get_book_cover,
+            commands::book::get_book_cover_thumb,
             commands::book::export_book,
             commands::book::save_book,
             commands::book::list_books,
+            commands::reset::reset_app_data,
             commands::search::search_books,
             commands::search::get_all_tags,
             commands::search::get_all_collections,
-            commands::server::start_opds_server,
-            commands::server::stop_opds_server,
-            commands::server::start_rss_server,
-            commands::server::stop_rss_server,
+            commands::server::start_opds_server_cmd,
+            commands::server::stop_opds_server_cmd,
+            commands::server::start_rss_server_cmd,
+            commands::server::stop_rss_server_cmd,
             commands::pixiv::pixiv_test_cookie,
             commands::pixiv::pixiv_get_login,
             commands::pixiv::pixiv_set_login,
@@ -113,11 +143,26 @@ fn main() {
             commands::pixiv::pixiv_cancel_download,
             commands::pixiv::pixiv_fetch_followings,
             commands::pixiv::pixiv_download_user_works,
+            commands::pixiv::pixiv_list_bookmarks,
+            commands::pixiv::pixiv_list_following_feed,
+            commands::pixiv::pixiv_proxy_image,
+            commands::pixiv::pixiv_browse_status,
             commands::pixiv_login::pixiv_open_login_window,
             commands::ehentai::ehentai_open_login_window,
             commands::ehentai::ehentai_download_gallery,
             commands::ehentai::ehentai_cancel_download,
             commands::ehentai::ehentai_get_login,
+            commands::ehentai::ehentai_set_login,
+            commands::tasks::tasks_list,
+            commands::tasks::task_pause,
+            commands::tasks::task_resume,
+            commands::tasks::task_cancel,
+            commands::tasks::task_delete,
+            commands::tasks::task_retry,
+            commands::tasks::task_enqueue_pixiv_bookmarks,
+            commands::tasks::task_enqueue_pixiv_user_works,
+            commands::tasks::task_enqueue_ehentai_gallery,
+            commands::tasks::task_enqueue_pixiv_work,
         ])
         .run(tauri::generate_context!())
         .unwrap();

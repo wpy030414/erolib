@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Manga Manager",
+  "description": "Default capabilities for EroLib",
   "windows": ["main", "pixiv-login"],
   "permissions": [
     "core:default",

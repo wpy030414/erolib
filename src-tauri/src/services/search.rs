@@ -4,7 +4,7 @@ use sqlx::Row;
 
 use crate::db::Database;
 use crate::errors::AppError;
-use crate::models::{Book, Collection, SearchFacets, SearchQuery, SearchResult, Tag};
+use crate::models::{Book, Collection, SearchFacets, SearchQuery, SearchResult, TagCount};
 
 pub struct SearchService {
     db: Arc<Database>,
@@ -26,10 +26,17 @@ impl SearchService {
 
         if let Some(text) = &query.text {
             if !text.trim().is_empty() {
-                conditions.push("(books.title LIKE ? OR books.original_filename LIKE ?)".into());
+                // Free-text search spans title, author AND tags — typing a tag
+                // name surfaces every book carrying it (handy for tag cleanup).
+                conditions.push(
+                    "(books.title LIKE ? OR books.author LIKE ? OR books.id IN (\
+                       SELECT bt.book_id FROM book_tags bt \
+                       JOIN tags t ON t.id = bt.tag_id WHERE t.name LIKE ?))".into(),
+                );
                 let pattern = format!("%{}%", text.trim());
-                args.push(pattern.clone());
-                args.push(pattern);
+                args.push(pattern.clone()); // title
+                args.push(pattern.clone()); // author
+                args.push(pattern); // tag name
             }
         }
 
@@ -145,9 +152,15 @@ impl SearchService {
             .map_err(AppError::Db)?;
         let total: i64 = total_row.try_get("count").unwrap_or(0);
 
-        // Fetch page.
+        // Fetch page. LEFT JOIN tags so Book.tags is populated (GROUP_CONCAT);
+        // GROUP BY books.id de-dups the tag-join rows (replaces DISTINCT).
         let data_sql = format!(
-            "SELECT DISTINCT books.* FROM books {joins} {where_clause} {order_clause} LIMIT ? OFFSET ?"
+            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {where_clause} \
+             GROUP BY books.id {order_clause} LIMIT ? OFFSET ?"
         );
         let mut data_query = build_query(&data_sql, &args);
         data_query = data_query.bind(page_size.to_string());
@@ -164,11 +177,52 @@ impl SearchService {
         })
     }
 
-    pub async fn tags(&self) -> Result<Vec<Tag>, AppError> {
-        sqlx::query_as::<_, Tag>("SELECT id, name, type AS tag_type, created_at FROM tags ORDER BY name")
-            .fetch_all(&self.db.pool)
-            .await
-            .map_err(AppError::Db)
+    /// Every tag with its book usage count, sorted by count desc then name,
+    /// capped to the top 30. Feeds the tag-chip filter row.
+    ///
+    /// When `text` is given, counts are tallied only over the books matching
+    /// that text (title/author) — the text query dominates the chips, so the
+    /// chip set and its counts reflect the text-filtered result set. Tags with
+    /// zero matches simply drop out (INNER JOIN). With no text, the full
+    /// library is tallied.
+    pub async fn tags_with_count(&self, text: Option<&str>) -> Result<Vec<TagCount>, AppError> {
+        match text {
+            Some(t) => {
+                let pattern = format!("%{}%", t);
+                sqlx::query_as::<_, TagCount>(
+                    "SELECT t.name AS name, COUNT(bt.book_id) AS count \
+                     FROM tags t \
+                     JOIN book_tags bt ON bt.tag_id = t.id \
+                     JOIN books b ON b.id = bt.book_id \
+                     WHERE (b.title LIKE ? OR b.author LIKE ? \
+                            OR b.id IN (\
+                                SELECT bt2.book_id FROM book_tags bt2 \
+                                JOIN tags t2 ON t2.id = bt2.tag_id WHERE t2.name LIKE ?)) \
+                     GROUP BY t.id \
+                     ORDER BY count DESC, t.name ASC \
+                     LIMIT 30",
+                )
+                .bind(&pattern)
+                .bind(&pattern)
+                .bind(&pattern)
+                .fetch_all(&self.db.pool)
+                .await
+                .map_err(AppError::Db)
+            }
+            None => {
+                sqlx::query_as::<_, TagCount>(
+                    "SELECT t.name AS name, COUNT(bt.book_id) AS count \
+                     FROM tags t \
+                     JOIN book_tags bt ON bt.tag_id = t.id \
+                     GROUP BY t.id \
+                     ORDER BY count DESC, t.name ASC \
+                     LIMIT 30",
+                )
+                .fetch_all(&self.db.pool)
+                .await
+                .map_err(AppError::Db)
+            }
+        }
     }
 
     pub async fn collections(&self) -> Result<Vec<Collection>, AppError> {

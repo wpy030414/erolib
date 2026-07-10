@@ -14,6 +14,15 @@ use crate::services::storage::StorageService;
 use crate::services::LibraryService;
 
 const EHENTAI_BASE: &str = "https://e-hentai.org";
+
+/// Gallery metadata scraped from the landing page (best-effort).
+#[derive(Debug, Default, Clone)]
+pub struct GalleryMeta {
+    /// Site-local posted time, e.g. "2024-01-15 12:00".
+    pub posted: Option<String>,
+    /// Uploader display name (EHentai has no uploader id).
+    pub uploader: Option<String>,
+}
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
 /// Authenticated e-hentai client. Holds the session cookies captured from the
@@ -91,6 +100,41 @@ impl EhentaiClient {
             anyhow::bail!("no page links found in gallery {url} (not logged in or deleted?)");
         }
         Ok(pages)
+    }
+
+    /// Scrape the posted time + uploader from a gallery landing page.
+    /// Best-effort; missing fields are left None.
+    pub async fn fetch_gallery_meta(&self, gid: &str, token: &str) -> Result<GalleryMeta> {
+        let url = format!("{}/g/{}/{}/", EHENTAI_BASE, gid, token);
+        let html = self
+            .get(&url)
+            .send()
+            .await
+            .context("request gallery meta")?
+            .text()
+            .await
+            .context("read gallery meta body")?;
+        let doc = Html::parse_document(&html);
+
+        let uploader_sel =
+            Selector::parse("#gdn a").map_err(|e| anyhow::anyhow!("build selector: {e:?}"))?;
+        let uploader = doc
+            .select(&uploader_sel)
+            .next()
+            .map(|n| n.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        // #gdd's first td.gdt2 is the "Posted:" value, a site-local string like
+        // "2024-01-15 12:00"; the frontend tolerates this partial format.
+        let posted_sel =
+            Selector::parse("#gdd td.gdt2").map_err(|e| anyhow::anyhow!("build selector: {e:?}"))?;
+        let posted = doc
+            .select(&posted_sel)
+            .next()
+            .map(|n| n.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        Ok(GalleryMeta { posted, uploader })
     }
 
     /// Resolve the direct image URL for a single page view (<img id="img">).
@@ -235,6 +279,7 @@ impl EhentaiDownloader {
                     plugin: "ehentai".into(),
                     source_url: format!("{}/g/{}/{}/", EHENTAI_BASE, gid, token),
                     scraped_at: Some(chrono::Utc::now()),
+                    ..Default::default()
                 }),
                 tags,
             )

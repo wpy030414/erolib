@@ -29,6 +29,7 @@ import {
   mdiBookOutline,
   mdiAlphaP,
   mdiAlphaE,
+  mdiClipboardList,
   mdiCogOutline,
 } from '@mdi/js';
 import { useRoute } from 'vue-router';
@@ -39,7 +40,7 @@ const { t } = useI18n();
 
 interface NavItem {
   path: string;
-  labelKey: 'nav.library' | 'nav.pixiv' | 'nav.ehentai' | 'nav.settings';
+  labelKey: 'nav.library' | 'nav.pixiv' | 'nav.ehentai' | 'nav.tasks' | 'nav.settings';
   icon: string;
 }
 
@@ -47,6 +48,7 @@ const navItems: NavItem[] = [
   { path: '/library', labelKey: 'nav.library', icon: mdiBookOutline },
   { path: '/pixiv', labelKey: 'nav.pixiv', icon: mdiAlphaP },
   { path: '/ehentai', labelKey: 'nav.ehentai', icon: mdiAlphaE },
+  { path: '/tasks', labelKey: 'nav.tasks', icon: mdiClipboardList },
   { path: '/settings', labelKey: 'nav.settings', icon: mdiCogOutline },
 ];
 </script>
