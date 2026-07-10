@@ -1,0 +1,231 @@
+/* ===================================================================
+   EroLib — MD3 base styles & utilities
+   -------------------------------------------------------------------
+   Consumes tokens from tokens.css. Provides:
+     - baseline reset + body defaults
+     - MD3 typography utility classes (.md3-display-large, …)
+     - spacing / flex / display / text utilities (Vuetify-compatible
+       names so view templates stay readable)
+   =================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--md-sys-typescale-font);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--md-sys-color-primary);
+}
+
+button {
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+}
+
+/* ---- MD3 typography utility classes ---- */
+.md3-display-large { font: 400 var(--md-sys-typescale-display-large-size)/var(--md-sys-typescale-display-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-display-large-tracking); }
+.md3-display-medium { font: 400 var(--md-sys-typescale-display-medium-size)/var(--md-sys-typescale-display-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-display-medium-tracking); }
+.md3-display-small { font: 400 var(--md-sys-typescale-display-small-size)/var(--md-sys-typescale-display-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-display-small-tracking); }
+.md3-headline-large { font: 400 var(--md-sys-typescale-headline-large-size)/var(--md-sys-typescale-headline-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-headline-large-tracking); }
+.md3-headline-medium { font: 400 var(--md-sys-typescale-headline-medium-size)/var(--md-sys-typescale-headline-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-headline-medium-tracking); }
+.md3-headline-small { font: 400 var(--md-sys-typescale-headline-small-size)/var(--md-sys-typescale-headline-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-headline-small-tracking); }
+.md3-title-large { font: 400 var(--md-sys-typescale-title-large-size)/var(--md-sys-typescale-title-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-title-large-tracking); }
+.md3-title-medium { font: 500 var(--md-sys-typescale-title-medium-size)/var(--md-sys-typescale-title-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-title-medium-tracking); }
+.md3-title-small { font: 500 var(--md-sys-typescale-title-small-size)/var(--md-sys-typescale-title-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-title-small-tracking); }
+.md3-body-large { font: 400 var(--md-sys-typescale-body-large-size)/var(--md-sys-typescale-body-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-body-large-tracking); }
+.md3-body-medium { font: 400 var(--md-sys-typescale-body-medium-size)/var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-body-medium-tracking); }
+.md3-body-small { font: 400 var(--md-sys-typescale-body-small-size)/var(--md-sys-typescale-body-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-body-small-tracking); }
+.md3-label-large { font: 500 var(--md-sys-typescale-label-large-size)/var(--md-sys-typescale-label-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-large-tracking); }
+.md3-label-medium { font: 500 var(--md-sys-typescale-label-medium-size)/var(--md-sys-typescale-label-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-medium-tracking); }
+.md3-label-small { font: 500 var(--md-sys-typescale-label-small-size)/var(--md-sys-typescale-label-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-small-tracking); }
+
+/* ---- Text color utilities ---- */
+.text-primary { color: var(--md-sys-color-primary) !important; }
+.text-on-surface { color: var(--md-sys-color-on-surface) !important; }
+.text-on-surface-variant,
+.text-medium-emphasis { color: var(--md-sys-color-on-surface-variant) !important; }
+.text-disabled { color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent) !important; }
+.text-error { color: var(--md-sys-color-error) !important; }
+.text-success { color: var(--md-sys-color-success) !important; }
+.text-warning { color: var(--md-sys-color-warning) !important; }
+.text-info { color: var(--md-sys-color-info) !important; }
+
+/* ---- Vuetify-compat typography aliases (keeps view diffs readable) ---- */
+.text-h1 { font: 400 var(--md-sys-typescale-display-medium-size)/var(--md-sys-typescale-display-medium-line-height) var(--md-sys-typescale-font); }
+.text-h2 { font: 400 var(--md-sys-typescale-display-small-size)/var(--md-sys-typescale-display-small-line-height) var(--md-sys-typescale-font); }
+.text-h3 { font: 400 var(--md-sys-typescale-headline-large-size)/var(--md-sys-typescale-headline-large-line-height) var(--md-sys-typescale-font); }
+.text-h4 { font: 400 var(--md-sys-typescale-headline-medium-size)/var(--md-sys-typescale-headline-medium-line-height) var(--md-sys-typescale-font); }
+.text-h5 { font: 400 var(--md-sys-typescale-headline-small-size)/var(--md-sys-typescale-headline-small-line-height) var(--md-sys-typescale-font); }
+.text-h6 { font: 400 var(--md-sys-typescale-title-large-size)/var(--md-sys-typescale-title-large-line-height) var(--md-sys-typescale-font); }
+.text-subtitle-1,
+.text-subtitle-2 { font: 400 var(--md-sys-typescale-body-medium-size)/var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font); color: var(--md-sys-color-on-surface-variant) !important; }
+.text-body-1 { font: 400 var(--md-sys-typescale-body-large-size)/var(--md-sys-typescale-body-large-line-height) var(--md-sys-typescale-font); }
+.text-body-2 { font: 400 var(--md-sys-typescale-body-medium-size)/var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font); }
+.text-caption { font: 400 var(--md-sys-typescale-body-small-size)/var(--md-sys-typescale-body-small-line-height) var(--md-sys-typescale-font); }
+.text-overline { font: 500 var(--md-sys-typescale-label-small-size)/var(--md-sys-typescale-label-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-small-tracking); }
+
+/* ---- Display utilities ---- */
+.d-none { display: none !important; }
+.d-block { display: block !important; }
+.d-flex { display: flex !important; }
+.d-inline-flex { display: inline-flex !important; }
+.d-grid { display: grid !important; }
+
+/* ---- Flex utilities ---- */
+.flex-row { flex-direction: row !important; }
+.flex-column { flex-direction: column !important; }
+.flex-wrap { flex-wrap: wrap !important; }
+.flex-nowrap { flex-wrap: nowrap !important; }
+.flex-grow-1 { flex-grow: 1 !important; }
+.flex-shrink-0 { flex-shrink: 0 !important; }
+.align-center { align-items: center !important; }
+.align-start { align-items: flex-start !important; }
+.align-end { align-items: flex-end !important; }
+.align-self-center { align-self: center !important; }
+.justify-center { justify-content: center !important; }
+.justify-start { justify-content: flex-start !important; }
+.justify-end { justify-content: flex-end !important; }
+.justify-space-between { justify-content: space-between !important; }
+
+/* ---- Text alignment ---- */
+.text-left { text-align: left !important; }
+.text-center { text-align: center !important; }
+.text-right { text-align: right !important; }
+
+/* ---- Truncate / nowrap ---- */
+.text-truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.text-no-wrap { white-space: nowrap !important; }
+.font-monospace { font-family: ui-monospace, 'SFMono-Regular', Menlo, 'Roboto Mono', monospace !important; }
+.font-weight-medium { font-weight: 500 !important; }
+
+/* ---- Surface backgrounds ---- */
+.bg-surface { background: var(--md-sys-color-surface) !important; }
+.bg-surface-container { background: var(--md-sys-color-surface-container) !important; }
+.bg-surface-container-high { background: var(--md-sys-color-surface-container-high) !important; }
+.bg-surface-variant { background: var(--md-sys-color-surface-container-high) !important; }
+.bg-primary-container { background: var(--md-sys-color-primary-container) !important; color: var(--md-sys-color-on-primary-container); }
+
+/* ---- Rounded ---- */
+.rounded { border-radius: var(--md-sys-shape-corner-medium) !important; }
+.rounded-lg { border-radius: var(--md-sys-shape-corner-large) !important; }
+.rounded-full { border-radius: var(--md-sys-shape-corner-full) !important; }
+
+.fill-height { height: 100% !important; }
+.fill-width { width: 100% !important; }
+
+/* ---- Spacing (4px step, Vuetify-compatible: p/m + a/x/y/t/b/l/r + 0..16) ---- */
+.pa-0 { padding: 0 !important; }
+.ma-0 { margin: 0 !important; }
+
+/* generate via explicit rules for the common scale */
+.pa-1 { padding: 4px !important; } .ma-1 { margin: 4px !important; }
+.pa-2 { padding: 8px !important; } .ma-2 { margin: 8px !important; }
+.pa-3 { padding: 12px !important; } .ma-3 { margin: 12px !important; }
+.pa-4 { padding: 16px !important; } .ma-4 { margin: 16px !important; }
+.pa-5 { padding: 20px !important; } .ma-5 { margin: 20px !important; }
+.pa-6 { padding: 24px !important; } .ma-6 { margin: 24px !important; }
+.pa-8 { padding: 32px !important; } .ma-8 { margin: 32px !important; }
+
+.px-1 { padding-left: 4px !important; padding-right: 4px !important; }
+.px-2 { padding-left: 8px !important; padding-right: 8px !important; }
+.px-3 { padding-left: 12px !important; padding-right: 12px !important; }
+.px-4 { padding-left: 16px !important; padding-right: 16px !important; }
+.px-6 { padding-left: 24px !important; padding-right: 24px !important; }
+
+.py-1 { padding-top: 4px !important; padding-bottom: 4px !important; }
+.py-2 { padding-top: 8px !important; padding-bottom: 8px !important; }
+.py-3 { padding-top: 12px !important; padding-bottom: 12px !important; }
+.py-4 { padding-top: 16px !important; padding-bottom: 16px !important; }
+.py-6 { padding-top: 24px !important; padding-bottom: 24px !important; }
+
+.pl-2 { padding-left: 8px !important; }
+.pl-3 { padding-left: 12px !important; }
+.pr-2 { padding-right: 8px !important; }
+.pr-3 { padding-right: 12px !important; }
+.pt-2 { padding-top: 8px !important; }
+.pt-3 { padding-top: 12px !important; }
+.pb-2 { padding-bottom: 8px !important; }
+.pb-3 { padding-bottom: 12px !important; }
+
+.mb-1 { margin-bottom: 4px !important; }
+.mb-2 { margin-bottom: 8px !important; }
+.mb-3 { margin-bottom: 12px !important; }
+.mb-4 { margin-bottom: 16px !important; }
+.mb-6 { margin-bottom: 24px !important; }
+.mb-8 { margin-bottom: 32px !important; }
+.mt-1 { margin-top: 4px !important; }
+.mt-2 { margin-top: 8px !important; }
+.mt-3 { margin-top: 12px !important; }
+.mt-4 { margin-top: 16px !important; }
+.mt-6 { margin-top: 24px !important; }
+.mt-8 { margin-top: 32px !important; }
+.ml-2 { margin-left: 8px !important; }
+.ml-3 { margin-left: 12px !important; }
+.ml-auto { margin-left: auto !important; }
+.mr-2 { margin-right: 8px !important; }
+.mr-3 { margin-right: 12px !important; }
+.mx-2 { margin-left: 8px !important; margin-right: 8px !important; }
+.mx-3 { margin-left: 12px !important; margin-right: 12px !important; }
+
+/* gap shorthand helpers */
+.gap-1 { gap: 4px !important; }
+.gap-2 { gap: 8px !important; }
+.gap-3 { gap: 12px !important; }
+.gap-4 { gap: 16px !important; }
+.ga-2 { gap: 8px !important; }
+.ga-3 { gap: 12px !important; }
+.ga-4 { gap: 16px !important; }
+
+/* ---- Responsive grid (replacement for v-row / v-col) ---- */
+.md3-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+/* ---- Scrollbar (subtle, tonal) ---- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--md-sys-color-outline-variant) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--md-sys-color-outline); background-clip: padding-box; }
+
+/* ---- Vue <transition> helpers ---- */
+.md3-fade-enter-active,
+.md3-fade-leave-active {
+  transition: opacity var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+}
+.md3-fade-enter-from,
+.md3-fade-leave-to { opacity: 0; }

@@ -1,0 +1,51 @@
+{
+  "productName": "EroLib",
+  "version": "0.1.0",
+  "identifier": "im.xrl.erolib",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "EroLib",
+        "width": 1200,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "public.app-category.entertainment",
+    "copyright": "",
+    "externalBin": [],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "longDescription": "EroLib — 工口图书馆 / 成人向 CB7 本地库，支持 Pixiv 与 EHentai 下载",
+    "macOS": {
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null,
+      "minimumSystemVersion": "12.0"
+    },
+    "resources": [],
+    "shortDescription": "EroLib — 工口图书馆",
+    "targets": "all"
+  },
+  "plugins": {}
+}
