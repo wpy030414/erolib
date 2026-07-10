@@ -112,14 +112,31 @@ pub fn ehentai_get_login(session: State<'_, Arc<EhentaiSession>>) -> Result<Opti
     Ok(session.get_cookie())
 }
 
+/// Manually set the EHentai session cookie (e.g. pasted by the user).
+#[tauri::command]
+pub fn ehentai_set_login(
+    cookie: String,
+    session: State<'_, Arc<EhentaiSession>>,
+) -> Result<(), String> {
+    if cookie.trim().is_empty() {
+        return Err("cookie is required".into());
+    }
+    if !crate::commands::cookies::has_ehentai_session(&cookie) {
+        return Err("cookie does not appear to be a valid EHentai session (missing ipb_member_id/ipb_pass_hash)".into());
+    }
+    session.set_cookie(cookie.trim().to_string());
+    Ok(())
+}
+
 /// Open an in-app browser pointed at the e-hentai forums login page. The session
-/// cookies (`ipb_member_id` / `ipb_pass_hash`) are then available from the shared
-/// WKWebView cookie store. We capture as soon as the window navigates onto a
-/// post-login `e-hentai.org` / `exhentai.org` page; if the user closes early we
-/// still attempt a best-effort capture.
+/// cookies (`ipb_member_id` / `ipb_pass_hash`) are then captured via JS eval
+/// from the shared webview. We poll the URL and attempt capture as soon as the
+/// window navigates onto a post-login `e-hentai.org` / `exhentai.org` page; if
+/// the user closes early we still attempt a best-effort capture.
 ///
 /// The frontend calls this command, then listens for the `ehentai://login`
-/// event carrying `{ cookie }`.
+/// event carrying `{ cookie }`. If cookie is empty, the user should paste it
+/// manually via the frontend's manual entry field.
 #[tauri::command]
 pub async fn ehentai_open_login_window(
     app_handle: AppHandle,
@@ -147,8 +164,7 @@ pub async fn ehentai_open_login_window(
     let win_for_poll = window.clone();
 
     // Poll until the window lands on a post-login e-hentai/exhentai page, then
-    // capture cookies. Best effort: if the cookies don't look logged in yet we
-    // keep polling briefly — forum cookies may take a moment to distribute.
+    // capture cookies. Try JS eval capture immediately when we see the right host.
     tauri::async_runtime::spawn(async move {
         let mut ticks: u32 = 0;
         let mut captured = false;
@@ -174,12 +190,23 @@ pub async fn ehentai_open_login_window(
             if !on_eh || path.contains("act=Login") {
                 continue;
             }
-            if let Some(cookie) = ehentai_try_capture(&app_for_poll, &session_for_poll) {
-                captured = true;
-                let _ = app_for_poll
-                    .emit("ehentai://login", serde_json::json!({ "cookie": cookie }));
-                win.close().ok();
-                break;
+
+            // Try native cookie capture from the webview's own data store
+            // (captures HttpOnly cookies too, though EHentai's are not HttpOnly).
+            let app_clone = app_for_poll.clone();
+            if let Ok(Some(c)) = tauri::async_runtime::spawn_blocking(move || {
+                capture_all_cookies(&app_clone)
+            })
+            .await
+            {
+                if has_ehentai_session(&c) {
+                    captured = true;
+                    session_for_poll.set_cookie(c.clone());
+                    let _ = app_for_poll
+                        .emit("ehentai://login", serde_json::json!({ "cookie": c }));
+                    win.close().ok();
+                    break;
+                }
             }
         }
         if !captured {
@@ -187,7 +214,7 @@ pub async fn ehentai_open_login_window(
         }
     });
 
-    // Destroyed handler: best-effort capture in case nothing captured yet.
+    // Destroyed handler: best-effort native capture in case nothing captured yet.
     let session_for_close = session.inner().clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
@@ -197,8 +224,16 @@ pub async fn ehentai_open_login_window(
                 return;
             }
             tauri::async_runtime::spawn(async move {
-                if let Some(cookie) = ehentai_try_capture(&app, &sess) {
-                    let _ = app.emit("ehentai://login", serde_json::json!({ "cookie": cookie }));
+                let app_clone = app.clone();
+                if let Ok(Some(cookie)) = tauri::async_runtime::spawn_blocking(move || {
+                    capture_all_cookies(&app_clone)
+                })
+                .await
+                {
+                    if has_ehentai_session(&cookie) {
+                        sess.set_cookie(cookie.clone());
+                        let _ = app.emit("ehentai://login", serde_json::json!({ "cookie": cookie }));
+                    }
                 }
             });
         }
@@ -207,6 +242,7 @@ pub async fn ehentai_open_login_window(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn ehentai_try_capture(app: &AppHandle, session: &EhentaiSession) -> Option<String> {
     let cookie = capture_all_cookies(app)?;
     if !has_ehentai_session(&cookie) {

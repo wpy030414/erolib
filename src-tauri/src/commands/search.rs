@@ -16,10 +16,15 @@ pub async fn search_books(
 }
 
 #[tauri::command]
-pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::models::Tag>, String> {
+pub async fn get_all_tags(
+    text: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::TagCount>, String> {
+    // Treat blank text as "no text" (full-library tally).
+    let q = text.as_deref().map(str::trim).filter(|t| !t.is_empty());
     state
         .search_service
-        .tags()
+        .tags_with_count(q)
         .await
         .map_err(|e| e.to_string())
 }

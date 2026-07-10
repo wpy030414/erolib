@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::services::pixiv::FollowingUserResp;
+use crate::services::pixiv::{FollowingUserResp, PixivClient, UserWork};
 use crate::services::{PixivDownloader, PixivProgress, PixivProgressSink};
 use crate::AppState as LibState;
 
@@ -16,6 +16,8 @@ use crate::AppState as LibState;
 pub struct PixivLogin {
     pub cookie: String,
     pub user_id: String,
+    #[serde(default)]
+    pub user_name: Option<String>,
 }
 
 /// Persistence record on disk.
@@ -23,6 +25,8 @@ pub struct PixivLogin {
 pub struct PixivSessionFile {
     pub cookie: String,
     pub user_id: String,
+    #[serde(default)]
+    pub user_name: Option<String>,
     pub saved_at: String,
 }
 
@@ -76,6 +80,7 @@ impl PixivSession {
         let file = PixivSessionFile {
             cookie: login.cookie.clone(),
             user_id: login.user_id.clone(),
+            user_name: login.user_name.clone(),
             saved_at: chrono::Utc::now().to_rfc3339(),
         };
         if let Some(parent) = path.parent() {
@@ -124,6 +129,7 @@ impl From<PixivSessionFile> for PixivLogin {
         Self {
             cookie: f.cookie,
             user_id: f.user_id,
+            user_name: f.user_name,
         }
     }
 }
@@ -150,8 +156,25 @@ pub async fn pixiv_download_bookmarks(
     session: State<'_, Arc<PixivSession>>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    if cookie.trim().is_empty() || user_id.trim().is_empty() {
-        return Err("cookie and user_id are required".into());
+    // Resolve cookie: prefer parameter, fall back to stored session.
+    let resolved_cookie = if cookie.trim().is_empty() {
+        session.get_login().map(|l| l.cookie).unwrap_or_default()
+    } else {
+        cookie
+    };
+
+    let resolved_user_id = if user_id.trim().is_empty() {
+        session.get_login().map(|l| l.user_id).unwrap_or_default()
+    } else {
+        user_id
+    };
+
+    if resolved_cookie.trim().is_empty() || resolved_user_id.trim().is_empty() {
+        return Err(
+            "Pixiv login incomplete — please log in again via the in-app browser so the \
+             session cookie can be captured."
+                .into(),
+        );
     }
 
     // Cancel any in-flight run.
@@ -169,7 +192,7 @@ pub async fn pixiv_download_bookmarks(
     }
 
     let downloader = Arc::new(
-        PixivDownloader::new(&cookie, state.db_inner().clone(), state.storage_inner().clone())
+        PixivDownloader::new(&resolved_cookie, state.db_inner().clone(), state.storage_inner().clone())
             .map_err(|e| e.to_string())?,
     );
     {
@@ -196,7 +219,7 @@ pub async fn pixiv_download_bookmarks(
     tokio::spawn(async move {
         let _res = downloader
             .run(
-                &user_id,
+                &resolved_user_id,
                 limit,
                 Default::default(),
                 "pixiv-bookmark",
@@ -262,12 +285,20 @@ pub async fn pixiv_set_login(
     user_id: String,
     session: State<'_, Arc<PixivSession>>,
 ) -> Result<(), String> {
-    if cookie.trim().is_empty() || user_id.trim().is_empty() {
+    let cookie = cookie.trim().to_string();
+    let user_id = user_id.trim().to_string();
+    if cookie.is_empty() || user_id.is_empty() {
         return Err("cookie and user_id are required".into());
     }
+    // Best-effort: resolve the display name so manual logins also show it.
+    let user_name = match PixivClient::new(&cookie) {
+        Ok(c) => c.fetch_user_name(&user_id).await.ok(),
+        Err(_) => None,
+    };
     session.set_login(PixivLogin {
-        cookie: cookie.trim().to_string(),
-        user_id: user_id.trim().to_string(),
+        cookie,
+        user_id,
+        user_name,
     });
     Ok(())
 }
@@ -296,6 +327,166 @@ pub async fn pixiv_fetch_followings(
         .fetch_followings(&login.user_id, limit, &cancelled)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// One page of browse results (收藏 tab lazy loading).
+#[derive(Debug, Serialize)]
+pub struct PixivBrowsePage {
+    pub items: Vec<UserWork>,
+    pub total: u64,
+}
+
+/// List one page of the logged-in user's bookmarks (收藏 tab). Returns the
+/// page of works plus the total bookmark count so the caller knows when the
+/// feed ends.
+#[tauri::command]
+pub async fn pixiv_list_bookmarks(
+    offset: u64,
+    limit: u64,
+    session: State<'_, Arc<PixivSession>>,
+) -> Result<PixivBrowsePage, String> {
+    let login = session.get_login().ok_or("not logged in to pixiv")?;
+    let client = PixivClient::new(&login.cookie).map_err(|e| e.to_string())?;
+    let (works, total) = client
+        .fetch_bookmarks_page(&login.user_id, offset, limit)
+        .await
+        .map_err(|e| e.to_string())?;
+    let items = works.into_iter().map(UserWork::from).collect();
+    Ok(PixivBrowsePage { items, total })
+}
+
+/// List one page of the logged-in user's following feed (关注 tab). `page`
+/// is 1-based; the session cookie identifies the user (no user id in path).
+#[tauri::command]
+pub async fn pixiv_list_following_feed(
+    page: u64,
+    session: State<'_, Arc<PixivSession>>,
+) -> Result<Vec<UserWork>, String> {
+    let login = session.get_login().ok_or("not logged in to pixiv")?;
+    let client = PixivClient::new(&login.cookie).map_err(|e| e.to_string())?;
+    client
+        .fetch_follow_latest(page)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Proxy a Pixiv image (i.pximg.net) through the backend so the frontend can
+/// render covers — the image host requires a `Referer: https://www.pixiv.net/`
+/// header that browsers forbid setting on `<img>`.
+#[tauri::command]
+pub async fn pixiv_proxy_image(
+    url: String,
+    session: State<'_, Arc<PixivSession>>,
+) -> Result<Vec<u8>, String> {
+    let cookie = session.get_login().map(|l| l.cookie).unwrap_or_default();
+    let client = PixivClient::new(&cookie).map_err(|e| e.to_string())?;
+    client.download_image(&url).await.map_err(|e| e.to_string())
+}
+
+/// Per-work browse status: whether it's already in the library, currently
+/// downloading, or neither — so the Pixiv grid can render the right card state.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PixivBrowseStatus {
+    pub work_id: String,
+    pub local_book_id: Option<String>,
+    pub task_id: Option<String>,
+    pub task_status: Option<String>,
+    pub progress_current: i64,
+    pub progress_total: i64,
+}
+
+/// Resolve the local state of a batch of Pixiv work ids in one call:
+/// - `local_book_id`: a book already imported from this work (`source_url` match).
+/// - `task_id`/`task_status`/`progress_*`: an active (pending/running/paused)
+///   download task for this work, if any.
+/// A downloaded book takes priority over an in-flight task.
+#[tauri::command]
+pub async fn pixiv_browse_status(
+    work_ids: Vec<String>,
+    state: State<'_, LibState>,
+) -> Result<Vec<PixivBrowseStatus>, String> {
+    use crate::services::task::TaskPayload;
+    use std::collections::HashMap;
+    let pool = &state.db_inner().pool;
+
+    // 1. Local books by source_url = .../artworks/{work_id}.
+    let mut book_by_work: HashMap<String, String> = HashMap::new();
+    if !work_ids.is_empty() {
+        let placeholders = (0..work_ids.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, source_url FROM books WHERE source_url IN ({})",
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, (String, Option<String>)>(&sql);
+        for id in &work_ids {
+            q = q.bind(format!("https://www.pixiv.net/artworks/{}", id));
+        }
+        let rows = q.fetch_all(pool).await.map_err(|e| e.to_string())?;
+        for (book_id, source_url) in rows {
+            if let Some(url) = source_url {
+                if let Some(wid) = url.rsplit('/').next() {
+                    book_by_work.insert(wid.to_string(), book_id);
+                }
+            }
+        }
+    }
+
+    // 2. Active pixiv tasks — parse payload JSON for the work_id.
+    let mut task_by_work: HashMap<String, (String, String, i64, i64)> = HashMap::new();
+    let rows: Vec<(String, String, i64, i64, String)> = sqlx::query_as(
+        "SELECT id, status, progress_current, progress_total, payload FROM tasks \
+         WHERE source = 'pixiv' AND status IN ('pending','running','paused')",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    for (id, status, cur, total, payload_str) in rows {
+        if let Ok(TaskPayload::PixivSingleWork { work_id, .. }) =
+            serde_json::from_str::<TaskPayload>(&payload_str)
+        {
+            task_by_work.entry(work_id).or_insert((id, status, cur, total));
+        }
+    }
+
+    // 3. Assemble (downloaded > in-flight > not-yet).
+    let result = work_ids
+        .into_iter()
+        .map(|wid| {
+            if let Some(book_id) = book_by_work.get(&wid) {
+                PixivBrowseStatus {
+                    work_id: wid,
+                    local_book_id: Some(book_id.clone()),
+                    task_id: None,
+                    task_status: None,
+                    progress_current: 0,
+                    progress_total: 0,
+                }
+            } else if let Some((tid, st, cur, total)) = task_by_work.get(&wid) {
+                PixivBrowseStatus {
+                    work_id: wid,
+                    local_book_id: None,
+                    task_id: Some(tid.clone()),
+                    task_status: Some(st.clone()),
+                    progress_current: *cur,
+                    progress_total: *total,
+                }
+            } else {
+                PixivBrowseStatus {
+                    work_id: wid,
+                    local_book_id: None,
+                    task_id: None,
+                    task_status: None,
+                    progress_current: 0,
+                    progress_total: 0,
+                }
+            }
+        })
+        .collect();
+    Ok(result)
 }
 
 /// Download the latest works of a specific Pixiv user (e.g. a creator the

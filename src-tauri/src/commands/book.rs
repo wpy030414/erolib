@@ -121,6 +121,18 @@ pub async fn get_book_cover(
 }
 
 #[tauri::command]
+pub async fn get_book_cover_thumb(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
+    state
+        .library_service
+        .get_cover_thumb(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn export_book(
     id: String,
     format: String,

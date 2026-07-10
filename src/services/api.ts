@@ -4,10 +4,27 @@ import type {
   Book,
   BookMetadata,
   Collection,
+  PixivBrowseStatus,
+  PixivWork,
   SearchQuery,
   SearchResult,
-  Tag,
+  TagCount,
 } from '../types';
+
+export interface TaskItem {
+  id: string;
+  source: string;
+  status: string;
+  title: string;
+  detail: string;
+  progress_current: number;
+  progress_total: number;
+  retry_count: number;
+  max_retries: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
 
 export const api = {
   // Book operations
@@ -25,6 +42,9 @@ export const api = {
 
   getBookCover: (id: string) =>
     invoke<number[]>('get_book_cover', { id }),
+  /** Low-res JPEG thumbnail (≤256px) — small over IPC, cached in IndexedDB. */
+  getBookCoverThumb: (id: string) =>
+    invoke<number[]>('get_book_cover_thumb', { id }),
 
   exportBook: (id: string, format: string) =>
     invoke<string>('export_book', { id, format }),
@@ -49,21 +69,21 @@ export const api = {
   searchBooks: (query: SearchQuery) =>
     invoke<SearchResult>('search_books', { query }),
 
-  getAllTags: () => invoke<Tag[]>('get_all_tags'),
+  getAllTags: (text?: string) => invoke<TagCount[]>('get_all_tags', { text }),
 
   getAllCollections: () => invoke<Collection[]>('get_all_collections'),
 
-  // OPDS Server (kept; lives under Settings only).
+  // OPDS Server (kept; lives under Settings Sharing tab).
   startOpdsServer: (port: number) =>
-    invoke<string>('start_opds_server', { port }),
+    invoke<string>('start_opds_server_cmd', { port }),
 
-  stopOpdsServer: () => invoke<void>('stop_opds_server'),
+  stopOpdsServer: () => invoke<void>('stop_opds_server_cmd'),
 
-  // RSS Server (kept; lives under Settings only).
+  // RSS Server (kept; lives under Settings Sharing tab).
   startRssServer: (port: number) =>
-    invoke<string>('start_rss_server', { port }),
+    invoke<string>('start_rss_server_cmd', { port }),
 
-  stopRssServer: () => invoke<void>('stop_rss_server'),
+  stopRssServer: () => invoke<void>('stop_rss_server_cmd'),
 
   // Pixiv bookmarks
   testPixivCookie: (cookie: string) =>
@@ -84,6 +104,9 @@ export const api = {
   getEHentaiLogin: () =>
     invoke<string | null>('ehentai_get_login'),
 
+  setEHentaiLogin: (cookie: string) =>
+    invoke<void>('ehentai_set_login', { cookie }),
+
   downloadEHentaiGallery: (galleryUrl: string) =>
     invoke<void>('ehentai_download_gallery', { galleryUrl }),
 
@@ -91,7 +114,7 @@ export const api = {
 
   // Pixiv in-app login
   getPixivLogin: () =>
-    invoke<{ cookie: string; user_id: string } | null>('pixiv_get_login'),
+    invoke<{ cookie: string; user_id: string; user_name?: string } | null>('pixiv_get_login'),
 
   setPixivLogin: (cookie: string, userId: string) =>
     invoke<void>('pixiv_set_login', { cookie, userId }),
@@ -113,7 +136,52 @@ export const api = {
       limit,
     }),
 
-  // Dialog
+  // Pixiv browse grid (关注/收藏 tabs)
+  listPixivBookmarks: (offset: number, limit: number) =>
+    invoke<{ items: PixivWork[]; total: number }>('pixiv_list_bookmarks', { offset, limit }),
+
+  listPixivFollowingFeed: (page: number) =>
+    invoke<PixivWork[]>('pixiv_list_following_feed', { page }),
+
+  pixivProxyImage: (url: string) => invoke<number[]>('pixiv_proxy_image', { url }),
+
+  // Pixiv browse card state (local book / active task) for a batch of work ids
+  pixivBrowseStatus: (workIds: string[]) =>
+    invoke<PixivBrowseStatus[]>('pixiv_browse_status', { workIds }),
+
+  // Reset
+  resetAppData: () => invoke<void>('reset_app_data'),
+
+  // Tasks
+  tasksList: () => invoke<TaskItem[]>('tasks_list'),
+
+  taskPause: (taskId: string) =>
+    invoke<void>('task_pause', { taskId }),
+
+  taskResume: (taskId: string) =>
+    invoke<void>('task_resume', { taskId }),
+
+  taskCancel: (taskId: string) =>
+    invoke<void>('task_cancel', { taskId }),
+
+  taskDelete: (taskId: string) =>
+    invoke<void>('task_delete', { taskId }),
+
+  taskRetry: (taskId: string) =>
+    invoke<void>('task_retry', { taskId }),
+
+  taskEnqueuePixivBookmarks: (cookie: string, userId: string, limit: number) =>
+    invoke<string>('task_enqueue_pixiv_bookmarks', { cookie, userId, limit }),
+
+  taskEnqueuePixivUserWorks: (cookie: string, targetUserId: string, limit: number) =>
+    invoke<string>('task_enqueue_pixiv_user_works', { cookie, targetUserId, limit }),
+
+  taskEnqueueEhentaiGallery: (cookie: string, galleryUrl: string) =>
+    invoke<string>('task_enqueue_ehentai_gallery', { cookie, galleryUrl }),
+
+  taskEnqueuePixivWork: (cookie: string, workId: string, title: string) =>
+    invoke<string>('task_enqueue_pixiv_work', { cookie, workId, title }),
+
   openFile: (filters?: Array<{ name: string; extensions: string[] }>) =>
     dialogOpen({
       multiple: false,

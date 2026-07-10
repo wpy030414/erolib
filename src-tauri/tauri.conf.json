@@ -1,6 +1,6 @@
 {
   "productName": "EroLib",
-  "version": "0.1.0",
+  "version": "26.7.11+0224",
   "identifier": "im.xrl.erolib",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -43,7 +43,11 @@
       "signingIdentity": null,
       "minimumSystemVersion": "12.0"
     },
-    "resources": [],
+    "resources": [
+      "binaries/aria2c-bin/macos/aria2c",
+      "binaries/aria2c-bin/macos/libs/*",
+      "binaries/aria2c-bin/windows/aria2c.exe"
+    ],
     "shortDescription": "EroLib — 工口图书馆",
     "targets": "all"
   },

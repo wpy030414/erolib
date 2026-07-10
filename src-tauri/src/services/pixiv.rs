@@ -87,6 +87,16 @@ pub(crate) struct BookmarkWork {
     tags: Vec<String>,
     #[serde(rename = "illustType")]
     illust_type: Option<i32>,
+    #[serde(default, rename = "userId")]
+    user_id: Option<String>,
+    #[serde(default, rename = "userName")]
+    user_name: Option<String>,
+    #[serde(default, rename = "createDate")]
+    create_date: Option<String>,
+    #[serde(default, rename = "url")]
+    cover_url: Option<String>,
+    #[serde(default, rename = "pageCount")]
+    page_count: i32,
 }
 
 impl From<BookmarkWork> for UserWork {
@@ -95,8 +105,12 @@ impl From<BookmarkWork> for UserWork {
             id: w.id,
             title: w.title,
             tags: w.tags,
-            page_count: 0,
+            page_count: w.page_count,
             illust_type: w.illust_type,
+            author: w.user_name,
+            author_id: w.user_id,
+            published_at: w.create_date,
+            cover_url: w.cover_url,
         }
     }
 }
@@ -108,6 +122,11 @@ impl From<UserWork> for BookmarkWork {
             title: w.title,
             tags: w.tags,
             illust_type: w.illust_type,
+            user_id: w.author_id,
+            user_name: w.author,
+            create_date: w.published_at,
+            cover_url: w.cover_url,
+            page_count: w.page_count,
         }
     }
 }
@@ -118,25 +137,83 @@ struct IllustPagesResp {
 }
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct IllustPageEntry {
-    urls: IllustUrls,
+    pub(crate) urls: IllustUrls,
 }
 #[derive(Debug, Deserialize, Clone)]
-struct IllustUrls {
+pub(crate) struct IllustUrls {
     #[serde(default)]
-    original: String,
+    pub(crate) original: String,
     #[serde(default)]
-    regular: String,
+    pub(crate) regular: String,
 }
 
-/// Normalized artwork entry shared by the bookmark and user-works paths.
-#[derive(Debug, Clone)]
+/// Normalized artwork entry shared by the bookmark, user-works and following
+/// paths. Serialized to the frontend (camelCase) for the browse grid.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserWork {
     pub id: String,
     pub title: String,
     pub tags: Vec<String>,
-    #[allow(dead_code)]
     pub page_count: i32,
     pub illust_type: Option<i32>,
+    pub author: Option<String>,
+    pub author_id: Option<String>,
+    pub published_at: Option<String>,
+    pub cover_url: Option<String>,
+}
+
+// --- Following feed (关注 tab): /ajax/follow_latest/illust ---
+
+#[derive(Debug, Deserialize)]
+struct FollowLatestResp {
+    body: FollowLatestBody,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FollowLatestBody {
+    #[serde(default)]
+    thumbnails: FollowThumbs,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FollowThumbs {
+    #[serde(default)]
+    illust: Vec<FollowIllust>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FollowIllust {
+    id: String,
+    title: String,
+    #[serde(default, rename = "url")]
+    cover_url: Option<String>,
+    #[serde(default, rename = "userId")]
+    user_id: Option<String>,
+    #[serde(default, rename = "userName")]
+    user_name: Option<String>,
+    #[serde(default, rename = "pageCount")]
+    page_count: i32,
+    #[serde(default, rename = "illustType")]
+    illust_type: Option<i32>,
+    #[serde(default, rename = "createDate")]
+    create_date: Option<String>,
+}
+
+impl From<FollowIllust> for UserWork {
+    fn from(f: FollowIllust) -> Self {
+        Self {
+            id: f.id,
+            title: f.title,
+            tags: Vec::new(),
+            page_count: f.page_count,
+            illust_type: f.illust_type,
+            author: f.user_name,
+            author_id: f.user_id,
+            published_at: f.create_date,
+            cover_url: f.cover_url,
+        }
+    }
 }
 
 
@@ -176,6 +253,12 @@ struct IllustDetail {
     page_count: i32,
     #[serde(rename = "illustType")]
     illust_type: Option<i32>,
+    #[serde(default, rename = "userId")]
+    user_id: Option<String>,
+    #[serde(default, rename = "userName")]
+    user_name: Option<String>,
+    #[serde(default, rename = "createDate")]
+    create_date: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -188,6 +271,28 @@ struct IllustTags {
 struct IllustTag {
     #[serde(default)]
     tag: String,
+}
+
+// --- Ugoira (動画作, illustType==2): /ajax/illust/{id}/ugoira_meta ---
+// The zip at `original_src` holds one jpg per frame (000000.jpg, 000001.jpg, …);
+// `frames[].delay` is the per-frame hold time in milliseconds.
+#[derive(Debug, Deserialize)]
+struct UgoiraMetaResp {
+    body: UgoiraMeta,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UgoiraMeta {
+    #[serde(rename = "originalSrc")]
+    pub original_src: String,
+    pub frames: Vec<UgoiraFrame>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct UgoiraFrame {
+    pub file: String,
+    /// Hold time until the next frame, in milliseconds.
+    pub delay: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -319,6 +424,41 @@ impl PixivClient {
         Ok(works)
     }
 
+    /// Fetch a single page of a user's public bookmarks for browse-mode lazy
+    /// loading. Returns `(works, total)` so the caller can decide whether more
+    /// pages remain. Unlike `fetch_all_bookmarks` this makes exactly one
+    /// request (no pagination loop, no dedup, no sleep).
+    pub async fn fetch_bookmarks_page(
+        &self,
+        user_id: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<BookmarkWork>, u64)> {
+        let url = format!(
+            "{}/user/{}/illusts/bookmarks?tag=&offset={}&limit={}&rest=show",
+            PIXIV_AJAX, user_id, offset, limit
+        );
+        let body_str = self
+            .http
+            .get(&url)
+            .header("Cookie", &self.cookie_str)
+            .header("Accept", "application/json")
+            .header(
+                "Referer",
+                &format!("{}/users/{}/bookmarks/artworks", PIXIV_BASE, user_id),
+            )
+            .send()
+            .await
+            .context("request bookmark page")?
+            .text()
+            .await
+            .context("read bookmark page body")?;
+        Self::check_json_error(&body_str)?;
+        let resp: UserBookmarksResp =
+            serde_json::from_str(&body_str).context("parse bookmark page")?;
+        Ok((resp.body.works, resp.body.total))
+    }
+
     /// Get image URLs for every page of a manga-type (or single-image) illust.
     pub async fn fetch_pages(&self, illust_id: &str) -> Result<Vec<IllustPageEntry>> {
         let url = format!("{}/illust/{}/pages", PIXIV_AJAX, illust_id);
@@ -337,6 +477,19 @@ impl PixivClient {
         Self::check_json_error(&body_str)?;
         let resp: IllustPagesResp =
             serde_json::from_str(&body_str).context("parse illust pages")?;
+        Ok(resp.body)
+    }
+
+    /// Fetch the ugoira (動画作) frame manifest + original-resolution zip URL.
+    /// Only valid for works with `illustType == 2`. The caller downloads the
+    /// zip, extracts the per-frame jpgs, and encodes a GIF honoring the delays.
+    pub async fn fetch_ugoira_meta(&self, illust_id: &str) -> Result<UgoiraMeta> {
+        let url = format!("{}/illust/{}/ugoira_meta", PIXIV_AJAX, illust_id);
+        let body_str = self
+            .get_json_ajax(&url, &format!("{}/artworks/{}", PIXIV_BASE, illust_id))
+            .await?;
+        let resp: UgoiraMetaResp =
+            serde_json::from_str(&body_str).context("parse ugoira meta")?;
         Ok(resp.body)
     }
 
@@ -465,6 +618,36 @@ impl PixivClient {
         Ok(users)
     }
 
+    /// Fetch one page of the logged-in user's following feed (关注 tab) via the
+    /// private `/ajax/follow_latest/illust` endpoint. There is no user id in the
+    /// path — the session cookie identifies the user. `page` is 1-based; each
+    /// page returns ~60 recent works from followed creators.
+    pub async fn fetch_follow_latest(&self, page: u64) -> Result<Vec<UserWork>> {
+        let url = format!("{}/follow_latest/illust?p={}&mode=all", PIXIV_AJAX, page);
+        let body_str = self
+            .http
+            .get(&url)
+            .header("Cookie", &self.cookie_str)
+            .header("Accept", "application/json")
+            .header("Referer", &format!("{}/", PIXIV_BASE))
+            .send()
+            .await
+            .context("request follow_latest")?
+            .text()
+            .await
+            .context("read follow_latest body")?;
+        Self::check_json_error(&body_str)?;
+        let resp: FollowLatestResp =
+            serde_json::from_str(&body_str).context("parse follow_latest")?;
+        Ok(resp
+            .body
+            .thumbnails
+            .illust
+            .into_iter()
+            .map(UserWork::from)
+            .collect())
+    }
+
     /// Resolve the numeric user id that `cookie_str` belongs to. Pixiv's
     /// `/setting_user.php` returns a 302 whose `Location` is `/users/<id>/setting`
     /// for a logged-in session. With redirects disabled we can read that header
@@ -562,7 +745,27 @@ impl PixivClient {
             tags: d.tags.tags.iter().map(|t| t.tag.clone()).collect(),
             page_count: d.page_count,
             illust_type: d.illust_type,
+            author: d.user_name,
+            author_id: d.user_id,
+            published_at: d.create_date,
+            cover_url: None,
         }))
+    }
+
+    /// Fetch a user's display name via the public user AJAX API
+    /// (`/ajax/user/<id>` → `body.name`), for the "logged in as <name>" label.
+    pub async fn fetch_user_name(&self, user_id: &str) -> Result<String> {
+        let url = format!("{}/user/{}", PIXIV_AJAX, user_id);
+        let body_str = self
+            .get_json_ajax(&url, &format!("{}/users/{}", PIXIV_BASE, user_id))
+            .await?;
+        let v: serde_json::Value =
+            serde_json::from_str(&body_str).context("parse user ajax response")?;
+        v.get("body")
+            .and_then(|b| b.get("name"))
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("no name in user response"))
     }
 }
 
@@ -898,6 +1101,7 @@ impl PixivDownloader {
             plugin: source_plugin.into(),
             source_url,
             scraped_at: Some(chrono::Utc::now()),
+            ..Default::default()
         };
 
         let page_count = images.len() as i32;
