@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+src-tauri/target
+
+# Rust
+**/*.rs.bk
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Tauri runtime data
+storage/
+
+# Env
+.env
+.env.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store

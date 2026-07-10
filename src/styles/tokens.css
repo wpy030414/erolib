@@ -1,0 +1,193 @@
+/* ===================================================================
+   EroLib — Material Design 3 design tokens
+   -------------------------------------------------------------------
+   All MD3 tokens in the `md.sys` namespace. Color values are the
+   baseline purple scheme (seed #6750A4) and are OVERRIDDEN at runtime
+   by services/md3-theme.ts, which regenerates them from the user's
+   seed color via @material/material-color-utilities.
+   Reference: https://m3.material.io/styles
+   =================================================================== */
+
+:root {
+  /* ---- Color roles (light baseline; dark via JS override) ---- */
+  --md-sys-color-primary: #6750a4;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: #eaddff;
+  --md-sys-color-on-primary-container: #21005d;
+
+  --md-sys-color-secondary: #625b71;
+  --md-sys-color-on-secondary: #ffffff;
+  --md-sys-color-secondary-container: #e8def8;
+  --md-sys-color-on-secondary-container: #1d192b;
+
+  --md-sys-color-tertiary: #7d5260;
+  --md-sys-color-on-tertiary: #ffffff;
+  --md-sys-color-tertiary-container: #ffd8e4;
+  --md-sys-color-on-tertiary-container: #31111d;
+
+  --md-sys-color-error: #b3261e;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-error-container: #f9dedc;
+  --md-sys-color-on-error-container: #410e0b;
+
+  /* Success / warning / info are non-spec extensions the app relies on. */
+  --md-sys-color-success: #386a20;
+  --md-sys-color-on-success: #ffffff;
+  --md-sys-color-success-container: #b7f397;
+  --md-sys-color-on-success-container: #042100;
+
+  --md-sys-color-warning: #7c5800;
+  --md-sys-color-on-warning: #ffffff;
+  --md-sys-color-warning-container: #ffdea6;
+  --md-sys-color-on-warning-container: #271900;
+
+  --md-sys-color-info: #00639b;
+  --md-sys-color-on-info: #ffffff;
+  --md-sys-color-info-container: #cee5ff;
+  --md-sys-color-on-info-container: #001d34;
+
+  --md-sys-color-background: #fef7ff;
+  --md-sys-color-on-background: #1d1b20;
+
+  --md-sys-color-surface: #fef7ff;
+  --md-sys-color-on-surface: #1d1b20;
+  --md-sys-color-surface-dim: #ded8e1;
+  --md-sys-color-surface-bright: #fef7ff;
+
+  --md-sys-color-surface-container-lowest: #ffffff;
+  --md-sys-color-surface-container-low: #f7f2fa;
+  --md-sys-color-surface-container: #f3edf7;
+  --md-sys-color-surface-container-high: #ece6f0;
+  --md-sys-color-surface-container-highest: #e6e0e9;
+
+  --md-sys-color-surface-variant: #e7e0ec;
+  --md-sys-color-on-surface-variant: #49454f;
+
+  --md-sys-color-outline: #79747e;
+  --md-sys-color-outline-variant: #cac4d0;
+
+  --md-sys-color-inverse-surface: #322f35;
+  --md-sys-color-inverse-on-surface: #f5eff7;
+  --md-sys-color-inverse-primary: #d0bcff;
+
+  --md-sys-color-shadow: #000000;
+  --md-sys-color-scrim: #000000;
+
+  /* ---- Typescale ----
+     Each role exposes font / size / line-height / weight / tracking. */
+  --md-sys-typescale-font: 'Roboto', 'Noto Sans SC', 'Noto Sans JP', system-ui, sans-serif;
+
+  --md-sys-typescale-display-large-size: 3.5625rem;       /* 57 */
+  --md-sys-typescale-display-large-line-height: 4rem;     /* 64 */
+  --md-sys-typescale-display-large-weight: 400;
+  --md-sys-typescale-display-large-tracking: -0.015625rem;
+
+  --md-sys-typescale-display-medium-size: 2.8125rem;      /* 45 */
+  --md-sys-typescale-display-medium-line-height: 3.25rem; /* 52 */
+  --md-sys-typescale-display-medium-weight: 400;
+  --md-sys-typescale-display-medium-tracking: 0;
+
+  --md-sys-typescale-display-small-size: 2.25rem;         /* 36 */
+  --md-sys-typescale-display-small-line-height: 2.75rem;  /* 44 */
+  --md-sys-typescale-display-small-weight: 400;
+  --md-sys-typescale-display-small-tracking: 0;
+
+  --md-sys-typescale-headline-large-size: 2rem;           /* 32 */
+  --md-sys-typescale-headline-large-line-height: 2.5rem;  /* 40 */
+  --md-sys-typescale-headline-large-weight: 400;
+  --md-sys-typescale-headline-large-tracking: 0;
+
+  --md-sys-typescale-headline-medium-size: 1.75rem;       /* 28 */
+  --md-sys-typescale-headline-medium-line-height: 2.25rem;/* 36 */
+  --md-sys-typescale-headline-medium-weight: 400;
+  --md-sys-typescale-headline-medium-tracking: 0;
+
+  --md-sys-typescale-headline-small-size: 1.5rem;         /* 24 */
+  --md-sys-typescale-headline-small-line-height: 2rem;    /* 32 */
+  --md-sys-typescale-headline-small-weight: 400;
+  --md-sys-typescale-headline-small-tracking: 0;
+
+  --md-sys-typescale-title-large-size: 1.375rem;          /* 22 */
+  --md-sys-typescale-title-large-line-height: 1.75rem;    /* 28 */
+  --md-sys-typescale-title-large-weight: 400;
+  --md-sys-typescale-title-large-tracking: 0;
+
+  --md-sys-typescale-title-medium-size: 1rem;             /* 16 */
+  --md-sys-typescale-title-medium-line-height: 1.5rem;    /* 24 */
+  --md-sys-typescale-title-medium-weight: 500;
+  --md-sys-typescale-title-medium-tracking: 0.009375rem;
+
+  --md-sys-typescale-title-small-size: 0.875rem;          /* 14 */
+  --md-sys-typescale-title-small-line-height: 1.25rem;    /* 20 */
+  --md-sys-typescale-title-small-weight: 500;
+  --md-sys-typescale-title-small-tracking: 0.00625rem;
+
+  --md-sys-typescale-body-large-size: 1rem;               /* 16 */
+  --md-sys-typescale-body-large-line-height: 1.5rem;      /* 24 */
+  --md-sys-typescale-body-large-weight: 400;
+  --md-sys-typescale-body-large-tracking: 0.009375rem;
+
+  --md-sys-typescale-body-medium-size: 0.875rem;          /* 14 */
+  --md-sys-typescale-body-medium-line-height: 1.25rem;    /* 20 */
+  --md-sys-typescale-body-medium-weight: 400;
+  --md-sys-typescale-body-medium-tracking: 0.015625rem;
+
+  --md-sys-typescale-body-small-size: 0.75rem;            /* 12 */
+  --md-sys-typescale-body-small-line-height: 1rem;        /* 16 */
+  --md-sys-typescale-body-small-weight: 400;
+  --md-sys-typescale-body-small-tracking: 0.025rem;
+
+  --md-sys-typescale-label-large-size: 0.875rem;          /* 14 */
+  --md-sys-typescale-label-large-line-height: 1.25rem;    /* 20 */
+  --md-sys-typescale-label-large-weight: 500;
+  --md-sys-typescale-label-large-tracking: 0.00625rem;
+
+  --md-sys-typescale-label-medium-size: 0.75rem;          /* 12 */
+  --md-sys-typescale-label-medium-line-height: 1rem;      /* 16 */
+  --md-sys-typescale-label-medium-weight: 500;
+  --md-sys-typescale-label-medium-tracking: 0.03125rem;
+
+  --md-sys-typescale-label-small-size: 0.6875rem;         /* 11 */
+  --md-sys-typescale-label-small-line-height: 1rem;       /* 16 */
+  --md-sys-typescale-label-small-weight: 500;
+  --md-sys-typescale-label-small-tracking: 0.03125rem;
+
+  /* ---- Shape corners ---- */
+  --md-sys-shape-corner-none: 0;
+  --md-sys-shape-corner-extra-small: 4px;
+  --md-sys-shape-corner-small: 8px;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-shape-corner-extra-large: 28px;
+  --md-sys-shape-corner-full: 9999px;
+
+  /* ---- Elevation shadows (tonal color is handled by surface-container) ---- */
+  --md-sys-elevation-level0: none;
+  --md-sys-elevation-level1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level3: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 8px 3px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level4: 0 2px 3px rgba(0, 0, 0, 0.3), 0 6px 10px 4px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level5: 0 4px 4px rgba(0, 0, 0, 0.3), 0 8px 12px 6px rgba(0, 0, 0, 0.15);
+
+  /* ---- Motion (legacy easing/duration; web fallback for springs) ---- */
+  --md-sys-motion-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --md-sys-motion-easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --md-sys-motion-easing-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --md-sys-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --md-sys-motion-easing-standard-decelerate: cubic-bezier(0, 0, 0, 1);
+  --md-sys-motion-easing-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  --md-sys-motion-duration-short2: 100ms;
+  --md-sys-motion-duration-short3: 150ms;
+  --md-sys-motion-duration-short4: 200ms;
+  --md-sys-motion-duration-medium2: 250ms;
+  --md-sys-motion-duration-medium4: 300ms;
+  --md-sys-motion-duration-long2: 400ms;
+  --md-sys-motion-duration-long4: 500ms;
+
+  /* ---- State layer opacities ---- */
+  --md-sys-state-hover-opacity: 0.08;
+  --md-sys-state-focus-opacity: 0.12;
+  --md-sys-state-pressed-opacity: 0.12;
+  --md-sys-state-dragged-opacity: 0.16;
+}
