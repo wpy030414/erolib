@@ -38,7 +38,9 @@ pub async fn start_opds_server(
         *guard = Some(tx);
     }
 
-    let base_url = format!("http://localhost:{}", port);
+    // Bind on all interfaces (LAN-wide, no auth) and advertise the host's
+    // primary LAN address so feeds contain device-reachable links.
+    let base_url = format!("http://{}:{}", local_lan_ip(), port);
     state.opds_service.set_base_url(base_url.clone());
 
     let db = state.opds_service.db.clone();
@@ -49,9 +51,10 @@ pub async fn start_opds_server(
         .route("/opds", axum::routing::get(opds_root))
         .route("/opds/search/:query", axum::routing::get(opds_search))
         .route("/covers/:id", axum::routing::get(serve_cover))
+        .route("/download/:id", axum::routing::get(serve_download))
         .with_state((db, storage_path, covers_path));
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
         .map_err(|e| format!("OPDS: {e}"))?;
 
@@ -85,7 +88,9 @@ pub async fn start_rss_server(
         *guard = Some(tx);
     }
 
-    let base_url = format!("http://localhost:{}", port);
+    // Bind on all interfaces (LAN-wide, no auth) and advertise the host's
+    // primary LAN address so feeds contain device-reachable links.
+    let base_url = format!("http://{}:{}", local_lan_ip(), port);
     state.rss_service.set_base_url(base_url.clone());
 
     let db = state.rss_service.db.clone();
@@ -98,7 +103,7 @@ pub async fn start_rss_server(
         .route("/covers/:id", axum::routing::get(serve_cover))
         .with_state((db, storage_path, covers_path));
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
         .map_err(|e| format!("RSS: {e}"))?;
 
@@ -292,5 +297,23 @@ async fn serve_download(
             format!("read error: {}", e),
         )
             .into_response(),
+    }
+}
+
+/// Best-effort primary LAN IPv4 of this machine. Uses a connect()ed UDP socket
+/// (no packets are actually sent) so the kernel reports the default-route
+/// interface's address — the one other devices on the same Wi-Fi/LAN reach us
+/// on. Falls back to `127.0.0.1` (localhost only) if it can't be determined.
+fn local_lan_ip() -> String {
+    let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(_) => return "127.0.0.1".to_string(),
+    };
+    if socket.connect("8.8.8.8:80").is_err() {
+        return "127.0.0.1".to_string();
+    }
+    match socket.local_addr() {
+        Ok(std::net::SocketAddr::V4(v4)) => v4.ip().to_string(),
+        _ => "127.0.0.1".to_string(),
     }
 }

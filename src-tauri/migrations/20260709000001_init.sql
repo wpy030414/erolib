@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS books (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_read_at TEXT,
-    read_count INTEGER NOT NULL DEFAULT 0
+    read_count INTEGER NOT NULL DEFAULT 0,
+    delays TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_books_title ON books(title);

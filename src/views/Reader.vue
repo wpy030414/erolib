@@ -41,7 +41,16 @@
       class="reader-viewport"
       @click="onViewportClick"
     >
-      <template v-if="src">
+      <template v-if="isAnimated">
+        <canvas v-show="!animLoading" ref="animCanvas" class="reader-image reader-image--anim" />
+        <div v-if="animLoading" class="d-flex flex-column align-center justify-center ga-3">
+          <svg class="spinner" style="color: var(--md-sys-color-primary)" viewBox="0 0 50 50" aria-hidden="true">
+            <circle class="spinner-track" cx="25" cy="25" r="20" />
+            <circle class="spinner-arc" cx="25" cy="25" r="20" />
+          </svg>
+        </div>
+      </template>
+      <template v-else-if="src">
         <img
           :key="current"
           :src="src"
@@ -61,7 +70,7 @@
       </template>
     </div>
 
-    <div class="reader-footer d-flex align-center ga-3 px-4 py-2">
+    <div v-if="!isAnimated" class="reader-footer d-flex align-center ga-3 px-4 py-2">
       <span class="reader-page-label text-body-2">{{ current + 1 }}</span>
 
       <md-slider
@@ -85,7 +94,7 @@ import {
   mdiImageSizeSelectLarge,
   mdiImageSizeSelectActual,
 } from '@mdi/js';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
@@ -117,10 +126,122 @@ const zoomMode = ref<ZoomMode>(readZoomMode());
 const uiHidden = ref(false);
 let uiHideTimer: ReturnType<typeof setTimeout> | null = null;
 
-watch(zoomMode, (v) => saveZoomMode(v));
-watch(current, (v) => saveBookProgress(props.id, v));
+watch(zoomMode, (v) => {
+  saveZoomMode(v);
+  if (isAnimated.value) drawCurrentFrame();
+});
+watch(current, () => {
+  if (isAnimated.value) {
+    drawCurrentFrame();
+    scheduleNextFrame();
+  } else {
+    saveBookProgress(props.id, current.value);
+  }
+});
 
 const src = computed(() => blobs.value[current.value]);
+
+// Ugoira (動図) books store the original jpg frames + per-frame delays (ms).
+// The reader plays the sequence on a timer instead of treating each frame as
+// a page — lossless, native resolution, each frame a tiny jpg.
+const frameDelays = ref<number[]>([]);
+const isAnimated = computed(() => frameDelays.value.length > 1);
+const animLoading = ref(false);
+let playTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPlayTimer() {
+  if (playTimer) {
+    clearTimeout(playTimer);
+    playTimer = null;
+  }
+}
+
+/** Schedule the next animated frame; a no-op for non-animated books. */
+function scheduleNextFrame() {
+  clearPlayTimer();
+  if (!isAnimated.value || pageCount.value == null) return;
+  const delay = frameDelays.value[current.value] ?? 100;
+  playTimer = setTimeout(
+    () => {
+      const n = pageCount.value ?? 1;
+      current.value = (current.value + 1) % n;
+    },
+    Math.max(16, delay),
+  );
+}
+
+// Animated books render to a <canvas>: every frame is decoded up front to an
+// ImageBitmap, then the timer just drawImage()'s the next bitmap. No <img>
+// src-swap → no flicker, and playback is cheap (a single draw per frame).
+const animCanvas = ref<HTMLCanvasElement | null>(null);
+const bitmaps = ref<ImageBitmap[]>([]);
+let resizeObserver: ResizeObserver | null = null;
+
+async function preloadFrames() {
+  if (!props.id || !isAnimated.value || bitmaps.value.length > 0) return;
+  const n = frameDelays.value.length || pageCount.value || 0;
+  if (n === 0) return;
+  animLoading.value = true;
+  try {
+    const loaded: ImageBitmap[] = [];
+    for (let p = 0; p < n; p++) {
+      try {
+        const bytes = await api.getBookPage(props.id, p);
+        const blob = new Blob([new Uint8Array(bytes)], { type: mimeFromBytes(bytes) });
+        loaded.push(await createImageBitmap(blob));
+      } catch (e) {
+        console.warn(`Failed to load frame ${p}:`, e);
+        break;
+      }
+    }
+    bitmaps.value = loaded;
+    await nextTick();
+    resizeCanvas();
+    if (!resizeObserver && animCanvas.value) {
+      resizeObserver = new ResizeObserver(() => {
+        resizeCanvas();
+        drawCurrentFrame();
+      });
+      resizeObserver.observe(animCanvas.value);
+    }
+    drawCurrentFrame();
+    scheduleNextFrame();
+  } finally {
+    animLoading.value = false;
+  }
+}
+
+function resizeCanvas() {
+  const canvas = animCanvas.value;
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(rect.width * dpr));
+  canvas.height = Math.max(1, Math.round(rect.height * dpr));
+}
+
+function drawCurrentFrame() {
+  const canvas = animCanvas.value;
+  const bmp = bitmaps.value[current.value];
+  if (!canvas || !bmp) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const cw = canvas.width;
+  const ch = canvas.height;
+  ctx.clearRect(0, 0, cw, ch);
+  const scale =
+    zoomMode.value === 'fill'
+      ? Math.max(cw / bmp.width, ch / bmp.height)
+      : Math.min(cw / bmp.width, ch / bmp.height);
+  const dw = bmp.width * scale;
+  const dh = bmp.height * scale;
+  ctx.drawImage(bmp, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+}
+
+function closeBitmaps() {
+  bitmaps.value.forEach((b) => b.close());
+  bitmaps.value = [];
+}
 
 function readZoomMode(): ZoomMode {
   try {
@@ -174,8 +295,6 @@ function mimeFromBytes(bytes: number[]): string {
     b[11] === 0x50
   )
     return 'image/webp';
-  // ugoira books are stored as a single gif; the <img> loops it natively.
-  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
   return 'image/jpeg';
 }
 
@@ -189,6 +308,7 @@ function go(delta: number) {
 }
 
 function onViewportClick(e: MouseEvent) {
+  if (isAnimated.value) return; // animated books play continuously; taps do nothing
   const target = e.currentTarget as HTMLElement;
   const rect = target.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -221,15 +341,20 @@ async function loadMetadata() {
     ]);
     title.value = book.title;
     pageCount.value = count;
-    const saved = readBookProgress(props.id);
-    current.value = Math.min(saved, Math.max(0, count - 1));
+    try {
+      frameDelays.value = book.delays ? (JSON.parse(book.delays) as number[]) : [];
+    } catch {
+      frameDelays.value = [];
+    }
+    // Animated books always start at frame 0; regular books resume saved progress.
+    current.value = isAnimated.value ? 0 : Math.min(readBookProgress(props.id), Math.max(0, count - 1));
   } catch (e) {
     console.error('Failed to load book:', e);
   }
 }
 
 async function prefetchPages() {
-  if (!props.id || pageCount.value == null) return;
+  if (!props.id || pageCount.value == null || isAnimated.value) return;
   const span = 2;
   const pages: number[] = [];
   for (let p = current.value; p <= Math.min(pageCount.value - 1, current.value + span); p++) {
@@ -275,6 +400,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown);
+  clearPlayTimer();
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  closeBitmaps();
   clearBlobs();
   if (uiHideTimer) clearTimeout(uiHideTimer);
   if (previousMode.value && previousSeed.value) {
@@ -285,11 +414,16 @@ onBeforeUnmount(() => {
 watch(() => props.id, () => {
   current.value = 0;
   clearBlobs();
+  closeBitmaps();
   loadMetadata();
 });
 
 watch([current, pageCount], () => {
-  prefetchPages();
+  if (isAnimated.value) {
+    if (bitmaps.value.length === 0) void preloadFrames();
+  } else {
+    prefetchPages();
+  }
 });
 
 // Sync MWC slider with current page.

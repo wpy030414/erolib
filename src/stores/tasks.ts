@@ -1,26 +1,15 @@
-export interface TaskItem {
-  id: string;
-  source: string;
-  status: string;
-  title: string;
-  detail: string;
-  progress_current: number;
-  progress_total: number;
-  retry_count: number;
-  max_retries: number;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
-
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '@/services/api';
+import type { TaskItem } from '@/services/api';
 import { useToastStore } from './toast';
 import { useLibraryStore } from './library';
 import { useI18n } from '@/i18n';
 
+export type { TaskItem };
+
 const tasks = ref<TaskItem[]>([]);
+const selectedTaskId = ref<string | null>(null);
 let initialized = false;
 
 export function useTaskStore() {
@@ -78,9 +67,18 @@ export function useTaskStore() {
     await refresh();
   }
 
+  function selectTask(id: string | null) {
+    selectedTaskId.value = id;
+  }
+
   async function deleteTask(id: string) {
+    const task = tasks.value.find((tk) => tk.id === id);
     await api.taskDelete(id);
+    if (selectedTaskId.value === id) {
+      selectedTaskId.value = null;
+    }
     await refresh();
+    toastStore.addToast('info', t('tasks.toast.removed', { title: task?.title ?? '' }));
   }
 
   async function retryTask(id: string) {
@@ -88,14 +86,32 @@ export function useTaskStore() {
     await refresh();
   }
 
+  async function clearCompleted() {
+    await api.tasksClearCompleted();
+    // Drop any selected task that was just cleared.
+    if (selectedTaskId.value) {
+      const stillExists = tasks.value.some((tk) => tk.id === selectedTaskId.value);
+      if (!stillExists) selectedTaskId.value = null;
+    }
+    await refresh();
+  }
+
+  const selectedTask = computed(() =>
+    tasks.value.find((t) => t.id === selectedTaskId.value) ?? null,
+  );
+
   return {
     tasks,
+    selectedTaskId,
+    selectedTask,
     init,
     refresh,
+    selectTask,
     pauseTask,
     resumeTask,
     cancelTask,
     deleteTask,
     retryTask,
+    clearCompleted,
   };
 }

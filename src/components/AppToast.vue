@@ -49,10 +49,11 @@ const { toasts, dismiss } = useToastStore();
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-radius: 8px;
-  background: var(--md-sys-color-inverse-surface, #1e1e1e);
-  color: var(--md-sys-color-inverse-on-surface, #e3e3e3);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: var(--md-sys-shape-corner-medium, 8px);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-sys-elevation-level3);
   pointer-events: auto;
   cursor: pointer;
   font-size: 14px;
@@ -61,15 +62,27 @@ const { toasts, dismiss } = useToastStore();
 }
 
 .toast--success {
-  border-left: 4px solid #4caf50;
+  border-left: 4px solid var(--md-sys-color-primary);
 }
 
 .toast--error {
-  border-left: 4px solid #f44336;
+  border-left: 4px solid var(--md-sys-color-error);
 }
 
 .toast--info {
-  border-left: 4px solid #2196f3;
+  border-left: 4px solid var(--md-sys-color-tertiary);
+}
+
+.toast--success .toast-icon {
+  color: var(--md-sys-color-primary);
+}
+
+.toast--error .toast-icon {
+  color: var(--md-sys-color-error);
+}
+
+.toast--info .toast-icon {
+  color: var(--md-sys-color-tertiary);
 }
 
 .toast-icon {

@@ -19,6 +19,8 @@ export interface Book {
   last_read_at?: string;
   read_count: number;
   tags?: string;
+  /** Ugoira frame delays in ms, JSON-encoded "[60,60,70,...]" (animated books). */
+  delays?: string;
 }
 
 export interface Tag {
@@ -94,6 +96,29 @@ export interface PixivWork {
  *  downloading, or neither (mirrors backend PixivBrowseStatus). */
 export interface PixivBrowseStatus {
   workId: string;
+  localBookId?: string;
+  taskId?: string;
+  taskStatus?: string;
+  progressCurrent: number;
+  progressTotal: number;
+}
+
+/** A gallery row from an EHentai search (mirrors backend GalleryListItem). */
+export interface GalleryListItem {
+  gid: string;
+  token: string;
+  title: string;
+  thumbUrl: string;
+  pageCount: number;
+  category: string;
+  /** Uploader display name (galleries have no author). */
+  uploader?: string;
+}
+
+/** Local state of an EHentai gallery in the browse grid (mirrors backend
+ *  EhentaiBrowseStatus). Keyed by canonical gallery URL. */
+export interface EhentaiBrowseStatus {
+  galleryUrl: string;
   localBookId?: string;
   taskId?: string;
   taskStatus?: string;

@@ -139,7 +139,7 @@ struct IllustPagesResp {
 pub(crate) struct IllustPageEntry {
     pub(crate) urls: IllustUrls,
 }
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct IllustUrls {
     #[serde(default)]
     pub(crate) original: String,
@@ -186,6 +186,8 @@ struct FollowThumbs {
 struct FollowIllust {
     id: String,
     title: String,
+    #[serde(default)]
+    tags: Vec<String>,
     #[serde(default, rename = "url")]
     cover_url: Option<String>,
     #[serde(default, rename = "userId")]
@@ -205,7 +207,7 @@ impl From<FollowIllust> for UserWork {
         Self {
             id: f.id,
             title: f.title,
-            tags: Vec::new(),
+            tags: f.tags,
             page_count: f.page_count,
             illust_type: f.illust_type,
             author: f.user_name,
@@ -259,6 +261,10 @@ struct IllustDetail {
     user_name: Option<String>,
     #[serde(default, rename = "createDate")]
     create_date: Option<String>,
+    /// Display thumbnails (regular/small/original/…). Used as the cover for
+    /// ugoira works, whose cb7 holds frame jpgs rather than a nice still cover.
+    #[serde(default)]
+    urls: IllustUrls,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -482,7 +488,7 @@ impl PixivClient {
 
     /// Fetch the ugoira (動画作) frame manifest + original-resolution zip URL.
     /// Only valid for works with `illustType == 2`. The caller downloads the
-    /// zip, extracts the per-frame jpgs, and encodes a GIF honoring the delays.
+    /// zip, extracts the per-frame jpgs, and records the per-frame delays.
     pub async fn fetch_ugoira_meta(&self, illust_id: &str) -> Result<UgoiraMeta> {
         let url = format!("{}/illust/{}/ugoira_meta", PIXIV_AJAX, illust_id);
         let body_str = self
@@ -648,13 +654,101 @@ impl PixivClient {
             .collect())
     }
 
+    /// Fetch the home recommendation feed (随便看看 tab) — the works Pixiv
+    /// pushes on the logged-in homepage based on the user's taste. Uses the
+    /// `/ajax/top/illust` landing endpoint (the same one PixivFE reads): it
+    /// returns the whole landing batch in one shot, so `page` is ignored —
+    /// browse mode renders the single batch. The response shape mirrors
+    /// follow_latest (`body.thumbnails.illust`), so the parser is reused.
+    pub async fn fetch_recommended(&self, _page: u64) -> Result<Vec<UserWork>> {
+        let url = format!("{}/top/illust?mode=all", PIXIV_AJAX);
+        let body_str = self
+            .get_json_ajax(&url, &format!("{}/", PIXIV_BASE))
+            .await
+            .context("request top/illust")?;
+        let resp: FollowLatestResp =
+            serde_json::from_str(&body_str).context("parse top/illust")?;
+        Ok(resp
+            .body
+            .thumbnails
+            .illust
+            .into_iter()
+            .map(UserWork::from)
+            .collect())
+    }
+
+    /// Search illustrations by keyword (搜索框). `page` is 1-based (~60 per
+    /// page). Uses `/ajax/search/artworks/{keyword}`; the result list lives at
+    /// `body.illustManga.data[]` (per the greasyfork/Pixiv-Infinite-Scroll
+    /// production scraper — not `thumbnails.illust`). That array can include
+    /// ad/placeholder entries with a null `id`, so parse defensively and skip
+    /// them. Element fields match `FollowIllust`, which is reused.
+    pub async fn fetch_search(&self, keyword: &str, page: u64) -> Result<Vec<UserWork>> {
+        let encoded = urlencoding::encode(keyword);
+        let url = format!(
+            "{}/search/artworks/{}?word={}&mode=all&s_mode=s_tag&type=all&order=date_d&p={}",
+            PIXIV_AJAX, encoded, encoded, page
+        );
+        let referer = format!("{}/search.php?s_mode=s_tag&type=all&word={}", PIXIV_BASE, encoded);
+        let body_str = self
+            .get_json_ajax(&url, &referer)
+            .await
+            .context("request search artworks")?;
+        let value: serde_json::Value =
+            serde_json::from_str(&body_str).context("parse search artworks")?;
+        let data = value
+            .get("body")
+            .and_then(|b| b.get("illustManga"))
+            .and_then(|im| im.get("data"))
+            .and_then(|d| d.as_array());
+        let mut works = Vec::new();
+        if let Some(arr) = data {
+            for entry in arr {
+                // Skip ad/placeholder rows whose id is null/empty.
+                let has_id = entry
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if has_id {
+                    if let Ok(item) = serde_json::from_value::<FollowIllust>(entry.clone()) {
+                        works.push(UserWork::from(item));
+                    }
+                }
+            }
+        }
+        Ok(works)
+    }
+
     /// Resolve the numeric user id that `cookie_str` belongs to. Pixiv's
     /// `/setting_user.php` returns a 302 whose `Location` is `/users/<id>/setting`
     /// for a logged-in session. With redirects disabled we can read that header
     /// and pull the id out of it — the embedded login window lands on the
     /// homepage (no `/users/<id>` in the URL), so we can't rely on URL parsing
     /// alone.
+    /// Parse the user id out of a PHPSESSID cookie value. Pixiv's PHPSESSID is
+    /// shaped `{user_id}_{secret}`, so the numeric segment before the underscore
+    /// is the logged-in user id — no network request needed. This is the
+    /// preferred path: `/setting_user.php` now redirects to `/settings/account`
+    /// (no id in the URL), so the legacy redirect scrape no longer works.
+    fn user_id_from_phpsessid(cookie_str: &str) -> Option<String> {
+        for part in cookie_str.split(';') {
+            let part = part.trim();
+            let Some(rest) = part.strip_prefix("PHPSESSID=") else {
+                continue;
+            };
+            let id = rest.split('_').next().unwrap_or("");
+            if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+                return Some(id.to_string());
+            }
+        }
+        None
+    }
+
     pub async fn fetch_current_user_id(cookie_str: &str) -> Result<String> {
+        if let Some(id) = Self::user_id_from_phpsessid(cookie_str) {
+            return Ok(id);
+        }
         let no_redirect = Client::builder()
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
             .redirect(reqwest::redirect::Policy::none())
@@ -748,7 +842,11 @@ impl PixivClient {
             author: d.user_name,
             author_id: d.user_id,
             published_at: d.create_date,
-            cover_url: None,
+            cover_url: if d.urls.regular.is_empty() {
+                None
+            } else {
+                Some(d.urls.regular)
+            },
         }))
     }
 
@@ -1113,6 +1211,7 @@ impl PixivDownloader {
                 page_count,
                 Some(&source),
                 &collect_tags(work, tags_mode),
+                None,
             )
             .await
             .map_err(|e| SkipReason::Other(format!("register failed: {}", e)))?;

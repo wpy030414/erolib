@@ -4,14 +4,24 @@
       <h2 class="text-h5 library-header__title">{{ t('nav.library') }}</h2>
       <span class="spacer" />
 
-      <md-outlined-text-field
-        class="header-search"
-        :value="libraryStore.query"
-        :label="t('lib.search.placeholder')"
-        @input="libraryStore.query = ($event.target as HTMLInputElement).value"
-      >
-        <MdiIcon slot="leading-icon" :path="mdiMagnify" :size="18" />
-      </md-outlined-text-field>
+      <div class="search-box">
+        <MdiIcon :path="mdiMagnify" :size="18" class="search-icon" />
+        <input
+          class="search-input"
+          type="search"
+          :value="libraryStore.query"
+          :placeholder="t('lib.search.placeholder')"
+          @input="libraryStore.query = ($event.target as HTMLInputElement).value"
+        />
+        <button
+          v-if="libraryStore.query"
+          class="search-clear"
+          :aria-label="t('common.clear')"
+          @click="clearLibrarySearch"
+        >
+          <MdiIcon :path="mdiClose" :size="16" />
+        </button>
+      </div>
 
       <md-filled-button @click="onImport">
         <MdiIcon slot="icon" :path="mdiFolderOpen" :size="20" />
@@ -69,8 +79,8 @@
           </div>
 
           <div class="md3-card__content">
-            <div class="md3-card__title text-truncate text-subtitle-2">
-              {{ book.title }}
+            <div class="md3-card__title text-subtitle-2">
+              <span class="title-inner">{{ book.title }}</span>
             </div>
             <div
               v-if="book.author"
@@ -140,16 +150,17 @@ import { ref, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import {
-  mdiMagnify,
   mdiFolderOpen,
   mdiContentSave,
   mdiDelete,
   mdiInformationOutline,
   mdiClose,
+  mdiMagnify,
 } from '@mdi/js';
 import { useLibraryStore } from '@/stores/library';
 import { api } from '@/services/api';
 import { getThumb, setThumb, deleteThumb } from '@/services/thumb-cache';
+import { useToastStore } from '@/stores/toast';
 import { useI18n } from '@/i18n';
 import MdiIcon from '@/components/MdiIcon.vue';
 import type { Book } from '@/types';
@@ -162,6 +173,7 @@ type MdMenuElement = HTMLElement & {
 
 const router = useRouter();
 const libraryStore = useLibraryStore();
+const toast = useToastStore();
 const { t } = useI18n();
 
 const coverMap = reactive<Record<string, string | null>>({});
@@ -169,7 +181,7 @@ const menuOpen = reactive<Record<string, boolean>>({});
 const menuRefs = new Map<string, MdMenuElement | null>();
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
-const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 500;
 /** Chip-row display cap (backend `get_all_tags` returns the top 30). When the
  *  cap is reached we append a non-interactive "…" chip to signal more exist. */
 const TAG_DISPLAY_LIMIT = 30;
@@ -198,14 +210,17 @@ async function loadCover(book: Book) {
   let alive = true;
   let made: string | null = null;
   try {
-    // Try the IndexedDB thumbnail cache first (instant, no IPC); on miss fetch
-    // a low-res thumb from the backend and cache it for next time.
-    let blob = await getThumb(book.id);
+    // Try the IndexedDB thumbnail cache first. Key by source_post_id (Pixiv
+    // illust id / EHentai gid) so the SAME cover is shared with the browse
+    // pages — a cover cached while browsing is reused for the downloaded book
+    // and vice versa. Local imports (no source_post_id) fall back to book id.
+    const cacheKey = book.source_post_id || book.id;
+    let blob = await getThumb(cacheKey);
     if (!blob) {
       const bytes = await api.getBookCoverThumb(book.id);
       if (!alive) return;
       blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' });
-      void setThumb(book.id, blob);
+      void setThumb(cacheKey, blob);
     }
     if (!alive) return;
     made = URL.createObjectURL(blob);
@@ -271,6 +286,16 @@ watch(
   },
 );
 
+/** Clear the search box and re-run immediately (bypasses the input debounce). */
+function clearLibrarySearch() {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+  libraryStore.query = '';
+  libraryStore.applySearch();
+}
+
 async function onImport() {
   const file = await api.openFile([
     { name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'pdf'] },
@@ -286,6 +311,7 @@ async function deleteBookItem(book: Book) {
   try {
     await libraryStore.deleteBook(book.id);
     void deleteThumb(book.id);
+    toast.addToast('success', t('lib.deleted', { title: book.title }));
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error(t('common.error', { message: String(e) }));
@@ -355,12 +381,6 @@ function metaRows(book: Book): { label: string; value: string }[] {
 .library-header__title {
   margin: 0;
   white-space: nowrap;
-}
-
-.header-search {
-  --md-outlined-text-field-container-height: 40px;
-  width: 260px;
-  flex: 0 0 260px;
 }
 
 .icon-btn {

@@ -55,9 +55,6 @@ pub async fn pixiv_open_login_window(
     let win_label = window.label().to_string();
 
     tauri::async_runtime::spawn(async move {
-        let mut sent_navigate = false;
-        let mut cookie = String::new();
-        let mut captured = false;
         let mut ticks: u32 = 0;
 
         loop {
@@ -71,13 +68,18 @@ pub async fn pixiv_open_login_window(
                 Some(w) => w,
                 None => return,
             };
+
+            // Wait until the user has landed on www.pixiv.net past the login
+            // flow (covers password / 2FA / already-logged-in sessions). We do
+            // NOT navigate the window anywhere — cookies are captured directly
+            // from the webview's data store and the user id is resolved via the
+            // API, so the window stays on whatever page the user landed on
+            // (typically the homepage), never the account-settings page.
             let url = match win.url() {
                 Ok(u) => u,
                 Err(_) => continue,
             };
             let host = url.host_str().unwrap_or("");
-
-            // --- Phase 1: wait until user landed on www.pixiv.net ---
             if host != "www.pixiv.net" {
                 continue;
             }
@@ -86,83 +88,62 @@ pub async fn pixiv_open_login_window(
                 continue;
             }
 
-            // --- Phase 2: try native cookie capture early ---
-            if !captured {
-                let app_clone = app_for_poll.clone();
-                if let Ok(Some(c)) = tauri::async_runtime::spawn_blocking(move || {
-                    capture_all_cookies(&app_clone)
-                })
-                .await
-                {
-                    if has_pixiv_session(&c) {
-                        cookie = c;
-                        captured = true;
-                    }
-                }
-            }
-
-            // --- Phase 3: navigate to setting_user.php for user ID ---
-            if !sent_navigate {
-                if let Ok(target) = Url::parse("https://www.pixiv.net/setting_user.php") {
-                    win.navigate(target).ok();
-                }
-                sent_navigate = true;
-                continue;
-            }
-
-            // --- Phase 4: extract user id from /users/<id>/setting URL ---
-            if let Some(user_id) = user_id_from_pixiv_url(&url) {
-                if user_id.is_empty() {
+            // Capture cookies directly from the webview store (HttpOnly
+            // PHPSESSID included). Retry each tick until the session lands.
+            let app_clone = app_for_poll.clone();
+            let cap = tauri::async_runtime::spawn_blocking(move || {
+                capture_all_cookies(&app_clone)
+            })
+            .await
+            .ok()
+            .flatten();
+            let cookie = match cap {
+                Some(ref c) if has_pixiv_session(c) => c.clone(),
+                ref other => {
+                    tracing::info!(
+                        target: "erolib::pixiv_login",
+                        path = %path,
+                        captured = other.is_some(),
+                        has_session = other.as_deref().map(has_pixiv_session).unwrap_or(false),
+                        len = other.as_deref().map(|c| c.len()).unwrap_or(0),
+                        "capture not ready; retrying"
+                    );
                     continue;
                 }
+            };
 
-                // Final native capture attempt if we didn't get it earlier
-                if !captured {
-                    let app_clone = app_for_poll.clone();
-                    if let Ok(Some(c)) = tauri::async_runtime::spawn_blocking(move || {
-                        capture_all_cookies(&app_clone)
-                    })
-                    .await
-                    {
-                        if has_pixiv_session(&c) {
-                            cookie = c;
-                            captured = true;
-                        }
-                    }
+            // Resolve the numeric user id from the cookie via the API (no
+            // setting-page navigation). Not ready yet → retry next tick.
+            let user_id = match PixivClient::fetch_current_user_id(&cookie).await {
+                Ok(id) if !id.is_empty() => id,
+                ref e => {
+                    tracing::info!(
+                        target: "erolib::pixiv_login",
+                        error = ?e,
+                        "fetch_current_user_id not ready; retrying"
+                    );
+                    continue;
                 }
+            };
 
-                // Best-effort: resolve the display name from the user AJAX API.
-                // Failure is non-fatal — the label just falls back to the id.
-                let user_name = if captured && !cookie.is_empty() {
-                    match PixivClient::new(&cookie) {
-                        Ok(c) => c.fetch_user_name(&user_id).await.ok(),
-                        Err(_) => None,
-                    }
-                } else {
-                    None
-                };
+            // Best-effort display name; failure is non-fatal.
+            let user_name = match PixivClient::new(&cookie) {
+                Ok(c) => c.fetch_user_name(&user_id).await.ok(),
+                Err(_) => None,
+            };
 
-                let result = PixivLoginResult {
-                    user_id,
-                    user_name,
-                    cookie: if captured && !cookie.is_empty() {
-                        cookie
-                    } else {
-                        // Cookie empty = HttpOnly could not be captured natively
-                        // (macOS might not have warmed the cookie store yet).
-                        // Frontend will show the manual entry prompt.
-                        String::new()
-                    },
-                };
-
-                persist(&session_for_poll, &result);
-                let _ = app_for_poll.emit("pixiv://login", &result);
-                win.close().ok();
-                return;
-            }
+            let result = PixivLoginResult {
+                user_id,
+                user_name,
+                cookie,
+            };
+            persist(&session_for_poll, &result);
+            let _ = app_for_poll.emit("pixiv://login", &result);
+            win.close().ok();
+            return;
         }
 
-        // Timed out — try a last-chance native capture + API-based user id
+        // Timed out — try a last-chance native capture + API-based user id.
         let last = try_capture_fallback(&app_for_poll, &session_for_poll).await;
         if let Some(login) = last {
             let _ = app_for_poll.emit("pixiv://login", &login);
@@ -220,6 +201,7 @@ async fn try_capture_fallback(
 
 /// Extract a Pixiv numeric user id from a profile URL like
 /// `https://www.pixiv.net/users/12345678/...`, if present.
+#[allow(dead_code)]
 fn user_id_from_pixiv_url(url: &Url) -> Option<String> {
     if url.host_str() != Some("www.pixiv.net") {
         return None;

@@ -22,4 +22,5 @@ import '@material/web/progress/linear-progress.js';
 import '@material/web/tabs/tabs.js';
 import '@material/web/tabs/primary-tab.js';
 import '@material/web/divider/divider.js';
+import '@material/web/dialog/dialog.js';
 import '@material/web/icon/icon.js';

@@ -304,17 +304,35 @@ impl Aria2Client {
             .context("aria2.addUri returned non-string gid")
     }
 
-    /// Poll aria2 until the gid reaches complete/error/removed state.
-    pub async fn wait_for_gid(
+    /// Poll aria2 while awaiting `on_progress(speed_bps)` on every poll so the
+    /// caller can persist the live download speed. Returns the completed file
+    /// path. The callback is async (not `FnMut(u64)`) because persisting the
+    /// speed needs `.await` — a sync callback would silently drop the future.
+    /// `paused` is checked each poll: while set, the download keeps spinning in
+    /// place (aria2 keeps its in-progress state) until resumed or cancelled.
+    pub async fn wait_for_gid_with_progress<F, Fut>(
         &self,
         gid: &str,
         poll_interval: Duration,
         cancelled: &AtomicBool,
-    ) -> Result<PathBuf> {
+        paused: &AtomicBool,
+        mut on_progress: F,
+    ) -> Result<PathBuf>
+    where
+        F: FnMut(u64) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         loop {
             if cancelled.load(Ordering::Relaxed) {
                 let _ = self.remove(gid).await;
                 anyhow::bail!("cancelled");
+            }
+            while paused.load(Ordering::Relaxed) {
+                if cancelled.load(Ordering::Relaxed) {
+                    let _ = self.remove(gid).await;
+                    anyhow::bail!("cancelled");
+                }
+                sleep(poll_interval).await;
             }
 
             let status = self.tell_status(gid).await?;
@@ -322,6 +340,14 @@ impl Aria2Client {
                 .get("status")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+
+            if let Some(speed) = status
+                .get("downloadSpeed")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                on_progress(speed).await;
+            }
 
             match state {
                 "complete" => {

@@ -13,9 +13,11 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router';
 import AppShell from './components/AppShell.vue';
 import AppToast from './components/AppToast.vue';
+import { useSettingsStore } from './stores/settings';
 
 const route = useRoute();
 const isReader = computed(() => route.path.startsWith('/reader'));
+const settingsStore = useSettingsStore();
 
 // Scroll container — every secondary view scrolls inside this <main>.
 const appMainRef = ref<HTMLElement | null>(null);
@@ -106,6 +108,9 @@ onMounted(() => {
   nextTick(() => {
     requestAnimationFrame(() => restoreScroll(route.path));
   });
+  // Auto-start the OPDS/RSS sharing servers so they're running the moment the
+  // app opens (saved ports — single source of truth).
+  void settingsStore.autoStartAll();
 });
 
 onBeforeUnmount(() => {

@@ -32,3 +32,24 @@ if (initial.seed !== themeStore.seed || initial.mode !== themeStore.mode) {
 
 // Apply localized window title once app locale is resolved.
 applyWindowTitle();
+
+// Card title marquee: hover a truncated title to scroll it (2rem/s, pause ~3s
+// at the end, then loop). Measures overflow on first hover and only enables the
+// animation when the title actually overflows — short titles stay still.
+function setupTitleMarquee() {
+  document.addEventListener('mouseover', (e) => {
+    const title = (e.target as HTMLElement).closest('.md3-card__title') as HTMLElement | null;
+    if (!title || title.dataset.marqueeReady === '1') return;
+    title.dataset.marqueeReady = '1';
+    const inner = title.querySelector<HTMLElement>('.title-inner');
+    if (!inner) return;
+    const overflow = inner.scrollWidth - title.clientWidth;
+    if (overflow <= 0) return;
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const scrollSec = overflow / (2 * rem); // 2rem/s
+    title.style.setProperty('--title-scroll', `${-overflow}px`);
+    title.style.setProperty('--title-dur', `${scrollSec + 3}s`);
+    title.classList.add('is-marquee');
+  });
+}
+setupTitleMarquee();

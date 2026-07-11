@@ -45,6 +45,10 @@ pub struct Book {
     /// Comma-joined tag names (from a join), used for FTS + display.
     /// `#[sqlx(default)]`-equivalent: None when the column is absent.
     pub tags: Option<String>,
+    /// Ugoira frame delays in ms, JSON-encoded (e.g. "[60,60,70,...]"). Present
+    /// only for animated Pixiv works stored as a jpg sequence; the reader parses
+    /// & plays them on a timer.
+    pub delays: Option<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Book {
@@ -71,6 +75,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Book {
             read_count: row.try_get("read_count")?,
             // `tags` comes from an optional JOIN; default to None when absent.
             tags: row.try_get::<Option<String>, _>("tags").unwrap_or(None),
+            delays: row.try_get::<Option<String>, _>("delays").unwrap_or(None),
         })
     }
 }
@@ -141,6 +146,15 @@ pub struct BookMetadata {
     pub tags: Vec<String>,
     pub status: Option<String>,
     pub rating: Option<f32>,
+    // erolib provenance — written under the ero: namespace in ComicInfo.xml so
+    // an exported cb7 round-trips losslessly back on import.
+    pub source_plugin: Option<String>,
+    pub source_url: Option<String>,
+    pub source_post_id: Option<String>,
+    pub published_at: Option<String>,
+    pub scraped_at: Option<String>,
+    /// Ugoira frame delays in ms, JSON-encoded (animated books only).
+    pub delays: Option<String>,
 }
 
 /// Query parameters for searching books.

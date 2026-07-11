@@ -276,11 +276,28 @@ img {
 }
 
 .md3-card__title {
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--md-sys-color-on-surface);
   font: var(--md-sys-typescale-title-small-weight)
     var(--md-sys-typescale-title-small-size) /
     var(--md-sys-typescale-title-small-line-height)
     var(--md-sys-typescale-font);
+}
+.md3-card__title .title-inner {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+}
+/* Hover a truncated title to marquee-scroll it (2rem/s, pause ~3s at the end).
+   `is-marquee` + --title-scroll/--title-dur are set by JS only when the title
+   actually overflows, so short titles stay put. */
+.md3-card__title.is-marquee:hover .title-inner {
+  animation: title-marquee var(--title-dur, 8s) linear infinite;
+}
+@keyframes title-marquee {
+  0%, 8% { transform: translateX(0); }
+  78%, 100% { transform: translateX(var(--title-scroll, 0)); }
 }
 
 .md3-card__subtitle {
@@ -313,3 +330,87 @@ img {
 }
 .md3-fade-enter-from,
 .md3-fade-leave-to { opacity: 0; }
+
+/* Lightweight SVG spinner. Pure CSS `transform: rotate` animation → composited
+   on the GPU, so it stays smooth even when the main thread is busy decoding
+   images (md-circular-progress indeterminate stalls in WKWebView in that case).
+   Tint with `color`; the track is a faint version of it. */
+.spinner {
+  width: 44px;
+  height: 44px;
+  animation: erolib-spin 0.9s linear infinite;
+}
+.spinner-track {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 22%, transparent);
+  stroke-width: 4;
+}
+.spinner-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 90 200;
+}
+@keyframes erolib-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Native search input (used by Library + EHentai headers). Height controlled
+   directly — md-outlined-text-field's container-height token left the field
+   visually too tall (label/outline padding). */
+/* Unified search box: a pill container with a magnifier icon + input + an
+   optional clear (×) button. Shared by Library / Pixiv / EHentai. Fixed flex
+   basis so the clear button shrinks the input instead of growing the box;
+   min-width:0 stops a long typed string from inflating it via the input's
+   min-content. */
+.search-box {
+  display: flex;
+  align-items: center;
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-full);
+  padding: 0 6px 0 14px;
+  height: 40px;
+  flex: 0 0 260px;
+  min-width: 0;
+}
+.search-icon {
+  color: var(--md-sys-color-on-surface-variant);
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+.search-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: 400 14px / 1 var(--md-sys-typescale-font);
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+}
+.search-input::placeholder {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: var(--md-sys-shape-corner-full);
+  flex-shrink: 0;
+}
+.search-clear:hover {
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+}
