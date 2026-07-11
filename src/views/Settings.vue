@@ -57,7 +57,6 @@
             v-for="item in localeItems"
             :key="item.value"
             :value="item.value"
-            :selected="locale === item.value"
           >
             {{ item.label }}
           </md-select-option>
@@ -130,6 +129,40 @@
 
     <!-- Sharing tab -->
     <div v-if="tab === 'sharing'">
+      <!-- Local one-way sync (library → a folder, as ${title}-${metaHash}.cb7) -->
+      <section class="mb-6">
+        <div class="d-flex align-center mb-2">
+          <MdiIcon :path="mdiFolderSyncOutline" :size="22" class="mr-2" />
+          <h3 class="text-h6">{{ t('settings.localSync') }}</h3>
+          <md-switch
+            ref="syncSwitchRef"
+            :selected="settingsStore.syncEnabled"
+            :aria-label="t('settings.localSync')"
+            style="margin-left: auto"
+          />
+        </div>
+
+        <md-outlined-text-field
+          :value="syncDirName"
+          :label="t('settings.localSync.path')"
+          :placeholder="t('settings.localSync.pathHint')"
+          :title="settingsStore.syncDir"
+          readonly
+          :disabled="!settingsStore.syncEnabled || settingsStore.syncBusy"
+          style="width: 280px; cursor: pointer"
+          @click="pickSyncDir"
+        />
+
+        <p v-if="settingsStore.syncStats" class="mt-3 text-body-2 text-success d-flex align-center">
+          <MdiIcon :path="mdiCheckCircle" :size="16" class="mr-1" />
+          {{ t('settings.localSync.stats', settingsStore.syncStats) }}
+        </p>
+        <p v-if="settingsStore.syncBusy" class="mt-3 text-body-2 text-medium-emphasis">
+          {{ t('settings.localSync.syncing') }}
+        </p>
+        <p v-if="settingsStore.syncError" class="mt-3 text-body-2 text-error">{{ settingsStore.syncError }}</p>
+      </section>
+
       <!-- OPDS Server -->
       <section class="mb-6">
         <div class="d-flex align-center mb-2">
@@ -249,6 +282,7 @@ import {
   mdiBroom,
   mdiCheckCircle,
   mdiDeleteForever,
+  mdiFolderSyncOutline,
   mdiGithub,
   mdiPalette,
   mdiPlay,
@@ -257,6 +291,7 @@ import {
   mdiTranslate,
   mdiWeb,
 } from '@mdi/js';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { api } from '@/services/api';
 import { useI18n, LOCALES, LOCALE_LABELS, type Locale } from '@/i18n';
 import { useSettingsStore } from '@/stores/settings';
@@ -270,6 +305,13 @@ import { clearThumbs } from '@/services/thumb-cache';
 const { t, locale, setLocale } = useI18n();
 const settingsStore = useSettingsStore();
 const themeStore = useThemeStore();
+
+/** Show only the target folder's name in the narrow sync field; the full path
+ *  is what's stored and sent to the backend — hover (title) reveals it. */
+const syncDirName = computed(() => {
+  const parts = settingsStore.syncDir.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : '';
+});
 const toastStore = useToastStore();
 
 const version = ref('0.1.0');
@@ -399,6 +441,7 @@ type SelectElement = HTMLElement & { value: string };
 type SwitchElement = HTMLElement & { selected: boolean };
 const selectRef = ref<SelectElement | null>(null);
 const switchRef = ref<SwitchElement | null>(null);
+const syncSwitchRef = ref<SwitchElement | null>(null);
 
 function onLocaleChange() {
   if (selectRef.value) {
@@ -410,18 +453,42 @@ function onDarkChange() {
     themeStore.setMode(switchRef.value.selected ? 'dark' : 'light');
   }
 }
+function onSyncChange() {
+  if (!syncSwitchRef.value) return;
+  settingsStore.setSyncEnabled(syncSwitchRef.value.selected);
+  // Turning on while a target directory is already set → mirror immediately.
+  if (syncSwitchRef.value.selected && settingsStore.syncDir) {
+    void settingsStore.syncNow();
+  }
+}
+async function pickSyncDir() {
+  const selected = await openDialog({ directory: true, multiple: false });
+  if (typeof selected === 'string' && selected) {
+    settingsStore.setSyncDir(selected);
+    // Choosing a path (while enabled) triggers a sync too.
+    await settingsStore.syncNow();
+  }
+}
 
 onMounted(() => {
   syncTabs();
   tabsRef.value?.addEventListener('change', onTabChange);
+  // Set the locale select's value programmatically. Binding :selected on
+  // md-select-option fights MWC's internal selection state (Vue re-renders
+  // overwrite the DOM selected attr, MWC's selectedIndex stops tracking) and
+  // the second change silently no-ops. Letting MWC own selection via value
+  // fixes consecutive switches.
+  if (selectRef.value) selectRef.value.value = locale.value;
   selectRef.value?.addEventListener('change', onLocaleChange);
   switchRef.value?.addEventListener('change', onDarkChange);
+  syncSwitchRef.value?.addEventListener('change', onSyncChange);
 });
 
 onBeforeUnmount(() => {
   tabsRef.value?.removeEventListener('change', onTabChange);
   selectRef.value?.removeEventListener('change', onLocaleChange);
   switchRef.value?.removeEventListener('change', onDarkChange);
+  syncSwitchRef.value?.removeEventListener('change', onSyncChange);
 });
 </script>
 

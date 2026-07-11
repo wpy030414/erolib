@@ -3,23 +3,13 @@
     <div class="view-header d-flex align-center gap-4 mb-6">
       <h2 class="text-h5 view-header__title">{{ t('nav.pixiv') }}</h2>
       <span class="spacer" />
-      <div v-if="login?.user_id && tab === 'recommend'" class="search-box d-flex align-center">
-        <MdiIcon :path="mdiMagnify" :size="18" class="search-icon" />
-        <input
-          v-model="searchInput"
-          class="search-input"
-          type="search"
-          :placeholder="t('pixiv.search.placeholder')"
-        />
-        <button
-          v-if="searchInput"
-          class="search-clear"
-          :aria-label="t('pixiv.search.clear')"
-          @click="clearSearch"
-        >
-          <MdiIcon :path="mdiClose" :size="16" />
-        </button>
-      </div>
+      <SearchBox
+        v-if="login?.user_id && tab === 'recommend'"
+        :model-value="store.searchKeyword"
+        :placeholder="t('pixiv.search.placeholder')"
+        :clear-label="t('pixiv.search.clear')"
+        @commit="store.setSearchKeyword"
+      />
       <md-filled-button v-if="!login" :disabled="loggingIn" @click="startLogin">
         <MdiIcon slot="icon" :path="mdiArrowTopRight" :size="18" />
         {{ t('pixiv.login.login') }}
@@ -45,128 +35,125 @@
       <div v-show="tab === 'recommend'">
         <!-- 搜索结果（有词时） -->
         <div v-show="store.searchKeyword">
-          <div v-if="store.search.items.length" class="md3-grid">
-            <PixivCard
+          <FeedList
+            :feed="store.search"
+            :texts="{
+              empty: t('pixiv.search.empty'),
+              end: t('pixiv.browse.end'),
+              loadingMore: t('pixiv.browse.loadingMore'),
+            }"
+            @load-more="store.loadMore('search')"
+          >
+            <SourceCard
               v-for="w in store.search.items"
               :key="'s-' + w.id"
-              :work="w"
+              :title="w.title"
+              :page-count="w.pageCount"
+              :subtitle="w.author"
               :cover="store.coverMap[w.id] ?? null"
               :status="store.statusMap[w.id]"
               @click="onCardClick(w)"
             />
-          </div>
-          <div v-else-if="!store.search.loading" class="text-center text-medium-emphasis mt-8">
-            {{ t('pixiv.search.empty') }}
-          </div>
-          <div v-if="store.search.end && store.search.items.length" class="feed-end text-center text-medium-emphasis">
-            {{ t('pixiv.browse.end') }}
-          </div>
-          <div v-if="store.search.loading" class="feed-loading text-center text-medium-emphasis">
-            <md-circular-progress indeterminate />
-            <span>{{ t('pixiv.browse.loadingMore') }}</span>
-          </div>
-          <div ref="searchSentinel" class="feed-sentinel" />
+          </FeedList>
         </div>
 
         <!-- 推荐（无词时） -->
         <div v-show="!store.searchKeyword">
-          <div v-if="store.recommend.items.length" class="md3-grid">
-            <PixivCard
+          <FeedList
+            :feed="store.recommend"
+            :texts="{
+              empty: t('pixiv.browse.empty'),
+              end: t('pixiv.browse.end'),
+              loadingMore: t('pixiv.browse.loadingMore'),
+            }"
+            @load-more="store.loadMore('recommend')"
+          >
+            <SourceCard
               v-for="w in store.recommend.items"
               :key="'r-' + w.id"
-              :work="w"
+              :title="w.title"
+              :page-count="w.pageCount"
+              :subtitle="w.author"
               :cover="store.coverMap[w.id] ?? null"
               :status="store.statusMap[w.id]"
               @click="onCardClick(w)"
             />
-          </div>
-          <div v-else-if="!store.recommend.loading" class="text-center text-medium-emphasis mt-8">
-            {{ t('pixiv.browse.empty') }}
-          </div>
-          <div v-if="store.recommend.end && store.recommend.items.length" class="feed-end text-center text-medium-emphasis">
-            {{ t('pixiv.browse.end') }}
-          </div>
-          <div v-if="store.recommend.loading" class="feed-loading text-center text-medium-emphasis">
-            <md-circular-progress indeterminate />
-            <span>{{ t('pixiv.browse.loadingMore') }}</span>
-          </div>
-          <div ref="recommendSentinel" class="feed-sentinel" />
+          </FeedList>
         </div>
       </div>
 
       <!-- 关注 feed -->
       <div v-show="tab === 'following'">
-        <div v-if="store.following.items.length" class="md3-grid">
-          <PixivCard
+        <FeedList
+          :feed="store.following"
+          :texts="{
+            empty: t('pixiv.browse.empty'),
+            end: t('pixiv.browse.end'),
+            loadingMore: t('pixiv.browse.loadingMore'),
+          }"
+          @load-more="store.loadMore('following')"
+        >
+          <SourceCard
             v-for="w in store.following.items"
             :key="'f-' + w.id"
-            :work="w"
+            :title="w.title"
+            :page-count="w.pageCount"
+            :subtitle="w.author"
             :cover="store.coverMap[w.id] ?? null"
             :status="store.statusMap[w.id]"
             @click="onCardClick(w)"
           />
-        </div>
-        <div v-else-if="!store.following.loading" class="text-center text-medium-emphasis mt-8">
-          {{ t('pixiv.browse.empty') }}
-        </div>
-        <div v-if="store.following.end && store.following.items.length" class="feed-end text-center text-medium-emphasis">
-          {{ t('pixiv.browse.end') }}
-        </div>
-        <div v-if="store.following.loading" class="feed-loading text-center text-medium-emphasis">
-          <md-circular-progress indeterminate />
-          <span>{{ t('pixiv.browse.loadingMore') }}</span>
-        </div>
-        <div ref="followingSentinel" class="feed-sentinel" />
+        </FeedList>
       </div>
 
       <!-- 收藏 feed -->
       <div v-show="tab === 'bookmark'">
-        <div v-if="store.bookmark.items.length" class="md3-grid">
-          <PixivCard
+        <FeedList
+          :feed="store.bookmark"
+          :texts="{
+            empty: t('pixiv.browse.empty'),
+            end: t('pixiv.browse.end'),
+            loadingMore: t('pixiv.browse.loadingMore'),
+          }"
+          @load-more="store.loadMore('bookmark')"
+        >
+          <SourceCard
             v-for="w in store.bookmark.items"
             :key="'b-' + w.id"
-            :work="w"
+            :title="w.title"
+            :page-count="w.pageCount"
+            :subtitle="w.author"
             :cover="store.coverMap[w.id] ?? null"
             :status="store.statusMap[w.id]"
             @click="onCardClick(w)"
           />
-        </div>
-        <div v-else-if="!store.bookmark.loading" class="text-center text-medium-emphasis mt-8">
-          {{ t('pixiv.browse.empty') }}
-        </div>
-        <div v-if="store.bookmark.end && store.bookmark.items.length" class="feed-end text-center text-medium-emphasis">
-          {{ t('pixiv.browse.end') }}
-        </div>
-        <div v-if="store.bookmark.loading" class="feed-loading text-center text-medium-emphasis">
-          <md-circular-progress indeterminate />
-          <span>{{ t('pixiv.browse.loadingMore') }}</span>
-        </div>
-        <div ref="bookmarkSentinel" class="feed-sentinel" />
+        </FeedList>
       </div>
 
-      <button
-        class="fab-refresh"
+      <FabButton
+        :icon="mdiRefresh"
         :aria-label="t('lib.refresh')"
         :disabled="currentFeedLoading"
         @click="onReload"
-      >
-        <MdiIcon :path="mdiRefresh" :size="24" />
-      </button>
+      />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
-import { mdiArrowTopRight, mdiRefresh, mdiExitToApp, mdiMagnify, mdiClose } from '@mdi/js';
+import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToastStore } from '@/stores/toast';
 import { usePixivBrowseStore, type PixivTab } from '@/stores/pixiv-browse';
 import MdiIcon from '@/components/MdiIcon.vue';
-import PixivCard from '@/components/PixivCard.vue';
+import SourceCard from '@/components/SourceCard.vue';
+import FeedList from '@/components/FeedList.vue';
+import SearchBox from '@/components/SearchBox.vue';
+import FabButton from '@/components/FabButton.vue';
 import type { PixivWork } from '@/types';
 
 const { t } = useI18n();
@@ -186,10 +173,6 @@ const TABS: readonly PixivTab[] = ['recommend', 'following', 'bookmark'];
 
 const login = ref<PixivLogin | null>(null);
 const loggingIn = ref(false);
-// Local text in the search box. Seeded from the persisted store keyword so the
-// box shows the current search when the view is re-mounted (the store lives
-// until the app quits); committed back 500ms after typing settles.
-const searchInput = ref(store.searchKeyword);
 
 // Persisted tab (defaults to 'recommend' — the left-most entry — when
 // absent/invalid).
@@ -202,9 +185,6 @@ const initialPixivTab = (() => {
   }
 })();
 const tab = ref<PixivTab>(initialPixivTab);
-
-// The 随便看看 tab is in "search mode" when a keyword is committed.
-const recommendSearching = computed(() => tab.value === 'recommend' && !!store.searchKeyword);
 
 const currentFeedLoading = computed(() => {
   if (tab.value === 'recommend') {
@@ -258,32 +238,6 @@ function onReload() {
   }
 }
 
-/** Commit the search box text to the store, which resets the search feed and
- *  fires the first page. An empty query clears the search (back to recommend). */
-function commitSearch() {
-  store.setSearchKeyword(searchInput.value);
-}
-
-// Auto-search 500ms after typing settles — no Enter needed. The clear (×)
-// button bypasses the throttle via clearSearch().
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-watch(searchInput, () => {
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    searchTimer = null;
-    commitSearch();
-  }, 500);
-});
-
-function clearSearch() {
-  searchInput.value = '';
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-  store.setSearchKeyword('');
-}
-
 async function startLogin() {
   loggingIn.value = true;
   try {
@@ -302,11 +256,6 @@ async function onLogout() {
   } catch (e) {
     console.error('pixiv logout:', e);
   }
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-  searchInput.value = '';
   store.resetAll();
   login.value = null;
 }
@@ -328,34 +277,9 @@ watch(tab, (v) => {
   } catch {
     // ignore storage errors
   }
-  // Lazy first load when the user first switches to a tab.
-  const feed = v === 'recommend' ? store.recommend : v === 'following' ? store.following : store.bookmark;
-  if (feed.items.length === 0 && !feed.loading && !feed.end) {
-    store.loadMore(v);
-  }
 });
-
-// After a fresh login, load the default tab if it hasn't been loaded yet.
-watch(login, (l) => {
-  if (l && store.recommend.items.length === 0 && !store.recommend.loading) {
-    store.recommend.end = false;
-    store.loadMore('recommend');
-  }
-});
-
-// Keep the search box in sync if the store keyword changes elsewhere.
-watch(() => store.searchKeyword, (kw) => {
-  if (kw !== searchInput.value) searchInput.value = kw;
-});
-
-const recommendSentinel = ref<HTMLElement | null>(null);
-const followingSentinel = ref<HTMLElement | null>(null);
-const bookmarkSentinel = ref<HTMLElement | null>(null);
-const searchSentinel = ref<HTMLElement | null>(null);
-let recommendObserver: IntersectionObserver | null = null;
-let followingObserver: IntersectionObserver | null = null;
-let bookmarkObserver: IntersectionObserver | null = null;
-let searchObserver: IntersectionObserver | null = null;
+// Note: no manual lazy-first-load wiring — each <FeedList>'s sentinel arms on
+// mount and auto-loads the first page once the tab becomes visible.
 
 let unlistenLogin: UnlistenFn | undefined;
 
@@ -379,68 +303,18 @@ onMounted(async () => {
     },
   );
 
-  // task://progress is handled at the store level (survives view unmount).
+  // task://progress is handled at the store level (survives view unmount); the
+  // listener is armed at app start (App.vue instantiates the store).
 
   if (tabsRef.value) {
     tabsRef.value.activeTabIndex = TABS.indexOf(tab.value);
     tabsRef.value.addEventListener('change', onTabChange);
   }
-
-  // All four sentinels live in always-rendered (v-show) containers, so they
-  // exist now and IntersectionObserver reacts to display changes automatically
-  // — no need to re-wire when the tab or search keyword flips.
-  const ioOpts: IntersectionObserverInit = { rootMargin: '300px' };
-  recommendObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((e) => e.isIntersecting)) store.loadMore('recommend');
-    },
-    ioOpts,
-  );
-  followingObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((e) => e.isIntersecting)) store.loadMore('following');
-    },
-    ioOpts,
-  );
-  bookmarkObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((e) => e.isIntersecting)) store.loadMore('bookmark');
-    },
-    ioOpts,
-  );
-  searchObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((e) => e.isIntersecting)) store.loadMore('search');
-    },
-    ioOpts,
-  );
-  nextTick(() => {
-    if (recommendSentinel.value) recommendObserver?.observe(recommendSentinel.value);
-    if (followingSentinel.value) followingObserver?.observe(followingSentinel.value);
-    if (bookmarkSentinel.value) bookmarkObserver?.observe(bookmarkSentinel.value);
-    if (searchSentinel.value) searchObserver?.observe(searchSentinel.value);
-  });
-
-  // First load of the active tab — but only if the store hasn't already
-  // populated it (state survives view switches until the app quits).
-  const activeFeed =
-    tab.value === 'recommend'
-      ? store.recommend
-      : tab.value === 'following'
-        ? store.following
-        : store.bookmark;
-  if (activeFeed.items.length === 0 && !activeFeed.end && !activeFeed.loading) {
-    store.loadMore(tab.value);
-  }
 });
 
 onBeforeUnmount(() => {
   unlistenLogin?.();
-  if (searchTimer) clearTimeout(searchTimer);
-  recommendObserver?.disconnect();
-  followingObserver?.disconnect();
-  bookmarkObserver?.disconnect();
-  searchObserver?.disconnect();
+  tabsRef.value?.removeEventListener('change', onTabChange);
   // Intentionally do NOT clear store state or revoke covers here — the browse
   // state persists across view switches until the app exits.
 });
@@ -458,53 +332,4 @@ onBeforeUnmount(() => {
 
 /* Search-box styles are global (src/styles/md3.css) — shared with Library
    and EHentai. */
-
-.feed-sentinel {
-  height: 1px;
-}
-
-.feed-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 24px 0;
-}
-
-.feed-end {
-  padding: 20px 0;
-  font-size: 13px;
-}
-
-/* Floating reload button (bottom-right) — reloads the current view on demand. */
-.fab-refresh {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 50;
-  width: 56px;
-  height: 56px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-  box-shadow: var(--md-sys-elevation-level3);
-  cursor: pointer;
-  transition:
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
-}
-
-.fab-refresh:hover:not(:disabled) {
-  box-shadow: var(--md-sys-elevation-level4);
-  transform: scale(1.05);
-}
-
-.fab-refresh:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 </style>

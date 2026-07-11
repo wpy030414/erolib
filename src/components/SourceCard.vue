@@ -1,9 +1,9 @@
 <template>
   <div class="book-card" :class="{ 'book-card--busy': isBusy }">
     <div class="book-cover-wrap">
-      <img v-if="cover" :src="cover" class="book-cover" :alt="item.title" />
-      <div v-else class="book-placeholder">{{ item.title.charAt(0) }}</div>
-      <div class="book-pages-badge">{{ item.pageCount }}</div>
+      <img v-if="cover" :src="cover" class="book-cover" :alt="title" loading="lazy" decoding="async" />
+      <div v-else class="book-placeholder">{{ title.charAt(0).toUpperCase() }}</div>
+      <div class="book-pages-badge">{{ pageCount }}</div>
       <div v-if="isBusy" class="book-cover-mask">
         <div v-if="hasProgress" class="progress-ring-wrap">
           <svg class="progress-ring" viewBox="0 0 36 36">
@@ -27,9 +27,9 @@
     </div>
     <div class="md3-card__content">
       <span v-if="isNew" class="new-dot" aria-hidden="true" />
-      <div class="md3-card__title text-subtitle-2"><span class="title-inner">{{ item.title }}</span></div>
-      <div v-if="item.uploader" class="md3-card__subtitle text-body-2 text-truncate">
-        {{ item.uploader }}
+      <div class="md3-card__title text-subtitle-2"><span class="title-inner">{{ title }}</span></div>
+      <div v-if="subtitle" class="md3-card__subtitle text-body-2 text-truncate">
+        {{ subtitle }}
       </div>
     </div>
   </div>
@@ -37,12 +37,26 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { GalleryListItem, EhentaiBrowseStatus } from '@/types';
+import type { CardStatus } from '@/types';
 
+/**
+ * Unified display card for Library, Pixiv, and EHentai grids. Source-specific
+ * fields are normalised by the caller: `title`/`pageCount` come straight off
+ * the item, `subtitle` is the per-source secondary line (Pixiv `work.author`,
+ * EHentai `item.uploader`, Library `book.author`), and `status` is the local
+ * browse state. Omitting `status` (Library cards) yields a plain card with no
+ * red "new" dot and no download overlay.
+ *
+ * No emits: the root `.book-card` receives native `@click` (and any other
+ * listeners / `id`) via Vue's attribute fallthrough, so callers dispatch state
+ * themselves. Scoped CSS is the (byte-identical) merged set from the former
+ * PixivCard / EHentaiCard. */
 const props = defineProps<{
-  item: GalleryListItem;
+  title: string;
+  pageCount: number;
+  subtitle?: string;
   cover: string | null;
-  status?: EhentaiBrowseStatus;
+  status?: CardStatus;
 }>();
 
 const ACTIVE = ['pending', 'running', 'paused'];
@@ -51,8 +65,10 @@ const isLocal = computed(() => !!props.status?.localBookId);
 const isBusy = computed(
   () => !!props.status?.taskId && ACTIVE.includes(props.status?.taskStatus ?? ''),
 );
-/** New = not downloaded and not downloading → shows the red dot. */
-const isNew = computed(() => !isLocal.value && !isBusy.value);
+/** New = a browse card (status given) that is neither downloaded nor
+ *  downloading → shows the red dot. Library cards pass status=undefined, so
+ *  they never get a dot. */
+const isNew = computed(() => props.status !== undefined && !isLocal.value && !isBusy.value);
 
 // Progress ring. SVG is far lighter than md-circular-progress determinate,
 // which stuttered badly under per-page progress updates. Render the ring only

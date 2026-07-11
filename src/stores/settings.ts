@@ -5,6 +5,9 @@ import { api } from '@/services/api';
 const OPDS_PORT_KEY = 'erolib.opdsPort';
 const RSS_PORT_KEY = 'erolib.rssPort';
 
+const LOCAL_SYNC_ENABLED_KEY = 'erolib.localSyncEnabled';
+const LOCAL_SYNC_DIR_KEY = 'erolib.localSyncDir';
+
 // Default ports: 5269 for OPDS, 1269 for RSS
 const DEFAULT_OPDS_PORT = '5269';
 const DEFAULT_RSS_PORT = '1269';
@@ -36,6 +39,18 @@ export const useSettingsStore = defineStore('settings', () => {
   const rssBusy = ref(false);
   const opdsError = ref<string | null>(null);
   const rssError = ref<string | null>(null);
+
+  // One-way local sync (library → a chosen directory). Persisted in localStorage
+  // like the server ports; the actual mirror runs in the backend.
+  const syncEnabled = ref(
+    typeof window !== 'undefined' && window.localStorage.getItem(LOCAL_SYNC_ENABLED_KEY) === '1',
+  );
+  const syncDir = ref(
+    (typeof window !== 'undefined' && window.localStorage.getItem(LOCAL_SYNC_DIR_KEY)) || '',
+  );
+  const syncBusy = ref(false);
+  const syncError = ref<string | null>(null);
+  const syncStats = ref<{ copied: number; skipped: number } | null>(null);
 
   function saveOpdsPort(value: string) {
     savePort(OPDS_PORT_KEY, value);
@@ -111,6 +126,41 @@ export const useSettingsStore = defineStore('settings', () => {
     else await startRss();
   }
 
+  function setSyncEnabled(v: boolean) {
+    syncEnabled.value = v;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LOCAL_SYNC_ENABLED_KEY, v ? '1' : '0');
+    }
+  }
+
+  function setSyncDir(v: string) {
+    syncDir.value = v;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LOCAL_SYNC_DIR_KEY, v);
+    }
+  }
+
+  /** Run the mirror now (copy new books, delete removed). No-op unless enabled
+   *  with a target directory and not already busy. */
+  async function syncNow() {
+    if (!syncEnabled.value || !syncDir.value || syncBusy.value) return;
+    syncBusy.value = true;
+    syncError.value = null;
+    try {
+      syncStats.value = await api.syncToDir(syncDir.value);
+    } catch (e) {
+      syncError.value = String(e);
+    } finally {
+      syncBusy.value = false;
+    }
+  }
+
+  /** Called by library/tasks stores on book changes — syncs only if the user
+   *  has enabled it, so it's safe to wire into every mutation. */
+  async function syncIfEnabled() {
+    if (syncEnabled.value && syncDir.value) await syncNow();
+  }
+
   /** App.vue calls this on mount so the sharing servers are running the moment
    *  the app opens, using the saved ports (single source of truth). */
   async function autoStartAll() {
@@ -120,8 +170,12 @@ export const useSettingsStore = defineStore('settings', () => {
   function reset() {
     opdsPort.value = DEFAULT_OPDS_PORT;
     rssPort.value = DEFAULT_RSS_PORT;
+    syncEnabled.value = false;
+    syncDir.value = '';
     window.localStorage.removeItem(OPDS_PORT_KEY);
     window.localStorage.removeItem(RSS_PORT_KEY);
+    window.localStorage.removeItem(LOCAL_SYNC_ENABLED_KEY);
+    window.localStorage.removeItem(LOCAL_SYNC_DIR_KEY);
   }
 
   return {
@@ -135,6 +189,11 @@ export const useSettingsStore = defineStore('settings', () => {
     rssBusy,
     opdsError,
     rssError,
+    syncEnabled,
+    syncDir,
+    syncBusy,
+    syncError,
+    syncStats,
     saveOpdsPort,
     saveRssPort,
     startOpds,
@@ -143,6 +202,10 @@ export const useSettingsStore = defineStore('settings', () => {
     startRss,
     stopRss,
     toggleRss,
+    setSyncEnabled,
+    setSyncDir,
+    syncNow,
+    syncIfEnabled,
     autoStartAll,
     reset,
   };

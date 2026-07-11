@@ -4,6 +4,7 @@ import { api } from '@/services/api';
 import type { TaskItem } from '@/services/api';
 import { useToastStore } from './toast';
 import { useLibraryStore } from './library';
+import { useSettingsStore } from './settings';
 import { useI18n } from '@/i18n';
 
 export type { TaskItem };
@@ -36,10 +37,21 @@ export function useTaskStore() {
         toastStore.addToast('success', t('tasks.toast.completed', { title }));
         // A finished download produced new library data — refresh the shelf.
         useLibraryStore().refresh().catch(() => {});
+        // And push it to the local sync folder if enabled.
+        useSettingsStore().syncIfEnabled();
       } else if (kind === 'failed') {
         toastStore.addToast('error', t('tasks.toast.failed', { title }));
       } else if (kind === 'cancelled') {
         toastStore.addToast('info', t('tasks.toast.cancelled', { title }));
+      }
+    });
+
+    // A book deleted from the library detaches from its task: clear the
+    // book_id so the "Read" button (v-if item.book_id) disappears.
+    await listen<{ bookId: string }>('book://deleted', (event) => {
+      const idx = tasks.value.findIndex((t) => t.book_id === event.payload.bookId);
+      if (idx !== -1) {
+        tasks.value[idx] = { ...tasks.value[idx], book_id: null };
       }
     });
   }

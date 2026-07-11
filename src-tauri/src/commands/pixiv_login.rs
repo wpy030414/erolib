@@ -46,6 +46,12 @@ pub async fn pixiv_open_login_window(
     .inner_size(520.0, 760.0)
     .center()
     .resizable(true)
+    // Disable spell-check/autocorrect on every input. On macOS 26 WKWebView's
+    // auto-correction panel (NSCorrectionPanel) is shown as a sheet child
+    // window and hits an NSRemoteView assertion → crash the moment the user
+    // types in a field. With spellcheck off WebCore never calls
+    // showCorrectionPanel, sidestepping the bug.
+    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
     .build()
     .map_err(|e| format!("open login window: {e}"))?;
 

@@ -1,4 +1,8 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Pool, Sqlite,
+};
+use std::str::FromStr;
 use tauri::{AppHandle, Manager};
 
 pub struct Database {
@@ -22,99 +26,46 @@ impl Database {
         })?;
 
         let db_path = data_dir.join("manga-manager.db");
-        // sqlx's default connect mode is read-only (no create), so opening a
-        // never-yet-existing SQLite file returns code 14. `mode=rwc` makes the
-        // pool create the file if absent and read/write otherwise.
+        // `mode=rwc` makes SQLite create the file if absent and read/write
+        // otherwise. `SqliteConnectOptions::from_str` parses the `sqlite:`
+        // URL form including the query string.
         let db_url = format!("sqlite:{}?mode=rwc", db_path.to_string_lossy());
 
         tracing::info!(target: "erolib::db", "Opening sqlite at {}", db_path.display());
 
+        // SQLite PRAGMAs are per-connection, so chaining them on
+        // `SqliteConnectOptions` (rather than running `PRAGMA ...` once on the
+        // pool) guarantees every pooled connection picks them up. WAL keeps
+        // concurrent download writes from blocking reads; busy_timeout lets
+        // writers wait briefly instead of erroring under contention.
+        let opts = SqliteConnectOptions::from_str(&db_url)?
+            .create_if_missing(true)
+            .pragma("journal_mode", "WAL")
+            .pragma("synchronous", "NORMAL")
+            .pragma("busy_timeout", "5000")
+            .pragma("foreign_keys", "ON");
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&db_url)
+            .max_connections(8)
+            .connect_with(opts)
             .await
             .map_err(|e| {
                 crate::errors::AppError::Other(format!("open sqlite {}: {e}", db_path.display()))
             })?;
 
-        sqlx::query("PRAGMA foreign_keys = ON;")
+        // Apply the schema. The `sqlx::migrate!` macro lives in sqlx-macros,
+        // which can't be built in the release profile on this toolchain (see
+        // Cargo.toml + task_manager.rs FromRow hand-written for the same
+        // reason), so schema.sql is embedded and executed directly. It is fully
+        // idempotent (`CREATE ... IF NOT EXISTS`), so re-running on each launch
+        // is a no-op once applied. The books + tasks tables already carry their
+        // full column sets, so there's no in-place ALTER upgrade step. (This is
+        // a plain schema bootstrap, not a versioned migration system — there's
+        // no `_sqlx_migrations` table; the `schema/` dir name reflects that.)
+        sqlx::query(include_str!("../../schema/schema.sql"))
             .execute(&pool)
             .await
-            .map_err(|e| crate::errors::AppError::Other(format!("pragma foreign_keys: {e}")))?;
-
-        // Apply migrations. The `sqlx::migrate!` macro lives in sqlx-macros,
-        // which can't be built in the release profile on this toolchain (see
-        // Cargo.toml), so the SQL is embedded and executed directly. Every
-        // migration is idempotent (`CREATE ... IF NOT EXISTS` /
-        // `DROP ... IF EXISTS`-then-rebuild), so re-running on each launch is a
-        // no-op once applied.
-        for sql in [
-            include_str!("../../migrations/20260709000001_init.sql"),
-            include_str!("../../migrations/20260709000002_fix_fts.sql"),
-            include_str!("../../migrations/20260710000001_tasks.sql"),
-        ] {
-            sqlx::query(sql)
-                .execute(&pool)
-                .await
-                .map_err(|e| crate::errors::AppError::Other(format!("migrations: {e}")))?;
-        }
-
-        // books: add source-metadata columns. ALTER TABLE ADD COLUMN has no
-        // IF NOT EXISTS and migrations re-run every launch, so guard each with
-        // a PRAGMA table_info check. New installs get these via init.sql's
-        // CREATE TABLE; this upgrades existing DBs in place.
-        for (col, ddl) in [
-            ("source_post_id", "TEXT"),
-            ("author", "TEXT"),
-            ("author_id", "TEXT"),
-            ("published_at", "TEXT"),
-            ("delays", "TEXT"),
-        ] {
-            ensure_column(&pool, "books", col, ddl).await?;
-        }
-
-        // tasks: add speed/logs/book_id columns. CREATE TABLE IF NOT EXISTS
-        // won't touch an existing table, so existing DBs are upgraded in place
-        // via the same PRAGMA-guarded ALTER as books above.
-        for (col, ddl) in [
-            ("speed", "INTEGER NOT NULL DEFAULT 0"),
-            ("logs", "TEXT NOT NULL DEFAULT '[]'"),
-            ("book_id", "TEXT"),
-            ("total_bytes", "INTEGER NOT NULL DEFAULT 0"),
-            ("elapsed_ms", "INTEGER NOT NULL DEFAULT 0"),
-            ("run_started_at", "TEXT"),
-        ] {
-            ensure_column(&pool, "tasks", col, ddl).await?;
-        }
+            .map_err(|e| crate::errors::AppError::Other(format!("apply schema: {e}")))?;
 
         Ok(Self { pool })
     }
-}
-
-/// Idempotently add a column: `ALTER TABLE ... ADD COLUMN` has no
-/// `IF NOT EXISTS`, so check `PRAGMA table_info` first.
-async fn ensure_column(
-    pool: &Pool<Sqlite>,
-    table: &str,
-    column: &str,
-    ddl: &str,
-) -> Result<(), crate::errors::AppError> {
-    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
-        .fetch_all(pool)
-        .await
-        .map_err(|e| crate::errors::AppError::Other(format!("pragma table_info {table}: {e}")))?;
-    let exists = rows.iter().any(|r| {
-        r.try_get::<String, _>("name")
-            .map(|n| n == column)
-            .unwrap_or(false)
-    });
-    if !exists {
-        sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
-            .execute(pool)
-            .await
-            .map_err(|e| {
-                crate::errors::AppError::Other(format!("alter {table}.{column}: {e}"))
-            })?;
-    }
-    Ok(())
 }

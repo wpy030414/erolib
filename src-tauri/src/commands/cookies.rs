@@ -8,8 +8,9 @@
 ///
 /// The completion block is built manually as a `Block_literal` with the real
 /// `_NSConcreteStackBlock` isa and `flags = 0` (no copy/dispose, no captures).
-/// We try **both** `defaultDataStore` and `nonPersistentDataStore`, because
-/// Tauri's WKWebView may use either.
+/// We use `defaultDataStore` — the singleton that both the main window and
+/// login windows share (unlike `nonPersistentDataStore` which would trigger
+/// an `allDataStores` assertion off the main thread).
 ///
 /// # JS eval fallback (for non-HttpOnly cookies like EHentai)
 ///
@@ -232,24 +233,6 @@ mod native {
         }
     }
 
-    /// Resolve a named `WKWebsiteDataStore` class method to a store pointer.
-    unsafe fn get_store(selector_name: &str) -> *mut std::ffi::c_void {
-        let cls = objc_getClass(c"WKWebsiteDataStore".as_ptr());
-        if cls.is_null() {
-            return std::ptr::null_mut();
-        }
-        let mut name_buf: Vec<u8> = selector_name.as_bytes().to_vec();
-        name_buf.push(0);
-        let sel = sel_registerName(name_buf.as_ptr() as *const i8);
-        type SendRetPtr =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        let f: SendRetPtr = std::mem::transmute(objc_msgSend as *const ());
-        let store = f(cls, sel);
-
-        let http_sel = sel_registerName(c"httpCookieStore".as_ptr());
-        f(store, http_sel)
-    }
-
     /// No-op completion block for `deleteCookie:completionHandler:` (1-arg:
     /// block self only). Transmuted to the 2-arg invoke field type at the call
     /// site — same pointer size, the runtime only calls it with the block ptr.
@@ -393,27 +376,39 @@ mod native {
         }
     }
 
-    /// Capture ALL cookies (incl. HttpOnly) from the shared WKWebView cookie
-    /// store.  Tries both `defaultDataStore` and `nonPersistentDataStore` since
-    /// Tauri's webview may use either.
+    /// Capture cookies from the shared `defaultDataStore` (WKWebView's singleton
+    /// cookie store that both login windows and the main window share).
+    /// Inlines `objc_msgSend(cls, "defaultDataStore")` directly without a
+    /// main-thread hop — the singleton accessor does not trigger the
+    /// `allDataStores` assertion that `nonPersistentDataStore` does.
     pub fn capture() -> Option<String> {
-        for store_sel in &["defaultDataStore", "nonPersistentDataStore"] {
-            reset_state();
-            unsafe {
-                let cookie_store = get_store(store_sel);
-                if cookie_store.is_null() {
-                    continue;
-                }
-                if let Some(c) = fetch_from_store(cookie_store) {
-                    if !c.trim().is_empty() {
-                        tracing::info!(
-                            target: "erolib::cookies",
-                            store = store_sel,
-                            len = c.len(),
-                            "captured cookies via native WKHTTPCookieStore"
-                        );
-                        return Some(c);
-                    }
+        reset_state();
+        unsafe {
+            let cls = objc_getClass(c"WKWebsiteDataStore".as_ptr());
+            if cls.is_null() {
+                return None;
+            }
+            type SendRetPtr =
+                unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            let f: SendRetPtr = std::mem::transmute(objc_msgSend as *const ());
+            let default_sel = sel_registerName(c"defaultDataStore".as_ptr());
+            let store = f(cls, default_sel);
+            if store.is_null() {
+                return None;
+            }
+            let http_sel = sel_registerName(c"httpCookieStore".as_ptr());
+            let cookie_store = f(store, http_sel);
+            if cookie_store.is_null() {
+                return None;
+            }
+            if let Some(c) = fetch_from_store(cookie_store) {
+                if !c.trim().is_empty() {
+                    tracing::info!(
+                        target: "erolib::cookies",
+                        len = c.len(),
+                        "captured cookies via native WKHTTPCookieStore"
+                    );
+                    return Some(c);
                 }
             }
         }
@@ -463,8 +458,8 @@ pub fn extract_cookie_from_url(window: &tauri::WebviewWindow) -> Option<String> 
 ///    store the login actually wrote cookies into.  Uses `with_webview` to get
 ///    the native WKWebView handle, then walks
 ///    `wkWebView → configuration → websiteDataStore → httpCookieStore`.
-/// 2. **defaultDataStore / nonPersistentDataStore** — fallback for any cookies
-///    that landed in a shared store.
+/// 2. **defaultDataStore** — fallback for any cookies that landed outside the
+///    login window's own webview data store.
 /// 3. **JS eval redirect** — non-HttpOnly cookies only (EHentai).
 ///
 /// IMPORTANT: this is meant to be called from a **background tokio task**, NOT

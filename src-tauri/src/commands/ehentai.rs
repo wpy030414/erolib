@@ -181,6 +181,9 @@ pub async fn ehentai_open_login_window(
     .inner_size(560.0, 760.0)
     .center()
     .resizable(true)
+    // Disable spell-check/autocorrect on every input (see pixiv_login.rs) —
+    // macOS 26 WKWebView's NSCorrectionPanel crashes the window as a sheet.
+    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
     .build()
     .map_err(|e| format!("open login window: {e}"))?;
 

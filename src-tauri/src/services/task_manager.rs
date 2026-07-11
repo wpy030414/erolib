@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use serde::Serialize;
 use sqlx::Row;
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,7 +18,22 @@ use crate::db::Database;
 use crate::models::{BookMetadata, BookSource};
 use crate::services::pixiv::{find_existing_by_source, PixivClient};
 use crate::services::task::{TaskPayload, TaskSnapshot, TaskSource, TaskStatus};
+use crate::services::aria2::ProgressUpdate;
 use crate::services::{Aria2Client, EhentaiClient, LibraryService, StorageService};
+
+/// Aggregated per-slot progress for one in-flight image download: (completed
+/// bytes, total bytes, instantaneous speed). Shared between the per-gid aria2
+/// poll callback (writer) and the per-task ticker (reader/sum).
+type SlotProgress = (i64, i64, i64);
+
+/// RAII handle that aborts the progress ticker when dropped — covers normal
+/// return AND early `?`/bail paths so the ticker never outlives its loop.
+struct TickerGuard(tokio::task::JoinHandle<()>);
+impl Drop for TickerGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 const MAX_RETRIES: i32 = 3;
 const BACKOFF_SECS: [u64; 3] = [1, 2, 4];
@@ -678,7 +695,16 @@ async fn run_task_worker(manager: Arc<TaskManager>, task_id: String, runtime: Ar
             return;
         }
 
-        let result = process_task(&manager, &task, &runtime).await;
+        let result = process_task(manager.clone(), &task, runtime.clone()).await;
+
+        // If cancelled while running (user cancel, or a sibling page-failure
+        // that flipped the flag to drain in-flight downloads), don't overwrite
+        // the Cancelled status with Completed/retry — clean up and return.
+        if runtime.cancelled.load(Ordering::Relaxed) {
+            let mut workers = manager.workers.lock().await;
+            workers.remove(&task_id);
+            return;
+        }
 
         match result {
             Ok(book_id) => {
@@ -763,9 +789,9 @@ async fn run_task_worker(manager: Arc<TaskManager>, task_id: String, runtime: Ar
 }
 
 async fn process_task(
-    manager: &TaskManager,
+    manager: Arc<TaskManager>,
     task: &crate::services::task::Task,
-    runtime: &TaskRuntime,
+    runtime: Arc<TaskRuntime>,
 ) -> Result<Option<String>> {
     let temp_dir = manager
         .app
@@ -782,7 +808,7 @@ async fn process_task(
             user_id,
             limit,
         } => {
-            process_pixiv(manager, task, runtime, &temp_dir, cookie, user_id, *limit, true).await
+            process_pixiv(manager.clone(), task, runtime.clone(), &temp_dir, cookie, user_id, *limit, true).await
         }
         TaskPayload::PixivUserWorks {
             cookie,
@@ -790,9 +816,9 @@ async fn process_task(
             limit,
         } => {
             process_pixiv(
-                manager,
+                manager.clone(),
                 task,
-                runtime,
+                runtime.clone(),
                 &temp_dir,
                 cookie,
                 target_user_id,
@@ -807,10 +833,10 @@ async fn process_task(
             gid,
             token,
         } => {
-            process_ehentai(manager, task, runtime, &temp_dir, cookie, gallery_url, gid, token).await
+            process_ehentai(manager.clone(), task, runtime.clone(), &temp_dir, cookie, gallery_url, gid, token).await
         }
         TaskPayload::PixivSingleWork { cookie, work_id } => {
-            process_pixiv_single(manager, task, runtime, &temp_dir, cookie, work_id).await
+            process_pixiv_single(manager.clone(), task, runtime.clone(), &temp_dir, cookie, work_id).await
         }
     }
 }
@@ -818,9 +844,9 @@ async fn process_task(
 // ====================== Pixiv processing ======================
 
 async fn process_pixiv(
-    manager: &TaskManager,
+    manager: Arc<TaskManager>,
     task: &crate::services::task::Task,
-    runtime: &TaskRuntime,
+    runtime: Arc<TaskRuntime>,
     temp_dir: &std::path::Path,
     cookie: &str,
     user_id: &str,
@@ -885,7 +911,7 @@ async fn process_pixiv(
             .await;
         let _ = manager.emit_progress(&task.id).await;
 
-        match process_pixiv_work(manager, runtime, temp_dir, &client, &library, work, None).await {
+        match process_pixiv_work(manager.clone(), runtime.clone(), temp_dir, &client, &library, work, None).await {
             Ok(bid) => {
                 if let Some(b) = bid {
                     last_book_id = Some(b);
@@ -919,9 +945,9 @@ async fn process_pixiv(
 /// Download a single Pixiv artwork (clicked from the browse grid). Reuses
 /// `process_pixiv_work` after resolving the work's metadata via the detail API.
 async fn process_pixiv_single(
-    manager: &TaskManager,
+    manager: Arc<TaskManager>,
     task: &crate::services::task::Task,
-    runtime: &TaskRuntime,
+    runtime: Arc<TaskRuntime>,
     temp_dir: &std::path::Path,
     cookie: &str,
     work_id: &str,
@@ -949,7 +975,7 @@ async fn process_pixiv_single(
     // Propagate the real registered book UUID so the task's "Read" button can
     // open it — process_pixiv_work returns Option<book_id> (the UUID), NOT the
     // Pixiv work id.
-    let book_id = process_pixiv_work(manager, runtime, temp_dir, &client, &library, &work, Some(&task.id))
+    let book_id = process_pixiv_work(manager.clone(), runtime.clone(), temp_dir, &client, &library, &work, Some(&task.id))
         .await?;
 
     manager
@@ -960,9 +986,164 @@ async fn process_pixiv_single(
     Ok(book_id)
 }
 
+/// Spawn a background ticker that sums per-slot byte progress (~2.5×/sec) and
+/// pushes a smooth progress+speed update for the task. This lets the bar glide
+/// during 8-way concurrent downloads instead of jumping only when a whole
+/// image finishes (and it aggregates speed across gids, fixing the
+/// under-reporting from per-gid `set_speed`). Returns a `TickerGuard` whose
+/// Drop aborts the ticker. No-op (dummy guard) when `task_id` is None — batch
+/// tasks track progress at the work-index level, not per-page.
+fn spawn_progress_ticker(
+    manager: &Arc<TaskManager>,
+    runtime: Arc<TaskRuntime>,
+    task_id: Option<&str>,
+    progress: &Arc<std::sync::Mutex<HashMap<usize, SlotProgress>>>,
+) -> TickerGuard {
+    let tid = match task_id.map(|s| s.to_string()) {
+        Some(t) => t,
+        None => return TickerGuard(tokio::spawn(async {})),
+    };
+    let manager = Arc::clone(manager);
+    let progress = Arc::clone(progress);
+    TickerGuard(tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(400));
+        interval.tick().await; // discard the immediate first tick
+        loop {
+            interval.tick().await;
+            if runtime.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+            let agg = progress
+                .lock()
+                .map(|g| {
+                    g.values()
+                        .fold((0i64, 0i64, 0i64), |(d, t, s), v| (d + v.0, t + v.1, s + v.2))
+                })
+                .unwrap_or((0, 0, 0));
+            // Skip until some gid reports a total length (aria2 hasn't received
+            // Content-Length yet) — avoids a 0/0 blip and a divide-by-zero on
+            // the frontend's progress ratio.
+            if agg.1 == 0 {
+                continue;
+            }
+            let _ = manager
+                .set_progress_with_speed(&tid, agg.0, agg.1, "downloading", agg.2)
+                .await;
+            let _ = manager.emit_progress(&tid).await;
+        }
+    }))
+}
+
+/// Download one image via aria2 with a Rust-side retry (2 retries, 1s/2s
+/// backoff) layered on aria2's built-in `max-tries=5`. Owns every handle
+/// (`Arc<TaskManager>` + `Arc<TaskRuntime>`) and takes only owned / `'static`
+/// arguments, so the returned future is `'static + Send` — required because
+/// each per-image download is `tokio::spawn`'d as its own task (bounded by a
+/// semaphore) inside the worker. `slot` + `progress` feed the per-task ticker a
+/// byte-level view of this gid so the progress bar glides mid-download.
+/// Returns `Ok(None)` for an empty URL (caller skips the page).
+async fn download_one_image(
+    manager: Arc<TaskManager>,
+    runtime: Arc<TaskRuntime>,
+    url: String,
+    referer: &'static str,
+    out: String,
+    temp_dir: std::path::PathBuf,
+    min_bytes: usize,
+    slot: usize,
+    progress: Arc<std::sync::Mutex<HashMap<usize, SlotProgress>>>,
+) -> Result<Option<Vec<u8>>> {
+    if runtime.cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("cancelled");
+    }
+    while runtime.paused.load(Ordering::Relaxed) {
+        if runtime.cancelled.load(Ordering::Relaxed) {
+            anyhow::bail!("cancelled");
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+    if url.is_empty() {
+        return Ok(None);
+    }
+
+    let backoffs = [Duration::from_secs(1), Duration::from_secs(2)];
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            // Cancel-aware backoff so pause→cancel still aborts promptly.
+            let ticks = backoffs[(attempt as usize) - 1].as_secs() * 2;
+            for _ in 0..ticks {
+                if runtime.cancelled.load(Ordering::Relaxed) {
+                    anyhow::bail!("cancelled");
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        }
+        let gid = match manager
+            .aria2
+            .add_uri(&url, Some(referer), Some(&out), Some(&temp_dir))
+            .await
+        {
+            Ok(g) => g,
+            Err(e) => {
+                last_err = Some(e.context(format!("add uri {}", url)));
+                continue;
+            }
+        };
+        let path = match manager
+            .aria2
+            .wait_for_gid_with_progress(
+                &gid,
+                Duration::from_millis(250),
+                &runtime.cancelled,
+                &runtime.paused,
+                {
+                    // Record this gid's latest byte progress so the per-task
+                    // ticker can sum across all in-flight downloads.
+                    let progress = Arc::clone(&progress);
+                    move |upd: ProgressUpdate| {
+                        let progress = Arc::clone(&progress);
+                        async move {
+                            if let Ok(mut g) = progress.lock() {
+                                g.insert(
+                                    slot,
+                                    (upd.completed_length as i64, upd.total_length as i64, upd.speed as i64),
+                                );
+                            }
+                        }
+                    }
+                },
+            )
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = manager.aria2.remove(&gid).await;
+                last_err = Some(e.context(format!("download {}", url)));
+                continue;
+            }
+        };
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = manager.aria2.remove(&gid).await;
+                last_err = Some(anyhow::anyhow!("read {}: {e}", path.display()));
+                continue;
+            }
+        };
+        if bytes.len() < min_bytes {
+            let _ = manager.aria2.remove(&gid).await;
+            last_err = Some(anyhow::anyhow!("suspiciously small image from {}", url));
+            continue;
+        }
+        return Ok(Some(bytes));
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download failed: {}", url)))
+}
+
 async fn process_pixiv_work(
-    manager: &TaskManager,
-    runtime: &TaskRuntime,
+    manager: Arc<TaskManager>,
+    runtime: Arc<TaskRuntime>,
     temp_dir: &std::path::Path,
     client: &PixivClient,
     library: &LibraryService,
@@ -974,7 +1155,7 @@ async fn process_pixiv_work(
     // frames + delays (the reader plays them on a canvas timer). Regular
     // manga (illustType==0/1) continues.
     if work.illust_type == Some(2) {
-        return process_pixiv_ugoira(manager, runtime, temp_dir, client, library, work, task_id)
+        return process_pixiv_ugoira(&manager, &runtime, temp_dir, client, library, work, task_id)
             .await;
     }
 
@@ -1004,77 +1185,102 @@ async fn process_pixiv_work(
         Uuid::new_v4().to_string()
     };
 
-    let mut images: Vec<Vec<u8>> = Vec::with_capacity(pages.len());
+    // 8-way concurrent page download. Each image is fetched by its own
+    // `tokio::spawn`'d task (`download_one_image`), bounded to 8 in flight by a
+    // semaphore. Spawning decouples each future from this function's borrows so
+    // it's `'static + Send` — storing borrowed futures in a `buffered`
+    // combinator instead trips rustc's higher-ranked Send check. Results are
+    // placed by page index, so the cb7 page sequence stays correct regardless
+    // of completion order.
+    let page_total = pages.len();
+    let tid_opt = task_id;
+    let mut images: Vec<Option<Vec<u8>>> = vec![None; page_total];
+    let mut completed: i64 = 0;
+    let sem = Arc::new(Semaphore::new(8));
+    // Byte-level progress aggregation across the 8 concurrent gids; the ticker
+    // sums it ~2.5×/sec for a smooth bar + aggregated speed.
+    let progress_state: Arc<std::sync::Mutex<HashMap<usize, SlotProgress>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let _ticker = spawn_progress_ticker(&manager, Arc::clone(&runtime), task_id, &progress_state);
+    let mut set: JoinSet<(usize, Result<Option<Vec<u8>>>)> = JoinSet::new();
     for (pidx, page) in pages.iter().enumerate() {
-        if runtime.cancelled.load(Ordering::Relaxed) {
-            anyhow::bail!("cancelled");
-        }
-        while runtime.paused.load(Ordering::Relaxed) {
-            if runtime.cancelled.load(Ordering::Relaxed) {
-                anyhow::bail!("cancelled");
-            }
-            sleep(Duration::from_millis(500)).await;
-        }
+        // Acquire blocks once 8 downloads are in flight, bounding concurrency.
+        let permit = sem.clone().acquire_owned().await.unwrap();
         let url = if page.urls.original.is_empty() {
-            &page.urls.regular
+            page.urls.regular.clone()
         } else {
-            &page.urls.original
+            page.urls.original.clone()
         };
-        if url.is_empty() {
-            continue;
-        }
         let out = format!("{:04}", pidx);
-        let page_no = pidx + 1;
-        let page_total = pages.len();
-        if let Some(tid) = task_id {
-            let _ = manager
-                .append_log(tid, &format!("downloading image {page_no}/{page_total}"))
-                .await;
-        }
-        let gid = manager
-            .aria2
-            .add_uri(url, Some("https://www.pixiv.net/"), Some(&out), Some(temp_dir))
-            .await
-            .with_context(|| format!("add uri {}", url))?;
-        let tid = task_id.unwrap_or("");
-        let path = manager
-            .aria2
-            .wait_for_gid_with_progress(
-                &gid,
-                Duration::from_millis(250),
-                &runtime.cancelled,
-                &runtime.paused,
-                |speed| async move {
-                    if !tid.is_empty() {
-                        let _ = manager.set_speed(tid, speed as i64).await;
-                    }
-                },
+        let manager = Arc::clone(&manager);
+        let runtime = Arc::clone(&runtime);
+        let temp_dir = temp_dir.to_path_buf();
+        let progress = Arc::clone(&progress_state);
+        set.spawn(async move {
+            let _permit = permit; // held until the download finishes → caps parallelism
+            let r = download_one_image(
+                manager,
+                runtime,
+                url,
+                "https://www.pixiv.net/",
+                out,
+                temp_dir,
+                100,
+                pidx,
+                progress,
             )
-            .await
-            .with_context(|| format!("download {}", url))?;
-        let bytes = tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("read {}", path.display()))?;
-        if bytes.len() < 100 {
-            anyhow::bail!("suspiciously small image from {}", url);
-        }
-        if let Some(tid) = task_id {
-            let _ = manager.add_bytes(tid, bytes.len() as i64).await;
-        }
-        images.push(bytes);
-        // For single-work tasks, report per-image progress so the card's ring
-        // advances instead of spinning indefinitely. Batch tasks pass None and
-        // are tracked at the work-index level by the caller.
-        if let Some(tid) = task_id {
-            let _ = manager
-                .set_progress(tid, (pidx + 1) as i64, pages.len() as i64, "downloading")
-                .await;
-            let _ = manager
-                .append_log(tid, &format!("image {page_no}/{page_total} ok"))
-                .await;
-            let _ = manager.emit_progress(tid).await;
+            .await;
+            (pidx, r)
+        });
+    }
+
+    let mut failed: Option<anyhow::Error> = None;
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok((pidx, Ok(Some(bytes)))) => {
+                let len = bytes.len();
+                images[pidx] = Some(bytes);
+                completed += 1;
+                if let Some(tid) = tid_opt {
+                    let _ = manager.add_bytes(tid, len as i64).await;
+                    // Step log per finished image — the byte-level progress bar
+                    // is driven by the ticker, not here.
+                    let _ = manager
+                        .append_log(tid, &format!("image {completed}/{page_total} ok"))
+                        .await;
+                }
+            }
+            Ok((_pidx, Ok(None))) => {
+                // Empty-URL page skipped — no progress increment (matches the
+                // old serial loop, which `continue`d without advancing).
+            }
+            Ok((_pidx, Err(e))) => {
+                // Pixiv: any page that exhausts retries fails the whole task so
+                // the cb7 page sequence stays complete. Flip the cancel flag so
+                // in-flight siblings remove their aria2 gids and bail on the
+                // next poll; we break and drain below — dropping the JoinSet
+                // would abort siblings mid-flight and orphan their gids. The
+                // task surfaces as Cancelled: the page already exhausted
+                // aria2's 5 + this loop's 3 attempts, so a retry is unlikely.
+                runtime.cancelled.store(true, Ordering::Relaxed);
+                failed = Some(e);
+                break;
+            }
+            Err(e) => {
+                runtime.cancelled.store(true, Ordering::Relaxed);
+                failed = Some(anyhow::anyhow!("download task panicked: {e}"));
+                break;
+            }
         }
     }
+    // Drain siblings so they observe the cancel flag and self-clean their
+    // aria2 gids before we bail out of the task.
+    while set.join_next().await.is_some() {}
+    if let Some(e) = failed {
+        return Err(e);
+    }
+
+    let images: Vec<Vec<u8>> = images.into_iter().flatten().collect();
 
     if images.is_empty() {
         anyhow::bail!("no images downloaded");
@@ -1184,9 +1390,9 @@ async fn process_pixiv_ugoira(
             Duration::from_millis(250),
             &runtime.cancelled,
             &runtime.paused,
-            |speed| async move {
+            |upd: ProgressUpdate| async move {
                 if !tid.is_empty() {
-                    let _ = manager.set_speed(tid, speed as i64).await;
+                    let _ = manager.set_speed(tid, upd.speed as i64).await;
                 }
             },
         )
@@ -1345,9 +1551,9 @@ fn extract_ugoira_frames(
 // ====================== EHentai processing ======================
 
 async fn process_ehentai(
-    manager: &TaskManager,
+    manager: Arc<TaskManager>,
     task: &crate::services::task::Task,
-    runtime: &TaskRuntime,
+    runtime: Arc<TaskRuntime>,
     temp_dir: &std::path::Path,
     cookie: &str,
     gallery_url: &str,
@@ -1392,12 +1598,29 @@ async fn process_ehentai(
     let _ = manager.append_log(&task.id, &format!("found {total} pages")).await;
     let _ = manager.emit_progress(&task.id).await;
 
-    // fetch_page_image scrapes the page-view HTML (cookie-gated), so it stays
-    // in-process. The resolved image URL is then pulled via aria2 — e-hentai's
-    // image CDN only needs the Referer (matching the in-process download_image),
-    // not the cookie — giving us aria2's multi-connection acceleration.
-    let mut images: Vec<Vec<u8>> = Vec::new();
+    // Two-phase download (critical for avoiding e-hentai rate limits):
+    //   Phase 1 (serial): the `/s/` page-view HTML scrape (`fetch_page_image`)
+    //     is cookie-gated and hard rate-limited, so it stays serial with the
+    //     original ~400ms cadence. Resume cache hits skip straight to the slot.
+    //   Phase 2 (8 concurrent): the resolved image-CDN URLs only need a
+    //     Referer (not the cookie), so they fan out 8-wide through aria2.
+    //     Each is `tokio::spawn`'d as its own `'static + Send` task bounded by
+    //     a Semaphore(8); results land in a pre-sized Vec indexed by page,
+    //     preserving cb7 page order regardless of completion order.
+    let mut results: Vec<Option<Vec<u8>>> = vec![None; page_urls.len()];
+    let mut done_count: i64 = 0;
 
+    manager
+        .set_progress(&task.id, 0, total, "resolving pages")
+        .await?;
+    let _ = manager.emit_progress(&task.id).await;
+
+    // ---- Phase 1: serial resolve (rate-limited page-view scrape) ----
+    // Collected pending downloads: (page_idx, resolved_img_url, out_name).
+    let mut pending: Vec<(usize, String, String)> = Vec::new();
+    // Advance the progress bar per resolved page so big galleries don't look
+    // frozen at 0/total during the serial (~400ms/page) resolve phase.
+    let mut resolved: i64 = 0;
     for (idx, page_url) in page_urls.iter().enumerate() {
         if runtime.cancelled.load(Ordering::Relaxed) {
             anyhow::bail!("cancelled");
@@ -1410,124 +1633,42 @@ async fn process_ehentai(
         }
 
         let current = idx as i64 + 1;
-        let detail = format!("page {}/{}", current, total);
-        manager
-            .set_progress(&task.id, current - 1, total, &detail)
-            .await?;
-        let _ = manager.emit_progress(&task.id).await;
+        let out = format!("page-{:04}", idx);
 
         // Resume support: if this page was already downloaded to the temp dir
-        // (previous run paused/killed mid-flight), reuse its bytes instead of
-        // re-fetching. aria2 writes exactly `page-{idx:04}` (no extension).
-        let out = format!("page-{:04}", idx);
+        // (previous run paused/killed mid-flight), reuse its bytes. aria2
+        // writes exactly `page-{idx:04}` (no extension).
         let cached_path = temp_dir.join(&out);
+        let mut cache_hit = false;
         if cached_path.is_file() {
             if let Ok(bytes) = tokio::fs::read(&cached_path).await {
                 if bytes.len() >= 200 {
                     let _ = manager
                         .append_log(&task.id, &format!("page {current}/{total} (cached)"))
                         .await;
-                    images.push(bytes);
-                    continue;
+                    results[idx] = Some(bytes);
+                    done_count += 1;
+                    cache_hit = true;
                 }
             }
         }
+        if cache_hit {
+            resolved += 1;
+            let _ = manager
+                .set_progress(&task.id, resolved, total, "resolving pages")
+                .await;
+            let _ = manager.emit_progress(&task.id).await;
+            // Cached pages skip the network — preserve the old behaviour of
+            // skipping the rate-limit sleep for them.
+            continue;
+        }
 
         let _ = manager
-            .append_log(&task.id, &format!("downloading page {current}/{total}"))
+            .append_log(&task.id, &format!("resolving page {current}/{total}"))
             .await;
         match client.fetch_page_image(page_url).await {
             Ok(img_url) => {
-                let aria_gid = match manager
-                    .aria2
-                    .add_uri(
-                        &img_url,
-                        Some(if ex { "https://exhentai.org/" } else { "https://e-hentai.org/" }),
-                        Some(&out),
-                        Some(temp_dir),
-                    )
-                    .await
-                {
-                    Ok(g) => g,
-                    Err(e) => {
-                        let _ = manager
-                            .append_log(&task.id, &format!("page {current} add_uri failed: {e}"))
-                            .await;
-                        tracing::warn!(
-                            target: "erolib::tasks",
-                            task_id = %task.id,
-                            page_url = %page_url,
-                            %e,
-                            "aria2 add_uri failed"
-                        );
-                        sleep(Duration::from_millis(400)).await;
-                        continue;
-                    }
-                };
-                match manager
-                    .aria2
-                    .wait_for_gid_with_progress(
-                        &aria_gid,
-                        Duration::from_millis(250),
-                        &runtime.cancelled,
-                        &runtime.paused,
-                        |speed| {
-                            let task_id = task.id.clone();
-                            async move {
-                                let _ = manager.set_speed(&task_id, speed as i64).await;
-                            }
-                        },
-                    )
-                    .await
-                {
-                    Ok(path) => match tokio::fs::read(&path).await {
-                        Ok(bytes) => {
-                            if bytes.len() < 200 {
-                                let _ = manager
-                                    .append_log(&task.id, &format!("page {current} too small"))
-                                    .await;
-                                tracing::warn!(
-                                    target: "erolib::tasks",
-                                    task_id = %task.id,
-                                    img_url = %img_url,
-                                    "suspiciously small image"
-                                );
-                            } else {
-                                let _ = manager
-                                    .add_bytes(&task.id, bytes.len() as i64)
-                                    .await;
-                                let _ = manager
-                                    .append_log(&task.id, &format!("page {current}/{total} ok"))
-                                    .await;
-                                images.push(bytes);
-                            }
-                        }
-                        Err(e) => {
-                            let _ = manager
-                                .append_log(&task.id, &format!("page {current} read failed: {e}"))
-                                .await;
-                            tracing::warn!(
-                                target: "erolib::tasks",
-                                task_id = %task.id,
-                                path = %path.display(),
-                                %e,
-                                "read downloaded image"
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        let _ = manager
-                            .append_log(&task.id, &format!("page {current} download failed: {e}"))
-                            .await;
-                        tracing::warn!(
-                            target: "erolib::tasks",
-                            task_id = %task.id,
-                            page_url = %page_url,
-                            %e,
-                            "aria2 download failed"
-                        );
-                    }
-                }
+                pending.push((idx, img_url, out));
             }
             Err(e) => {
                 let _ = manager
@@ -1542,8 +1683,123 @@ async fn process_ehentai(
                 );
             }
         }
+        resolved += 1;
+        let _ = manager
+            .set_progress(&task.id, resolved, total, "resolving pages")
+            .await;
+        let _ = manager.emit_progress(&task.id).await;
+        // Preserve the ~400ms rate-limit cadence between page-view scrapes.
         sleep(Duration::from_millis(400)).await;
     }
+
+    if done_count > 0 {
+        let _ = manager
+            .set_progress(&task.id, done_count, total, "downloading")
+            .await;
+        let _ = manager.emit_progress(&task.id).await;
+    }
+
+    // ---- Phase 2: 8-way concurrent image download ----
+    if !pending.is_empty() {
+        let _ = manager
+            .append_log(
+                &task.id,
+                &format!("downloading {} pages (8 concurrent)", pending.len()),
+            )
+            .await;
+
+        let sem = Arc::new(Semaphore::new(8));
+        // Byte-level progress aggregation across the 8 concurrent gids; the
+        // ticker sums it ~2.5×/sec for a smooth bar + aggregated speed.
+        let progress_state: Arc<std::sync::Mutex<HashMap<usize, SlotProgress>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let _ticker = spawn_progress_ticker(
+            &manager,
+            Arc::clone(&runtime),
+            Some(task.id.as_str()),
+            &progress_state,
+        );
+        let mut set: JoinSet<(usize, Result<Option<Vec<u8>>>)> = JoinSet::new();
+        let referer: &'static str = if ex {
+            "https://exhentai.org/"
+        } else {
+            "https://e-hentai.org/"
+        };
+        for (idx, img_url, out) in pending {
+            // Acquire blocks once 8 downloads are in flight, bounding concurrency.
+            let permit = sem.clone().acquire_owned().await.unwrap();
+            let manager = Arc::clone(&manager);
+            let runtime = Arc::clone(&runtime);
+            let temp_dir = temp_dir.to_path_buf();
+            let progress = Arc::clone(&progress_state);
+            set.spawn(async move {
+                let _permit = permit; // held until the download finishes → caps parallelism
+                let r = download_one_image(
+                    manager,
+                    runtime,
+                    img_url,
+                    referer,
+                    out,
+                    temp_dir,
+                    200,
+                    idx,
+                    progress,
+                )
+                .await;
+                (idx, r)
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok((idx, Ok(Some(bytes)))) => {
+                    let len = bytes.len();
+                    results[idx] = Some(bytes);
+                    let _ = manager.add_bytes(&task.id, len as i64).await;
+                    // Step log per finished page — the byte-level progress bar
+                    // is driven by the ticker, not here.
+                    let current = idx as i64 + 1;
+                    let _ = manager
+                        .append_log(&task.id, &format!("page {current}/{total} ok"))
+                        .await;
+                }
+                Ok((_idx, Ok(None))) => {
+                    // No usable URL resolved for this page — leave the slot None
+                    // (dropped at flatten time), matching the old skip behaviour.
+                }
+                Ok((idx, Err(e))) => {
+                    // A page that exhausts retries is skipped (matches the old
+                    // serial `continue` semantics) — the gallery still packages
+                    // with the surviving pages.
+                    let current = idx as i64 + 1;
+                    let _ = manager
+                        .append_log(&task.id, &format!("page {current} download failed: {e}"))
+                        .await;
+                    tracing::warn!(
+                        target: "erolib::tasks",
+                        task_id = %task.id,
+                        %e,
+                        "aria2 page download failed"
+                    );
+                }
+                Err(e) => {
+                    let _ = manager
+                        .append_log(&task.id, &format!("download task panicked: {e}"))
+                        .await;
+                }
+            }
+        }
+    }
+
+    // Cancelled mid-flight (user cancel): bail before packaging so we don't
+    // register a partial gallery. In-flight downloads already removed their
+    // aria2 gids via the cancel path while the join drained.
+    if runtime.cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("cancelled");
+    }
+
+    // Flatten in page order, dropping any pages that failed (None slots).
+    let images: Vec<Vec<u8>> = results.into_iter().flatten().collect();
 
     if images.is_empty() {
         anyhow::bail!("no images downloaded");
