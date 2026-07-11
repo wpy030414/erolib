@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sqlx::Sqlite;
+use sqlx::{Row, Sqlite};
 use uuid::Uuid;
 
 use crate::db::Database;
@@ -199,6 +199,15 @@ impl LibraryService {
             .await
             .map_err(AppError::Db)?;
 
+        // Detach any completed task that pointed at this book so its "Read"
+        // button disappears (the book is gone). Best-effort — a failure here
+        // must not block the delete; the frontend also clears book_id via the
+        // `book://deleted` event emitted by the command.
+        let _ = sqlx::query("UPDATE tasks SET book_id = NULL WHERE book_id = ?")
+            .bind(&id)
+            .execute(&self.db.pool)
+            .await;
+
         Ok(())
     }
 
@@ -242,6 +251,37 @@ impl LibraryService {
         .await
         .map_err(AppError::Db)?
         .ok_or_else(|| AppError::BookNotFound(id.to_string()))
+    }
+
+    /// Fetch only the on-disk file path for a book — a lightweight single-column
+    /// SELECT by primary key, no JOIN/GROUP_CONCAT. The reader calls this on
+    /// every page fetch, so keeping it cheap avoids re-running the heavy tag
+    /// aggregation once per page during a rapid page-through.
+    pub async fn get_book_file_path(&self, id: &str) -> Result<String, AppError> {
+        let row = sqlx::query("SELECT file_path FROM books WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await
+            .map_err(AppError::Db)?
+            .ok_or_else(|| AppError::BookNotFound(id.to_string()))?;
+        let file_path: String = row.try_get("file_path").map_err(AppError::Db)?;
+        Ok(file_path)
+    }
+
+    /// Like `get_book_file_path` but also returns the stored `page_count`, used
+    /// as a fallback when the archive on disk can't be read (missing/corrupt) —
+    /// restores the pre-refactor behaviour where the reader fell back to the DB
+    /// value instead of reporting 0 pages.
+    pub async fn get_book_file_path_and_count(&self, id: &str) -> Result<(String, i32), AppError> {
+        let row = sqlx::query("SELECT file_path, page_count FROM books WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await
+            .map_err(AppError::Db)?
+            .ok_or_else(|| AppError::BookNotFound(id.to_string()))?;
+        let file_path: String = row.try_get("file_path").map_err(AppError::Db)?;
+        let page_count: i32 = row.try_get("page_count").map_err(AppError::Db)?;
+        Ok((file_path, page_count))
     }
 
     pub async fn list_books(&self, limit: i64, offset: i64) -> Result<Vec<Book>, AppError> {

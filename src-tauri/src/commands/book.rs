@@ -1,5 +1,5 @@
 
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::errors::AppError;
 use crate::models::BookMetadata;
@@ -31,12 +31,22 @@ pub async fn import_book_from_images(
 }
 
 #[tauri::command]
-pub async fn delete_book(id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn delete_book(
+    id: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     state
         .library_service
-        .delete_book(id)
+        .delete_book(id.clone())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Broadcast so Pixiv/EHentai browse cards drop their "downloaded" marker
+    // (revert to the red-dot not-downloaded state) and the Tasks view hides the
+    // now-dangling "Read" button. The service already nulled tasks.book_id, so
+    // this just brings the in-memory state in sync.
+    let _ = app.emit("book://deleted", serde_json::json!({ "bookId": id }));
+    Ok(())
 }
 
 #[tauri::command]
@@ -66,45 +76,53 @@ pub async fn get_book(
 }
 
 /// Return the decoded bytes of a single page from the book's CB7/CBZ archive.
-/// `page` is 0-based. Returns the raw image (jpg/png/webp) so the frontend can
-/// render it directly via a blob URL.
+/// `page` is 0-based. Returns the raw image (jpg/png/webp) as a raw binary
+/// `ipc::Response` — Tauri ships this to the frontend as an `ArrayBuffer`,
+/// avoiding the ~4x serde bloat (and million-long `JSON.parse`) of a `[u8]`
+/// number array. The blocking zip read is moved onto a `spawn_blocking` thread
+/// so it can't stall the async runtime, and only the lightweight `file_path`
+/// lookup (no JOIN/GROUP_CONCAT) hits the DB.
 #[tauri::command]
 pub async fn get_book_page(
     id: String,
     page: usize,
     state: State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
-    let book = state
+) -> Result<tauri::ipc::Response, String> {
+    let file_path = state
         .library_service
-        .get_book(&id)
+        .get_book_file_path(&id)
         .await
         .map_err(|e| e.to_string())?;
-    let path = std::path::PathBuf::from(&book.file_path);
-    let bytes = state
-        .storage
-        .read_page(&path, page)
+    let path = std::path::PathBuf::from(&file_path);
+    let storage = state.storage.clone();
+    let bytes = tokio::task::spawn_blocking(move || storage.read_page(&path, page))
+        .await
+        .map_err(|e| format!("page read join failed: {e}"))?
         .ok_or_else(|| format!("page {page} not found for book {id}"))?;
-    Ok(bytes)
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Total page count for a book, read from the archive on disk (cheap zip-header
-/// scan, no full decode). Falls back to the stored value if the file is gone.
+/// Total page count for a book, read from the cached archive handle (a cheap
+/// lookup into the precomputed image-entry list; the central directory is
+/// scanned at most once per session per book). Falls back to the stored DB
+/// `page_count` when the file is missing/unreadable.
 #[tauri::command]
 pub async fn get_book_page_count(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let book = state
+    let (file_path, stored_count) = state
         .library_service
-        .get_book(&id)
+        .get_book_file_path_and_count(&id)
         .await
         .map_err(|e| e.to_string())?;
-    let path = std::path::PathBuf::from(&book.file_path);
-    let count = state
-        .storage
-        .count_pages(&path)
+    let path = std::path::PathBuf::from(&file_path);
+    let storage = state.storage.clone();
+    let count = tokio::task::spawn_blocking(move || storage.count_pages(&path))
+        .await
+        .map_err(|e| format!("page count join failed: {e}"))?
         .filter(|&c| c > 0)
-        .unwrap_or_else(|| book.page_count.max(0) as usize);
+        .unwrap_or(stored_count.max(0) as usize);
     Ok(count as u32)
 }
 

@@ -63,6 +63,11 @@ export const api = {
   listBooks: (limit?: number, offset?: number) =>
     invoke<Book[]>('list_books', { limit, offset }),
 
+  // One-way local sync: mirror the library into a directory as
+  // ${title}-${metaHash}.cb7 (copies new books, mirror-deletes removed).
+  syncToDir: (targetDir: string) =>
+    invoke<{ copied: number; skipped: number }>('sync_to_dir', { targetDir }),
+
   getBook: (id: string) =>
     invoke<Book>('get_book', { id }),
 
@@ -70,7 +75,7 @@ export const api = {
     invoke<number>('get_book_page_count', { id }),
 
   getBookPage: (id: string, page: number) =>
-    invoke<number[]>('get_book_page', { id, page }),
+    invoke<ArrayBuffer>('get_book_page', { id, page }),
 
   // Search
   searchBooks: (query: SearchQuery) =>

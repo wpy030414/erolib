@@ -4,21 +4,11 @@
       <div
         v-for="msg in toasts"
         :key="msg.id"
-        class="toast-item"
-        :class="'toast--' + msg.kind"
+        class="toast"
+        role="status"
         @click="dismiss(msg.id)"
       >
-        <span class="toast-icon">
-          <svg v-if="msg.kind === 'success'" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-          </svg>
-          <svg v-else-if="msg.kind === 'error'" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/>
-          </svg>
-          <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-          </svg>
-        </span>
+        <MdiIcon :path="iconFor(msg.kind)" :size="18" class="toast-icon" />
         <span class="toast-message">{{ msg.message }}</span>
       </div>
     </TransitionGroup>
@@ -27,67 +17,68 @@
 
 <script setup lang="ts">
 import { useToastStore } from '@/stores/toast';
+import MdiIcon from '@/components/MdiIcon.vue';
+import {
+  mdiCheckCircleOutline,
+  mdiAlertCircleOutline,
+  mdiInformationOutline,
+} from '@mdi/js';
 
 const { toasts, dismiss } = useToastStore();
+
+/** MD3 Snackbar keeps a single neutral `inverse-surface` look — the message
+ *  kind is conveyed by the leading icon's shape, not by colour or a side bar. */
+function iconFor(kind: 'success' | 'error' | 'info') {
+  if (kind === 'success') return mdiCheckCircleOutline;
+  if (kind === 'error') return mdiAlertCircleOutline;
+  return mdiInformationOutline;
+}
 </script>
 
 <style scoped>
+/* MD3 Snackbar: anchored bottom-centre (clears the nav rail / FAB), stacked
+ * newest-at-the-bottom. The container never eats pointer events; each toast
+ * re-enables them so a click can dismiss. */
 .toast-container {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 9999;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
   pointer-events: none;
-  max-width: 400px;
+  width: min(640px, calc(100vw - 32px));
 }
 
-.toast-item {
+.toast {
+  pointer-events: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: var(--md-sys-shape-corner-medium, 8px);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  box-shadow: var(--md-sys-elevation-level3);
-  pointer-events: auto;
+  gap: 8px;
+  width: 100%;
+  /* MD3 plain snackbar: inverse-surface fill, no border, no elevation. The
+   * 4dp/8dp corner + 48dp min-height match the single-line spec. */
+  min-height: 48px;
+  padding: 8px 16px;
+  box-sizing: border-box;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1.4;
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-
-.toast--success {
-  border-left: 4px solid var(--md-sys-color-primary);
-}
-
-.toast--error {
-  border-left: 4px solid var(--md-sys-color-error);
-}
-
-.toast--info {
-  border-left: 4px solid var(--md-sys-color-tertiary);
-}
-
-.toast--success .toast-icon {
-  color: var(--md-sys-color-primary);
-}
-
-.toast--error .toast-icon {
-  color: var(--md-sys-color-error);
-}
-
-.toast--info .toast-icon {
-  color: var(--md-sys-color-tertiary);
+  font: var(--md-sys-typescale-body-medium-weight)
+    var(--md-sys-typescale-body-medium-size) /
+    var(--md-sys-typescale-body-medium-line-height)
+    var(--md-sys-typescale-font);
 }
 
 .toast-icon {
-  display: flex;
   flex-shrink: 0;
+  /* `inverse-primary` is the M3 emphasis colour on an inverse surface (the
+   * same role the action label plays on a snackbar). */
+  color: var(--md-sys-color-inverse-primary);
 }
 
 .toast-message {
@@ -96,21 +87,23 @@ const { toasts, dismiss } = useToastStore();
   word-break: break-word;
 }
 
+/* MD3 motion: fade + slide up from below (snackbar standard), not from the
+ * side. Leaving toasts stay in flow so siblings don't jump. */
 .toast-enter-active {
-  transition: all 0.3s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .toast-leave-active {
-  transition: all 0.2s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
 }
 
-.toast-enter-from {
-  opacity: 0;
-  transform: translateX(40px);
-}
-
+.toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateX(40px);
+  transform: translateY(16px);
 }
 </style>

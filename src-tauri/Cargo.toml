@@ -27,6 +27,8 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 zip = "0.6"
+# Metadata hash for local one-way sync filenames (sha256 of source/title/pages/size).
+sha2 = "0.10"
 # ugoira (動画作) → GIF: decode jpg frames + encode with per-frame delays.
 # GifEncoder auto-quantizes true color → 256-color palette (color_quant).
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
@@ -44,14 +46,21 @@ http = "1.4.2"
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
 
-# `debug = 2` was added on macOS 26 as a guard: rustc ≤1.96 could emit proc-macro
-# dylibs that dyld rejected unless debuginfo matched dev's, so matching it kept
-# release builds linking. On macOS 27 it no longer seems required, but it's
-# harmless (the final binary is `strip`ped), so it stays as cheap insurance.
 # Heads-up: a `can't find crate for <proc-macro>` in release is usually a cargo
 # cache inconsistency from mixing feature configs (e.g. `cargo build --release`
 # then `tauri build`) — fix it with `cargo clean`, not by editing this profile.
+#
+# Do NOT set `debug = 2` in release: on macOS 27 dyld rejects proc-macro dylibs
+# with "mis-aligned LINKEDIT string pool" when debuginfo is embedded then
+# `strip = "symbols"` re-aligns the binary.
+#
+# `build-override` keeps `strip = "none"` for proc-macro / build-script crates;
+# their dylibs don't ship in the final bundle anyway, and skipping the strip
+# avoids a macOS 27 dyld mis-alignment on some of them.
 [profile.release]
 opt-level = 3
-debug = 2
 strip = "symbols"
+
+[profile.release.build-override]
+opt-level = 0
+strip = "none"

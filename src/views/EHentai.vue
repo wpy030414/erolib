@@ -4,24 +4,13 @@
       <h2 class="text-h5 view-header__title">{{ titleText }}</h2>
       <md-switch v-show="loggedIn" ref="exSwitchRef" :selected="store.ex" :aria-label="t('eh.exLabel')" />
       <span class="spacer" />
-      <div v-if="loggedIn" class="search-box">
-        <MdiIcon :path="mdiMagnify" :size="18" class="search-icon" />
-        <input
-          class="search-input"
-          type="search"
-          :value="store.keyword"
-          :placeholder="t('eh.search.placeholder')"
-          @input="onSearchInput"
-        />
-        <button
-          v-if="store.keyword"
-          class="search-clear"
-          :aria-label="t('common.clear')"
-          @click="clearEhSearch"
-        >
-          <MdiIcon :path="mdiClose" :size="16" />
-        </button>
-      </div>
+      <SearchBox
+        v-if="loggedIn"
+        :model-value="store.keyword"
+        :placeholder="t('eh.search.placeholder')"
+        :clear-label="t('common.clear')"
+        @commit="onSearchCommit"
+      />
       <md-filled-button v-if="!loggedIn" :disabled="loggingIn" @click="startLogin">
         <MdiIcon slot="icon" :path="mdiArrowTopRight" :size="18" />
         {{ t('eh.login.login') }}
@@ -37,7 +26,7 @@
     </div>
 
     <template v-else>
-      <!-- Category chips (multi-select OR; cats = OR of selected bits). -->
+      <!-- Category chips (single-select; path segment filters the listing). -->
       <div class="cat-chips mb-6">
         <button
           v-for="c in categories"
@@ -52,51 +41,51 @@
       </div>
 
       <!-- Results grid -->
-      <div v-if="store.items.length" class="md3-grid">
-        <EHentaiCard
-          v-for="it in store.items"
-          :key="gurl(it)"
-          :item="it"
+      <FeedList
+        :feed="store.feed"
+        :texts="{
+          empty: t('eh.browse.empty'),
+          end: t('eh.browse.end'),
+          loadingMore: t('eh.browse.loadingMore'),
+        }"
+        @load-more="store.loadMore"
+      >
+        <SourceCard
+          v-for="it in store.feed.items"
+          :key="it.gid"
+          :title="it.title"
+          :page-count="it.pageCount"
+          :subtitle="it.uploader"
           :cover="store.coverMap[it.gid] ?? null"
           :status="store.statusMap[gurl(it)]"
           @click="onCardClick(it)"
         />
-      </div>
-      <div v-else-if="!store.loading" class="text-center text-medium-emphasis mt-8">
-        {{ t('eh.browse.empty') }}
-      </div>
-      <div v-if="store.end && store.items.length" class="feed-end text-center text-medium-emphasis">
-        {{ t('eh.browse.end') }}
-      </div>
-      <div v-if="store.loading" class="feed-loading text-center text-medium-emphasis">
-        <md-circular-progress indeterminate />
-        <span>{{ t('eh.browse.loadingMore') }}</span>
-      </div>
-      <div ref="sentinel" class="feed-sentinel" />
+      </FeedList>
 
-      <button
-        class="fab-refresh"
+      <FabButton
+        :icon="mdiRefresh"
         :aria-label="t('lib.refresh')"
-        :disabled="store.loading"
+        :disabled="store.feed.loading"
         @click="onReload"
-      >
-        <MdiIcon :path="mdiRefresh" :size="24" />
-      </button>
+      />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
-import { mdiArrowTopRight, mdiRefresh, mdiExitToApp, mdiMagnify, mdiClose } from '@mdi/js';
+import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToastStore } from '@/stores/toast';
 import { useEhentaiBrowseStore } from '@/stores/ehentai-browse';
 import MdiIcon from '@/components/MdiIcon.vue';
-import EHentaiCard from '@/components/EHentaiCard.vue';
+import SourceCard from '@/components/SourceCard.vue';
+import FeedList from '@/components/FeedList.vue';
+import SearchBox from '@/components/SearchBox.vue';
+import FabButton from '@/components/FabButton.vue';
 import type { GalleryListItem } from '@/types';
 
 const { t } = useI18n();
@@ -168,24 +157,10 @@ async function onCardClick(it: GalleryListItem) {
   await onDownload(it);
 }
 
-// Debounced search: 500ms after the last keystroke → store.keyword + reload.
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-function onSearchInput(e: Event) {
-  const v = (e.target as HTMLInputElement).value;
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    store.keyword = v.trim();
-    store.reload();
-  }, 500);
-}
-
-/** Clear the search box and reload immediately (bypasses the input debounce). */
-function clearEhSearch() {
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-  store.keyword = '';
+/** SearchBox commit: push the keyword into the store and reload. The box's own
+ *  debounce already throttled the keystrokes; an empty commit clears. */
+function onSearchCommit(v: string) {
+  store.keyword = v;
   store.reload();
 }
 
@@ -207,10 +182,6 @@ async function onLogout() {
   } catch (e) {
     console.error('ehentai logout:', e);
   }
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-    searchTimer = null;
-  }
   cookie.value = '';
   store.resetAll();
   loggedIn.value = false;
@@ -230,16 +201,7 @@ function onExChange() {
   store.reload();
 }
 
-const sentinel = ref<HTMLElement | null>(null);
-let observer: IntersectionObserver | null = null;
 let unlistenLogin: UnlistenFn | undefined;
-
-// Load the feed once the user logs in (covers a late login after mount).
-watch(loggedIn, (l) => {
-  if (l && store.items.length === 0 && !store.loading && !store.end) {
-    store.loadMore();
-  }
-});
 
 onMounted(async () => {
   try {
@@ -260,31 +222,17 @@ onMounted(async () => {
     }
   });
 
-  // task://progress is handled at the store level (survives view unmount).
+  // task://progress is handled at the store level (armed at app start via
+  // App.vue + AppShell). EX switch is command-style:
   exSwitchRef.value?.addEventListener('change', onExChange);
 
-  observer = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((en) => en.isIntersecting)) store.loadMore();
-    },
-    { rootMargin: '300px' },
-  );
-  nextTick(() => {
-    if (sentinel.value) observer?.observe(sentinel.value);
-  });
-
-  // First load — but only if the store hasn't already populated (state
-  // survives view switches until the app quits).
-  if (loggedIn.value && store.items.length === 0 && !store.end && !store.loading) {
-    store.loadMore();
-  }
+  // No manual first-load / sentinel wiring — <FeedList>'s sentinel auto-loads
+  // once the (post-login) grid mounts.
 });
 
 onBeforeUnmount(() => {
   unlistenLogin?.();
-  observer?.disconnect();
   exSwitchRef.value?.removeEventListener('change', onExChange);
-  if (searchTimer) clearTimeout(searchTimer);
   // Intentionally do NOT clear store state or revoke covers here — the browse
   // state persists across view switches until the app exits.
 });
@@ -341,54 +289,5 @@ onBeforeUnmount(() => {
     var(--md-sys-color-on-secondary-container) 12%,
     var(--md-sys-color-secondary-container)
   );
-}
-
-.feed-sentinel {
-  height: 1px;
-}
-
-.feed-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 24px 0;
-}
-
-.feed-end {
-  padding: 20px 0;
-  font-size: 13px;
-}
-
-/* Floating reload button (bottom-right) — reloads the listing on demand. */
-.fab-refresh {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 50;
-  width: 56px;
-  height: 56px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-  box-shadow: var(--md-sys-elevation-level3);
-  cursor: pointer;
-  transition:
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
-}
-
-.fab-refresh:hover:not(:disabled) {
-  box-shadow: var(--md-sys-elevation-level4);
-  transform: scale(1.05);
-}
-
-.fab-refresh:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 </style>

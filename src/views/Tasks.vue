@@ -31,7 +31,7 @@
             />
           </div>
           <span class="progress-text text-body-3">
-            {{ item.progress_current }} / {{ item.progress_total }}
+            {{ progressPercent(item) }}%
           </span>
         </div>
 
@@ -105,24 +105,22 @@
           </div>
 
           <span v-if="item.status === 'running'" class="task-speed">
-            {{ formatSpeed(item.speed) }}
+            {{ formatSpeed(item.speed, t) }}
           </span>
           <span v-else-if="item.status === 'completed'" class="task-speed">
-            {{ t('tasks.summary', { size: formatBytes(item.total_bytes), time: formatDuration(item.elapsed_ms) }) }}
+            {{ t('tasks.summary', { size: formatBytes(item.total_bytes, t), time: formatDuration(item.elapsed_ms, t) }) }}
           </span>
         </div>
       </div>
     </div>
 
-    <button
+    <FabButton
       v-if="hasCompleted"
-      class="fab-clear"
+      :icon="mdiBroom"
       :aria-label="t('tasks.actions.clearCompleted')"
       :disabled="clearing"
       @click="onClearCompleted"
-    >
-      <MdiIcon :path="mdiBroom" :size="24" />
-    </button>
+    />
   </div>
 </template>
 
@@ -142,6 +140,8 @@ import { useI18n } from '@/i18n';
 import { useTaskStore } from '@/stores/tasks';
 import { useToastStore } from '@/stores/toast';
 import MdiIcon from '@/components/MdiIcon.vue';
+import FabButton from '@/components/FabButton.vue';
+import { formatBytes, formatSpeed, formatDuration } from '@/utils/format';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -157,36 +157,6 @@ const hasCompleted = computed(() => tasks.value.some((tk) => TERMINAL.includes(t
 function progressPercent(item: { progress_current: number; progress_total: number }): number {
   if (item.progress_total <= 0) return 0;
   return Math.min(100, Math.round((item.progress_current / item.progress_total) * 100));
-}
-
-function formatSpeed(bps: number): string {
-  // Persistently shown while running — never blank, so the readout doesn't
-  // flicker between pages. 0 B/s is shown during inter-page gaps.
-  if (bps <= 0) return t('tasks.speed.kbps', { speed: '0.0' });
-  if (bps < 1024 * 1024) {
-    return t('tasks.speed.kbps', { speed: (bps / 1024).toFixed(1) });
-  }
-  return t('tasks.speed.mbps', { speed: (bps / 1024 / 1024).toFixed(2) });
-}
-
-function formatBytes(b: number): string {
-  if (b <= 0) return t('tasks.size.mb', { size: '0' });
-  const mb = b / (1024 * 1024);
-  if (mb >= 1024) return t('tasks.size.gb', { size: (mb / 1024).toFixed(2) });
-  if (mb >= 1) return t('tasks.size.mb', { size: mb.toFixed(1) });
-  return t('tasks.size.kb', { size: (b / 1024).toFixed(1) });
-}
-
-function formatDuration(ms: number): string {
-  // Units are dropped from the top when they're zero: "3分20秒", "45秒",
-  // never "0时3分20秒".
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return t('tasks.duration.hms', { h, m, s });
-  if (m > 0) return t('tasks.duration.ms', { m, s });
-  return t('tasks.duration.s', { s });
 }
 
 function selectTask(id: string) {
@@ -422,37 +392,5 @@ onMounted(() => {
 
 .spacer {
   flex: 1 1 auto;
-}
-
-/* Floating "clear completed" button (bottom-right). */
-.fab-clear {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 50;
-  width: 56px;
-  height: 56px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-  box-shadow: var(--md-sys-elevation-level3);
-  cursor: pointer;
-  transition:
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
-}
-
-.fab-clear:hover:not(:disabled) {
-  box-shadow: var(--md-sys-elevation-level4);
-  transform: scale(1.05);
-}
-
-.fab-clear:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 </style>

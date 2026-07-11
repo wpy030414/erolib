@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use uuid::Uuid;
@@ -7,12 +9,29 @@ use zip::{write::FileOptions, ZipWriter};
 use crate::models::BookMetadata;
 use std::io::{Read, Write};
 
+/// A CB7/CBZ archive kept open + its image-entry indices precomputed, so that
+/// flipping through pages of the same book skips the per-page `File::open` +
+/// `ZipArchive::new` + O(n) central-directory scan. The archive sits behind a
+/// Mutex so blocking threads in `spawn_blocking` can share one handle.
+struct CachedArchive {
+    archive: Mutex<zip::ZipArchive<std::fs::File>>,
+    image_indices: Vec<usize>,
+}
+
+/// Cap on how many book archives we keep open at once. A safety net for users
+/// bouncing between many books — beyond this the oldest entry is dropped.
+const PAGE_CACHE_MAX: usize = 8;
+
 /// Manages on-disk storage of CB7 files, covers, and cache.
 pub struct StorageService {
     pub library_path: PathBuf,
     #[allow(dead_code)]
     pub cache_path: PathBuf,
     pub cover_path: PathBuf,
+    /// Per-book zip handle cache: path -> opened archive + image entry indices.
+    /// Reused across `read_page`/`count_pages` calls so a book's central
+    /// directory is scanned at most once per session.
+    page_cache: Mutex<HashMap<PathBuf, Arc<CachedArchive>>>,
 }
 
 impl StorageService {
@@ -30,6 +49,7 @@ impl StorageService {
             library_path,
             cache_path,
             cover_path,
+            page_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -91,6 +111,10 @@ impl StorageService {
 
     /// Delete a book's CB7 file and cover.
     pub fn delete_book(&self, file_path: &Path, book_id: &str) -> Result<()> {
+        // Drop any cached open archive handle for this file before removing it
+        // — the cached File descriptor would keep the file open and block
+        // deletion on Windows (sharing violation). No-op when not cached.
+        let _ = self.page_cache.lock().map(|mut c| c.remove(file_path));
         if file_path.exists() {
             std::fs::remove_file(file_path)?;
         }
@@ -179,25 +203,10 @@ impl StorageService {
     /// name pages `0001.ext`, `0002.ext`, … so zip order already matches reading
     /// order; for CBZs the order is whatever stored the entries.
     pub fn read_page(&self, cb7_path: &Path, page: usize) -> Option<Vec<u8>> {
-        let file = std::fs::File::open(cb7_path).ok()?;
-        let mut archive = zip::ZipArchive::new(file).ok()?;
-
-        // Collect image entries in zip order, then pick by index.
-        let image_exts = [".jpg", ".jpeg", ".png", ".webp"];
-        let indices: Vec<usize> = (0..archive.len())
-            .filter(|&i| {
-                archive
-                    .by_index(i)
-                    .map(|e| {
-                        let n = e.name().to_lowercase();
-                        image_exts.iter().any(|ext| n.ends_with(ext))
-                    })
-                    .unwrap_or(false)
-            })
-            .collect();
-
-        let entry_idx = *indices.get(page)?;
-        let mut entry = archive.by_index(entry_idx).ok()?;
+        let cached = self.archive_for(cb7_path)?;
+        let entry_idx = *cached.image_indices.get(page)?;
+        let mut guard = cached.archive.lock().ok()?;
+        let mut entry = guard.by_index(entry_idx).ok()?;
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).ok()?;
         Some(buf)
@@ -205,21 +214,62 @@ impl StorageService {
 
     /// Total image pages in a CB7/CBZ archive.
     pub fn count_pages(&self, cb7_path: &Path) -> Option<usize> {
+        let cached = self.archive_for(cb7_path)?;
+        Some(cached.image_indices.len())
+    }
+
+    /// Return a cached, opened archive for `cb7_path` along with the
+    /// precomputed list of image-entry indices. On miss: open the file, build
+    /// the ZipArchive, scan the central directory once for image entries, then
+    /// stash it in the cache (evicting an arbitrary entry past the cap). The
+    /// open + scan happen outside the cache lock so concurrent page reads for
+    /// different books don't serialize on it.
+    fn archive_for(&self, cb7_path: &Path) -> Option<Arc<CachedArchive>> {
+        // Fast path: already cached.
+        {
+            let map = self.page_cache.lock().ok()?;
+            if let Some(arc) = map.get(cb7_path) {
+                return Some(arc.clone());
+            }
+        }
+
+        // Cache miss: open + scan the central directory once.
         let file = std::fs::File::open(cb7_path).ok()?;
         let mut archive = zip::ZipArchive::new(file).ok()?;
         let image_exts = [".jpg", ".jpeg", ".png", ".webp"];
-        let count = (0..archive.len())
-            .filter(|&i| {
-                archive
-                    .by_index(i)
-                    .map(|e| {
-                        let n = e.name().to_lowercase();
-                        image_exts.iter().any(|ext| n.ends_with(ext))
-                    })
-                    .unwrap_or(false)
-            })
-            .count();
-        Some(count)
+        let mut image_indices: Vec<usize> = Vec::with_capacity(archive.len());
+        for i in 0..archive.len() {
+            let is_img = archive
+                .by_index(i)
+                .map(|e| {
+                    let n = e.name().to_lowercase();
+                    image_exts.iter().any(|ext| n.ends_with(ext))
+                })
+                .unwrap_or(false);
+            if is_img {
+                image_indices.push(i);
+            }
+        }
+        let cached = Arc::new(CachedArchive {
+            archive: Mutex::new(archive),
+            image_indices,
+        });
+
+        // Re-check under the write lock: another thread may have inserted the
+        // same path while we built this one. If so, drop ours and reuse theirs.
+        let mut map = self.page_cache.lock().ok()?;
+        if let Some(existing) = map.get(cb7_path) {
+            return Some(existing.clone());
+        }
+        if map.len() >= PAGE_CACHE_MAX {
+            // Evict an arbitrary entry (the current path is not yet in the map,
+            // so whatever we remove is safe).
+            if let Some(key) = map.keys().next().cloned() {
+                map.remove(&key);
+            }
+        }
+        map.insert(cb7_path.to_path_buf(), cached.clone());
+        Some(cached)
     }
 }
 

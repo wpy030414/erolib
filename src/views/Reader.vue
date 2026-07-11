@@ -174,27 +174,51 @@ function scheduleNextFrame() {
 // ImageBitmap, then the timer just drawImage()'s the next bitmap. No <img>
 // src-swap → no flicker, and playback is cheap (a single draw per frame).
 const animCanvas = ref<HTMLCanvasElement | null>(null);
-const bitmaps = ref<ImageBitmap[]>([]);
+// Sparse by frame index: entry i is frame i's bitmap, or null if that frame
+// failed to decode (drawCurrentFrame / scheduleNextFrame skip holes).
+const bitmaps = ref<(ImageBitmap | null)[]>([]);
 let resizeObserver: ResizeObserver | null = null;
+// Guards preloadFrames against overlapping invocations (see comment inside).
+let framesInFlight = false;
 
 async function preloadFrames() {
-  if (!props.id || !isAnimated.value || bitmaps.value.length > 0) return;
+  // `framesInFlight` blocks re-entry during the await: a second trigger (e.g.
+  // ArrowRight while the spinner is still up) would otherwise re-fetch every
+  // frame and overwrite `bitmaps` without closing the first batch.
+  if (!props.id || !isAnimated.value || bitmaps.value.length > 0 || framesInFlight)
+    return;
   const n = frameDelays.value.length || pageCount.value || 0;
   if (n === 0) return;
+  framesInFlight = true;
   animLoading.value = true;
   try {
-    const loaded: ImageBitmap[] = [];
-    for (let p = 0; p < n; p++) {
-      try {
-        const bytes = await api.getBookPage(props.id, p);
-        const blob = new Blob([new Uint8Array(bytes)], { type: mimeFromBytes(bytes) });
-        loaded.push(await createImageBitmap(blob));
-      } catch (e) {
-        console.warn(`Failed to load frame ${p}:`, e);
-        break;
-      }
+    // Fetch all frames concurrently. The big win for ugoira start-up latency is
+    // parallel IPC + parallel zip unpacking on the backend (was a serial for
+    // loop, one IPC round-trip per frame). Frames land in array order so frame
+    // i still maps to bitmaps[i]; a per-frame failure leaves a null hole that
+    // drawCurrentFrame/scheduleNextFrame already skip via their !bmp guards.
+    const results = await Promise.all(
+      Array.from({ length: n }, async (_, p): Promise<ImageBitmap | null> => {
+        try {
+          const buf = await api.getBookPage(props.id, p);
+          const blob = new Blob([buf], { type: mimeFromArrayBuffer(buf) });
+          return await createImageBitmap(blob);
+        } catch (e) {
+          console.warn(`Failed to load frame ${p}:`, e);
+          return null;
+        }
+      }),
+    );
+    // If every frame failed, fall back to the static page path instead of
+    // busy-spinning a null-only animation forever (isAnimated would stay true
+    // and scheduleNextFrame would cycle through nulls at ~60fps).
+    if (!results.some((b) => b !== null)) {
+      console.warn('ugoira: all frames failed to load — falling back to static');
+      frameDelays.value = [];
+      bitmaps.value = [];
+      return;
     }
-    bitmaps.value = loaded;
+    bitmaps.value = results;
     await nextTick();
     resizeCanvas();
     if (!resizeObserver && animCanvas.value) {
@@ -208,6 +232,7 @@ async function preloadFrames() {
     scheduleNextFrame();
   } finally {
     animLoading.value = false;
+    framesInFlight = false;
   }
 }
 
@@ -239,7 +264,9 @@ function drawCurrentFrame() {
 }
 
 function closeBitmaps() {
-  bitmaps.value.forEach((b) => b.close());
+  bitmaps.value.forEach((b) => {
+    if (b) b.close();
+  });
   bitmaps.value = [];
 }
 
@@ -279,9 +306,11 @@ function saveBookProgress(bookId: string, page: number) {
   }
 }
 
-/** Guess a mime type from magic bytes so blob URLs render all stored formats. */
-function mimeFromBytes(bytes: number[]): string {
-  const b = bytes.slice(0, 12);
+/** Guess a mime type from an ArrayBuffer's leading magic bytes so blob URLs
+ *  render all stored formats. Raw bytes now arrive as ArrayBuffer (Tauri raw
+ *  IPC), so sniff a 12-byte Uint8Array view over the buffer without copying. */
+function mimeFromArrayBuffer(buf: ArrayBuffer): string {
+  const b = new Uint8Array(buf, 0, Math.min(12, buf.byteLength));
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
   if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
   if (
@@ -353,24 +382,56 @@ async function loadMetadata() {
   }
 }
 
+/** How many pages on each side of the current page to keep preloaded. Wider
+ *  than the old span=2 so back/forward jumps within a few pages are instant,
+ *  while the out-of-window eviction below keeps memory bounded for huge books. */
+const PREFETCH_SPAN = 10;
+// Pages currently being fetched by an in-flight prefetchPages call. Without
+// this, two overlapping calls (rapid scrolling fires the watch repeatedly)
+// both see a not-yet-assigned page as "unloaded", both fetch it, and the second
+// `blobs[p] = createObjectURL(...)` overwrites the first — orphaning the first
+// object URL (never revoked, leaks its image bytes for the session).
+const prefetchInFlight = new Set<number>();
+
 async function prefetchPages() {
   if (!props.id || pageCount.value == null || isAnimated.value) return;
-  const span = 2;
-  const pages: number[] = [];
-  for (let p = current.value; p <= Math.min(pageCount.value - 1, current.value + span); p++) {
-    if (!blobs.value[p]) pages.push(p);
-  }
+  const total = pageCount.value;
+  const lo = Math.max(0, current.value - PREFETCH_SPAN);
+  const hi = Math.min(total - 1, current.value + PREFETCH_SPAN);
 
-  for (const p of pages) {
-    try {
-      const bytes = await api.getBookPage(props.id, p);
-      const blob = new Blob([new Uint8Array(bytes)], { type: mimeFromBytes(bytes) });
-      const url = URL.createObjectURL(blob);
-      blobs.value[p] = url;
-    } catch (e) {
-      console.warn(`Failed to load page ${p}:`, e);
+  // Revoke pages that fell out of the window so large books don't accumulate
+  // hundreds of object URLs. The current page is always inside [lo, hi] so it
+  // is never revoked mid-view.
+  for (const keyStr of Object.keys(blobs.value)) {
+    const key = Number(keyStr);
+    if (Number.isNaN(key) || key < lo || key > hi) {
+      URL.revokeObjectURL(blobs.value[key]);
+      delete blobs.value[key];
     }
   }
+
+  // Collect unloaded pages within the window that no overlapping call is
+  // already fetching, then fetch concurrently — safe now that raw IPC returns
+  // ArrayBuffer (no giant JSON arrays in flight).
+  const targets: number[] = [];
+  for (let p = lo; p <= hi; p++) {
+    if (blobs.value[p] || prefetchInFlight.has(p)) continue;
+    targets.push(p);
+    prefetchInFlight.add(p);
+  }
+  await Promise.all(
+    targets.map(async (p) => {
+      try {
+        const buf = await api.getBookPage(props.id, p);
+        const blob = new Blob([buf], { type: mimeFromArrayBuffer(buf) });
+        blobs.value[p] = URL.createObjectURL(blob);
+      } catch (e) {
+        console.warn(`Failed to load page ${p}:`, e);
+      } finally {
+        prefetchInFlight.delete(p);
+      }
+    }),
+  );
 }
 
 function toggleZoom() {

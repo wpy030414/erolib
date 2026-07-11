@@ -4,24 +4,12 @@
       <h2 class="text-h5 library-header__title">{{ t('nav.library') }}</h2>
       <span class="spacer" />
 
-      <div class="search-box">
-        <MdiIcon :path="mdiMagnify" :size="18" class="search-icon" />
-        <input
-          class="search-input"
-          type="search"
-          :value="libraryStore.query"
-          :placeholder="t('lib.search.placeholder')"
-          @input="libraryStore.query = ($event.target as HTMLInputElement).value"
-        />
-        <button
-          v-if="libraryStore.query"
-          class="search-clear"
-          :aria-label="t('common.clear')"
-          @click="clearLibrarySearch"
-        >
-          <MdiIcon :path="mdiClose" :size="16" />
-        </button>
-      </div>
+      <SearchBox
+        v-model="libraryStore.query"
+        :placeholder="t('lib.search.placeholder')"
+        :clear-label="t('common.clear')"
+        @commit="libraryStore.applySearch"
+      />
 
       <md-filled-button @click="onImport">
         <MdiIcon slot="icon" :path="mdiFolderOpen" :size="20" />
@@ -59,37 +47,15 @@
       class="md3-grid"
     >
       <div v-for="book in libraryStore.books" :key="book.id">
-        <div
+        <SourceCard
           :id="'book-anchor-' + book.id"
-          class="md3-card md3-card--outlined book-card"
+          :title="book.title"
+          :page-count="book.page_count"
+          :subtitle="book.author"
+          :cover="coverMap[book.id] ?? null"
           @click="router.push(`/reader/${book.id}`)"
           @contextmenu.prevent="openMenu(book.id)"
-        >
-          <div class="book-cover-wrap">
-            <img
-              v-if="coverMap[book.id]"
-              :src="coverMap[book.id]!"
-              class="book-cover"
-              :alt="book.title"
-            />
-            <div v-else class="book-placeholder">
-              {{ book.title.charAt(0).toUpperCase() }}
-            </div>
-            <div class="book-pages-badge">{{ book.page_count }}</div>
-          </div>
-
-          <div class="md3-card__content">
-            <div class="md3-card__title text-subtitle-2">
-              <span class="title-inner">{{ book.title }}</span>
-            </div>
-            <div
-              v-if="book.author"
-              class="md3-card__subtitle text-body-2 text-truncate"
-            >
-              {{ book.author }}
-            </div>
-          </div>
-        </div>
+        />
 
         <md-menu
           :id="'book-menu-' + book.id"
@@ -115,8 +81,17 @@
       </div>
     </div>
 
+    <div v-if="libraryStore.books.length" class="feed-sentinel-wrap">
+      <!-- Infinite-scroll sentinel: intersecting triggers loadMore(); the store
+           no-ops while a load is in flight or the filter is exhausted. -->
+      <div ref="sentinelEl" class="feed-sentinel" />
+      <div v-if="libraryStore.isLoadingMore" class="feed-loading">
+        <md-circular-progress indeterminate />
+      </div>
+    </div>
+
     <div
-      v-else-if="!libraryStore.isLoading"
+      v-if="!libraryStore.books.length && !libraryStore.isLoading"
       class="text-center text-medium-emphasis mt-8"
     >
       {{ t('lib.empty') }}
@@ -155,7 +130,6 @@ import {
   mdiDelete,
   mdiInformationOutline,
   mdiClose,
-  mdiMagnify,
 } from '@mdi/js';
 import { useLibraryStore } from '@/stores/library';
 import { api } from '@/services/api';
@@ -163,6 +137,10 @@ import { getThumb, setThumb, deleteThumb } from '@/services/thumb-cache';
 import { useToastStore } from '@/stores/toast';
 import { useI18n } from '@/i18n';
 import MdiIcon from '@/components/MdiIcon.vue';
+import SourceCard from '@/components/SourceCard.vue';
+import SearchBox from '@/components/SearchBox.vue';
+import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
+import { formatSize } from '@/utils/format';
 import type { Book } from '@/types';
 
 type MdMenuElement = HTMLElement & {
@@ -176,12 +154,15 @@ const libraryStore = useLibraryStore();
 const toast = useToastStore();
 const { t } = useI18n();
 
+/** Infinite-scroll sentinel — IntersectionObserver calls loadMore() when the
+ *  grid bottom scrolls near (the store no-ops while busy or exhausted). */
+const sentinelEl = ref<HTMLElement | null>(null);
+useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore());
+
 const coverMap = reactive<Record<string, string | null>>({});
 const menuOpen = reactive<Record<string, boolean>>({});
 const menuRefs = new Map<string, MdMenuElement | null>();
 
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-const SEARCH_DEBOUNCE_MS = 500;
 /** Chip-row display cap (backend `get_all_tags` returns the top 30). When the
  *  cap is reached we append a non-interactive "…" chip to signal more exist. */
 const TAG_DISPLAY_LIMIT = 30;
@@ -259,7 +240,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopWatch();
-  if (searchTimer) clearTimeout(searchTimer);
   for (const url of Object.values(coverMap)) {
     if (url) URL.revokeObjectURL(url);
   }
@@ -274,26 +254,6 @@ function formatDate(iso?: string): string {
   if (!Number.isNaN(d.getTime())) return d.toLocaleDateString();
   const m = iso.match(/^\d{4}-\d{2}-\d{2}/);
   return m ? m[0] : iso;
-}
-
-watch(
-  () => libraryStore.query,
-  () => {
-    if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      libraryStore.applySearch();
-    }, SEARCH_DEBOUNCE_MS);
-  },
-);
-
-/** Clear the search box and re-run immediately (bypasses the input debounce). */
-function clearLibrarySearch() {
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-    searchTimer = null;
-  }
-  libraryStore.query = '';
-  libraryStore.applySearch();
 }
 
 async function onImport() {
@@ -348,14 +308,6 @@ function closeMeta() {
 
 function onDialogBackdrop(e: MouseEvent) {
   if (e.target === e.currentTarget) closeMeta();
-}
-
-/** Human-readable byte size, e.g. "12.3 MB". */
-function formatSize(bytes?: number): string {
-  if (!bytes) return '—';
-  const mb = bytes / (1024 * 1024);
-  if (mb >= 1) return `${mb.toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 /** Ordered label/value rows shown in the metadata dialog. */
@@ -522,5 +474,19 @@ function metaRows(book: Book): { label: string; value: string }[] {
   color: var(--md-sys-color-on-surface-variant);
   cursor: default;
   opacity: 0.6;
+}
+
+/* Infinite-scroll sentinel: a 1px observer target at the grid bottom; the
+ * IntersectionObserver in useInfiniteSentinel watches it. */
+.feed-sentinel {
+  height: 1px;
+  width: 100%;
+}
+
+.feed-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
 }
 </style>

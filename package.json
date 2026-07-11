@@ -1,6 +1,7 @@
 {
   "name": "erolib",
-  "version": "26.7.11+2220",
+  "version": "26.7.12+0240",
+  "packageManager": "pnpm@11.9.0",
   "description": "A desktop manga library and downloader app with Tauri, Vue 3, and Material Design 3",
   "type": "module",
   "scripts": {

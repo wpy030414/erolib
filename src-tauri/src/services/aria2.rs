@@ -14,6 +14,15 @@ use tokio::time::sleep;
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:6800/jsonrpc";
 
+/// Per-poll progress snapshot for one aria2 gid, handed to the
+/// `wait_for_gid_with_progress` callback so callers can aggregate byte progress
+/// across concurrent downloads (not just instantaneous speed).
+pub struct ProgressUpdate {
+    pub speed: u64,
+    pub completed_length: u64,
+    pub total_length: u64,
+}
+
 /// Lazy-initialised JSON-RPC client for aria2. Construction is cheap and
 /// non-blocking; the first download call triggers a connection attempt and, if
 /// needed, a local aria2c daemon spawn.
@@ -174,11 +183,15 @@ impl Aria2Client {
             .arg("--rpc-allow-origin-all=true")
             .arg("--rpc-listen-all=false")
             .arg("--continue=true")
-            .arg("--split=4")
-            .arg("--max-connection-per-server=4")
-            .arg("--max-concurrent-downloads=5")
+            .arg("--split=2")
+            .arg("--max-connection-per-server=2")
+            // Raised above the per-task Rust semaphore (8): two concurrent
+            // tasks each submit up to 8 add_uri, so 16 lets both run wide
+            // without aria2 queueing gids that wait_for_gid (no timeout) polls
+            // indefinitely.
+            .arg("--max-concurrent-downloads=16")
             .arg("--max-tries=5")
-            .arg("--retry-wait=30")
+            .arg("--retry-wait=5")
             .arg("--timeout=60")
             .arg(format!("--save-session={}", session_file.display()))
             .arg(format!("--log={}", log_file.display()))
@@ -276,10 +289,10 @@ impl Aria2Client {
 
         let mut options = serde_json::Map::new();
         options.insert("max-tries".to_string(), json!("5"));
-        options.insert("retry-wait".to_string(), json!("30"));
+        options.insert("retry-wait".to_string(), json!("5"));
         options.insert("continue".to_string(), json!("true"));
-        options.insert("split".to_string(), json!("4"));
-        options.insert("max-connection-per-server".to_string(), json!("4"));
+        options.insert("split".to_string(), json!("2"));
+        options.insert("max-connection-per-server".to_string(), json!("2"));
         options.insert(
             "user-agent".to_string(),
             json!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
@@ -304,12 +317,12 @@ impl Aria2Client {
             .context("aria2.addUri returned non-string gid")
     }
 
-    /// Poll aria2 while awaiting `on_progress(speed_bps)` on every poll so the
-    /// caller can persist the live download speed. Returns the completed file
-    /// path. The callback is async (not `FnMut(u64)`) because persisting the
-    /// speed needs `.await` — a sync callback would silently drop the future.
-    /// `paused` is checked each poll: while set, the download keeps spinning in
-    /// place (aria2 keeps its in-progress state) until resumed or cancelled.
+    /// Poll aria2 while awaiting `on_progress(ProgressUpdate)` on every poll so
+    /// the caller can persist live byte progress + speed. Returns the completed
+    /// file path. The callback is async because persisting needs `.await` — a
+    /// sync callback would silently drop the future. `paused` is checked each
+    /// poll: while set, the download keeps spinning in place (aria2 keeps its
+    /// in-progress state) until resumed or cancelled.
     pub async fn wait_for_gid_with_progress<F, Fut>(
         &self,
         gid: &str,
@@ -319,7 +332,7 @@ impl Aria2Client {
         mut on_progress: F,
     ) -> Result<PathBuf>
     where
-        F: FnMut(u64) -> Fut,
+        F: FnMut(ProgressUpdate) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
         loop {
@@ -341,13 +354,27 @@ impl Aria2Client {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            if let Some(speed) = status
-                .get("downloadSpeed")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                on_progress(speed).await;
-            }
+            // Snapshot this gid's byte progress every poll so the caller can
+            // aggregate across concurrent downloads. completed/total lengths are
+            // absent until aria2 receives the Content-Length, hence unwrap_or 0.
+            let upd = ProgressUpdate {
+                speed: status
+                    .get("downloadSpeed")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
+                completed_length: status
+                    .get("completedLength")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
+                total_length: status
+                    .get("totalLength")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0),
+            };
+            on_progress(upd).await;
 
             match state {
                 "complete" => {
