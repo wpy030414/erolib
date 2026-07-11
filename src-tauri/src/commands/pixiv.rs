@@ -305,12 +305,18 @@ pub async fn pixiv_set_login(
 
 /// Forget the stored Pixiv login — both in memory and on disk. The user then
 /// re-authenticates via the in-app browser, which writes a fresh session. This
-/// is the only path that replaces persisted credentials (stage 3).
+/// is the only path that replaces persisted credentials (stage 3). Also wipes
+/// the in-app browser's cookie memory for pixiv.net so the next login window
+/// doesn't auto-log-in from the stale session.
 #[tauri::command]
 pub async fn pixiv_clear_login(
     session: State<'_, Arc<PixivSession>>,
 ) -> Result<(), String> {
     session.clear_login();
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+        crate::commands::cookies::clear_section_cookies(&["pixiv.net"])
+    })
+    .await;
     Ok(())
 }
 
@@ -366,6 +372,36 @@ pub async fn pixiv_list_following_feed(
     let client = PixivClient::new(&login.cookie).map_err(|e| e.to_string())?;
     client
         .fetch_follow_latest(page)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List one page of Pixiv's home recommendation feed (随便看看 tab) — works
+/// pushed to the logged-in homepage based on the user's taste.
+#[tauri::command]
+pub async fn pixiv_list_recommended(
+    page: u64,
+    session: State<'_, Arc<PixivSession>>,
+) -> Result<Vec<UserWork>, String> {
+    let login = session.get_login().ok_or("not logged in to pixiv")?;
+    let client = PixivClient::new(&login.cookie).map_err(|e| e.to_string())?;
+    client
+        .fetch_recommended(page)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Search illustrations by keyword. `page` is 1-based and returns ~60 works.
+#[tauri::command]
+pub async fn pixiv_search_illusts(
+    keyword: String,
+    page: u64,
+    session: State<'_, Arc<PixivSession>>,
+) -> Result<Vec<UserWork>, String> {
+    let login = session.get_login().ok_or("not logged in to pixiv")?;
+    let client = PixivClient::new(&login.cookie).map_err(|e| e.to_string())?;
+    client
+        .fetch_search(&keyword, page)
         .await
         .map_err(|e| e.to_string())
 }

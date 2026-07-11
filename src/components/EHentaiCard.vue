@@ -1,9 +1,9 @@
 <template>
   <div class="book-card" :class="{ 'book-card--busy': isBusy }">
     <div class="book-cover-wrap">
-      <img v-if="cover" :src="cover" class="book-cover" :alt="work.title" />
-      <div v-else class="book-placeholder">{{ work.title.charAt(0) }}</div>
-      <div class="book-pages-badge">{{ work.pageCount }}</div>
+      <img v-if="cover" :src="cover" class="book-cover" :alt="item.title" />
+      <div v-else class="book-placeholder">{{ item.title.charAt(0) }}</div>
+      <div class="book-pages-badge">{{ item.pageCount }}</div>
       <div v-if="isBusy" class="book-cover-mask">
         <div v-if="hasProgress" class="progress-ring-wrap">
           <svg class="progress-ring" viewBox="0 0 36 36">
@@ -27,9 +27,9 @@
     </div>
     <div class="md3-card__content">
       <span v-if="isNew" class="new-dot" aria-hidden="true" />
-      <div class="md3-card__title text-subtitle-2"><span class="title-inner">{{ work.title }}</span></div>
-      <div v-if="work.author" class="md3-card__subtitle text-body-2 text-truncate">
-        {{ work.author }}
+      <div class="md3-card__title text-subtitle-2"><span class="title-inner">{{ item.title }}</span></div>
+      <div v-if="item.uploader" class="md3-card__subtitle text-body-2 text-truncate">
+        {{ item.uploader }}
       </div>
     </div>
   </div>
@@ -37,12 +37,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { PixivWork, PixivBrowseStatus } from '@/types';
+import type { GalleryListItem, EhentaiBrowseStatus } from '@/types';
 
 const props = defineProps<{
-  work: PixivWork;
+  item: GalleryListItem;
   cover: string | null;
-  status?: PixivBrowseStatus;
+  status?: EhentaiBrowseStatus;
 }>();
 
 const ACTIVE = ['pending', 'running', 'paused'];

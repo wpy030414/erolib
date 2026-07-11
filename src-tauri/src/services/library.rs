@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::Sqlite;
 use uuid::Uuid;
 
@@ -22,6 +22,11 @@ impl LibraryService {
     }
 
     /// Import an existing CB7/CBZ/CBR/PDF file into the library.
+    ///
+    /// For CB7/CBZ the archive's ComicInfo.xml is read back (title, tags,
+    /// source, delays) so an erolib-exported cb7 round-trips losslessly.
+    /// CBR/PDF and archives without ComicInfo fall back to the file name and
+    /// empty source.
     pub async fn import_book(&self, file_path: String) -> Result<Book, AppError> {
         let path = Path::new(&file_path);
         let file_name = path
@@ -30,7 +35,6 @@ impl LibraryService {
             .unwrap_or("unknown")
             .to_string();
 
-        let metadata = std::fs::metadata(path).map_err(AppError::Io)?;
         let format = detect_format(&file_name);
         let page_count = count_archive_pages(path, &format).unwrap_or(0);
 
@@ -43,61 +47,63 @@ impl LibraryService {
         // Copy into library storage.
         std::fs::copy(path, &dest).map_err(AppError::Io)?;
 
-        // Extract cover.
-        let cover_path = self
-            .storage
-            .extract_cover(&dest, &book_id)
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
+        // Recover metadata from ComicInfo.xml (cb7/cbz only). read_comic_info
+        // returns None for non-zip formats or archives without ComicInfo.
+        let meta = self.storage.read_comic_info(&dest);
 
-        let title = path
+        let file_stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&file_name)
             .to_string();
+        let title = meta
+            .as_ref()
+            .map(|m| m.title.clone())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or(file_stem);
+        let tags = meta.as_ref().map(|m| m.tags.clone()).unwrap_or_default();
+        let delays = meta.as_ref().and_then(|m| m.delays.clone());
+        // Only reconstruct a BookSource when the archive actually carried an
+        // erolib source plugin; otherwise leave source as None.
+        let source = meta.as_ref().and_then(|m| {
+            let plugin = m.source_plugin.as_deref()?.trim();
+            if plugin.is_empty() {
+                return None;
+            }
+            Some(BookSource {
+                plugin: plugin.to_string(),
+                source_url: m.source_url.clone().unwrap_or_default(),
+                scraped_at: m.scraped_at.as_deref().and_then(parse_rfc3339),
+                source_post_id: m.source_post_id.clone(),
+                author: m.author.clone(),
+                author_id: None,
+                published_at: m.published_at.clone(),
+            })
+        });
 
-        let now = Utc::now();
-        let book = Book {
-            id: book_id.clone(),
-            title: title.clone(),
-            original_filename: Some(file_name),
-            file_path: dest.to_string_lossy().to_string(),
-            file_size: metadata.len() as i64,
-            format,
-            page_count,
-            cover_path,
-            source_plugin: None,
-            source_url: None,
-            source_post_id: None,
-            author: None,
-            author_id: None,
-            published_at: None,
-            scraped_at: None,
-            created_at: now,
-            updated_at: now,
-            last_read_at: None,
-            read_count: 0,
-            tags: None,
-        };
+        // register_stored_book handles cover extraction, source/tags/delays
+        // binding, and the books INSERT.
+        let mut book = self
+            .register_stored_book(
+                &book_id,
+                &title,
+                &dest,
+                page_count,
+                source.as_ref(),
+                &tags,
+                delays.as_deref(),
+            )
+            .await?;
 
-        sqlx::query(
-            r#"INSERT INTO books
-            (id, title, original_filename, file_path, file_size, format, page_count, cover_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&book.id)
-        .bind(&book.title)
-        .bind(&book.original_filename)
-        .bind(&book.file_path)
-        .bind(book.file_size)
-        .bind(&book.format)
-        .bind(book.page_count)
-        .bind(&book.cover_path)
-        .bind(book.created_at.to_rfc3339())
-        .bind(book.updated_at.to_rfc3339())
-        .execute(&self.db.pool)
-        .await
-        .map_err(AppError::Db)?;
+        // register_stored_book's INSERT omits original_filename; backfill it so
+        // the library card can show the file the user imported from.
+        sqlx::query("UPDATE books SET original_filename = ? WHERE id = ?")
+            .bind(&file_name)
+            .bind(&book_id)
+            .execute(&self.db.pool)
+            .await
+            .map_err(AppError::Db)?;
+        book.original_filename = Some(file_name);
 
         Ok(book)
     }
@@ -145,6 +151,7 @@ impl LibraryService {
             last_read_at: None,
             read_count: 0,
             tags: None,
+            delays: None,
         };
 
         sqlx::query(
@@ -304,6 +311,7 @@ impl LibraryService {
         page_count: i32,
         source: Option<&BookSource>,
         tags: &[String],
+        delays: Option<&str>,
     ) -> Result<Book, AppError> {
         let file_size = std::fs::metadata(file_path)
             .map(|m| m.len() as i64)
@@ -327,8 +335,8 @@ impl LibraryService {
             r#"INSERT INTO books
             (id, title, file_path, file_size, format, page_count, cover_path,
              source_plugin, source_url, scraped_at, source_post_id, author,
-             author_id, published_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'cb7', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+             author_id, published_at, created_at, updated_at, delays)
+            VALUES (?, ?, ?, ?, 'cb7', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(book_id)
         .bind(title)
@@ -345,6 +353,7 @@ impl LibraryService {
         .bind(&published_at)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
+        .bind(delays)
         .execute(&self.db.pool)
         .await
         .map_err(AppError::Db)?;
@@ -365,6 +374,15 @@ impl LibraryService {
         }
         Ok(())
     }
+}
+
+/// Parse an RFC3339 timestamp (as written into ComicInfo's ero:ScrapedAt) back
+/// into a UTC DateTime. Returns None on malformed input so import degrades
+/// gracefully instead of failing the whole book.
+fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn detect_format(name: &str) -> String {

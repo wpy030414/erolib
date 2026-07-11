@@ -20,14 +20,36 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 ## 下载与任务系统
 
 - **所有下载统一经 TaskManager**（`src-tauri/src/services/task_manager.rs`），底层用 aria2，无进程内回退。任务 payload 是枚举 `TaskPayload`：`PixivBookmarks` / `PixivUserWorks` / `PixivSingleWork{cookie,work_id}` / `EhentaiGallery`。
-- 前端 `stores/tasks.ts` 全局监听 `task://progress`（更新任务列表 + 书库刷新）与 `task://toast`（终态 toast）。
-- **动图（ugoira, illustType==2）**：`process_pixiv_ugoira` 拉 `ugoira_meta`（frames + originalSrc zip）→ 解压 jpg 帧 → `image` crate `GifEncoder`（speed 10、`Repeat::Infinite`、自动 NeuQuant 量化）→ 单 gif 打包 cb7，`page_count=1`。帧 resize 到最长边 1024 以保渲染性能。延时**取 API 的 frames**（zip 内只有 jpg、无 animation.json）。
+- **任务模型**（`services/task.rs` `TaskSnapshot`）含 `speed`（实时下行速度 B/s）、`logs`（步骤日志 JSON 数组，上限 ~200 行）、`book_id`（完成后回填，前端一键跳阅读器）。`enqueue` 保留最新 **100 条**（先 `DELETE … NOT IN (SELECT … ORDER BY created_at DESC LIMIT 99)` 再插入）。
+- aria2 进度：`wait_for_gid_with_progress` 轮询 `tell_status`，回调里 `set_progress(.., speed)` + `append_log`；成功后 `register_stored_book` → `set_book_id`。
+- 前端 `stores/tasks.ts` 全局监听 `task://progress`（更新列表 + 书库刷新）与 `task://toast`（终态 toast）；`views/Tasks.vue` 左右分栏——运行中卡片右下角显示速度，详情 pane 显示步骤日志 / 创建完成时间 / 操作区。
+- **动图（ugoira, illustType==2）**：`process_pixiv_ugoira` 拉 `ugoira_meta`（frames + originalSrc zip）→ 解压**原始 jpg 帧序列**直接进 cb7，**不二次编码**；逐帧延时存 `Book.delays`（DB JSON）。阅读器按延时定时播放循环——转换瞬时 / 加载快 / 无损 / 原分辨率。兼容旧 gif/apng 书。
 
 ## Pixiv 浏览
 
 - 浏览式：关注 feed（`/ajax/follow_latest/illust?p=&mode=all`，**不带 user_id**，session 识别用户）+ 收藏（`/ajax/user/{id}/illusts/bookmarks?offset=&limit=`），懒加载 ~30/页（IntersectionObserver sentinel）。
 - 封面防盗链：`i.pximg.net` 需 `Referer: https://www.pixiv.net/`，走后端代理 `pixiv_proxy_image`（前端 `<img>` 不能设 Referer）。
 - 卡片三态：本地有→点进阅读器；下载中→遮罩 + SVG 环形进度（**别用 md-circular-progress determinate**，会卡）；未下载→标题左上红点。`task://progress` 在 **store 层**监听（跨视图存活，下载完成自动翻转卡片）。
+
+## EHentai 浏览
+
+- 浏览式（`stores/ehentai-browse.ts`）：关键词搜索 + 10 大分类 chip 多选并集（`cats` = OR of selected bits），EXHentai 开关（`store.ex`）切换 `e-hentai.org` / `exhentai.org` 域名；scraper 解析 HTML（`glthumb` data-src、`glink`）。`browse_status` 用 gid+token 归一化匹配本地书。
+- 未登录时隐藏搜索框（`v-if="loggedIn"`）与 EXHentai switch（`v-show="loggedIn"`）。
+- 卡片三态同 Pixiv（`components/EHentaiCard.vue`）；封面走 `ehentai_proxy_thumb`（防盗链）。
+
+## 共享服务器（OPDS / RSS）
+
+- `commands/server.rs`：axum 起 OPDS（5269）/ RSS（1269）HTTP 服务，`start_*` 幂等、返回 base_url；`ServerHandle` 持 watch channel 做优雅关闭。
+- 监听 `0.0.0.0`（局域网全开放、无鉴权）；base_url 用 `local_lan_ip()`（connected UDP socket 取出口 IP）使 feed 内链接对其它设备可达。
+- OPDS feed（`services/opds.rs`）+ RSS feed（`services/rss.rs`）都 `SELECT * FROM books`；`/download/:id`（OPDS + RSS 共用 `serve_download`）发整本、`/covers/:id` 发封面。
+- 前端 `stores/settings.ts` 管 opds/rss 的 port/running/busy/url/error + `autoStartAll()`（`App.vue` onMounted 调，开机即跑）。
+
+## 登录与 cookie 采取
+
+- **Pixiv**：`commands/pixiv_login.rs` 开应用内浏览器，**不导航**到设置页，登录后直接 capture cookie；`services/pixiv.rs` `fetch_current_user_id` 先从 PHPSESSID `{user_id}_{secret}` 解析（零网络），失败再回退抓重定向。
+- **EHentai**：`commands/ehentai.rs` 论坛账号登录窗口 + capture。
+- **macOS cookie FFI**（`commands/cookies.rs`）：`WKHTTPCookieStore` 原生采取 / 删除；登出按版块 host 后缀（`pixiv.net` / `e-hentai.org`、`exhentai.org`）`clear_section_cookies`，**用 `deleteCookie:completionHandler:`**（不是 `deleteCookie:`，更不是对 dataStore 调），共享 `WKWebsiteDataStore` 下不误伤主窗口 localStorage。
+- session 持久化到 app data dir（`pixiv_session.json` / `ehentai_session.json`）：启动恢复、set 覆写、登出清空。
 
 ## 书库与缩略图
 
@@ -53,9 +75,10 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 ## 开发命令
 
 ```bash
-pnpm install
-pnpm tauri dev                # 开发
-pnpm -C . exec vite build     # 前端构建（vue-tsc 有已知兼容问题，跳过 tsc）
-cd src-tauri && cargo build   # 后端构建
-pnpm tauri build              # 生产包
+pnpm install            # 装依赖
+pnpm tauri dev          # 开发（热重载）
+npm run build           # 前端构建（vue-tsc 2.x 类型检查 + vite；TS 5.x 兼容已修）
+pnpm tauri build        # 生产包（.app / .dmg / .exe / .msi）
 ```
+
+> ⚠️ macOS 27 + rustc ≤1.96：release 下偶发 `can't find crate for <proc-macro>` 多为 feature-config 缓存损坏（**非** malformed Mach-O），`cargo clean` 即可；`Cargo.toml` 的 `[profile.release] debug = 2` 是历史防御，详见注释。

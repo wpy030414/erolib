@@ -71,21 +71,6 @@ fn main() {
             let app_state = AppState::new(db.clone(), storage.clone());
             app.manage(app_state.clone());
             app.manage(Arc::new(commands::server::ServerHandle::new()));
-            // Auto-start OPDS and RSS servers on default ports.
-            let app_for_opds = app_handle.clone();
-            let state_for_opds = app_state.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = commands::server::start_opds_server(5269, &app_for_opds, &state_for_opds).await {
-                    tracing::error!(target: "erolib::server", "auto-start OPDS: {e}");
-                }
-            });
-            let app_for_rss = app_handle.clone();
-            let state_for_rss = app_state;
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = commands::server::start_rss_server(1269, &app_for_rss, &state_for_rss).await {
-                    tracing::error!(target: "erolib::server", "auto-start RSS: {e}");
-                }
-            });
             // Persist the Pixiv login under the app data dir so it survives
             // restarts. A captured login is restored on launch and re-written on
             // every set; only an explicit re-login (clear + new capture) changes
@@ -108,6 +93,11 @@ fn main() {
                 })?,
             );
             TaskManager::init_self_ref(&task_manager);
+            // Mark tasks orphaned by a force-quit (left 'running') as 'paused'
+            // so the user can resume them rather than seeing them stuck.
+            if let Err(e) = tauri::async_runtime::block_on(task_manager.reconcile_on_startup()) {
+                tracing::warn!(target: "erolib::tasks", %e, "startup task reconcile failed");
+            }
             app.manage(task_manager);
             Ok(())
         })
@@ -145,6 +135,8 @@ fn main() {
             commands::pixiv::pixiv_download_user_works,
             commands::pixiv::pixiv_list_bookmarks,
             commands::pixiv::pixiv_list_following_feed,
+            commands::pixiv::pixiv_list_recommended,
+            commands::pixiv::pixiv_search_illusts,
             commands::pixiv::pixiv_proxy_image,
             commands::pixiv::pixiv_browse_status,
             commands::pixiv_login::pixiv_open_login_window,
@@ -153,12 +145,17 @@ fn main() {
             commands::ehentai::ehentai_cancel_download,
             commands::ehentai::ehentai_get_login,
             commands::ehentai::ehentai_set_login,
+            commands::ehentai::ehentai_clear_login,
+            commands::ehentai::ehentai_search,
+            commands::ehentai::ehentai_proxy_thumb,
+            commands::ehentai::ehentai_browse_status,
             commands::tasks::tasks_list,
             commands::tasks::task_pause,
             commands::tasks::task_resume,
             commands::tasks::task_cancel,
             commands::tasks::task_delete,
             commands::tasks::task_retry,
+            commands::tasks::tasks_clear_completed,
             commands::tasks::task_enqueue_pixiv_bookmarks,
             commands::tasks::task_enqueue_pixiv_user_works,
             commands::tasks::task_enqueue_ehentai_gallery,

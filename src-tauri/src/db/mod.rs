@@ -68,8 +68,23 @@ impl Database {
             ("author", "TEXT"),
             ("author_id", "TEXT"),
             ("published_at", "TEXT"),
+            ("delays", "TEXT"),
         ] {
             ensure_column(&pool, "books", col, ddl).await?;
+        }
+
+        // tasks: add speed/logs/book_id columns. CREATE TABLE IF NOT EXISTS
+        // won't touch an existing table, so existing DBs are upgraded in place
+        // via the same PRAGMA-guarded ALTER as books above.
+        for (col, ddl) in [
+            ("speed", "INTEGER NOT NULL DEFAULT 0"),
+            ("logs", "TEXT NOT NULL DEFAULT '[]'"),
+            ("book_id", "TEXT"),
+            ("total_bytes", "INTEGER NOT NULL DEFAULT 0"),
+            ("elapsed_ms", "INTEGER NOT NULL DEFAULT 0"),
+            ("run_started_at", "TEXT"),
+        ] {
+            ensure_column(&pool, "tasks", col, ddl).await?;
         }
 
         Ok(Self { pool })

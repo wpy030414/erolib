@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import { api } from '@/services/api';
 
 const OPDS_PORT_KEY = 'erolib.opdsPort';
 const RSS_PORT_KEY = 'erolib.rssPort';
@@ -33,6 +34,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const rssUrl = ref<string | null>(null);
   const opdsBusy = ref(false);
   const rssBusy = ref(false);
+  const opdsError = ref<string | null>(null);
+  const rssError = ref<string | null>(null);
 
   function saveOpdsPort(value: string) {
     savePort(OPDS_PORT_KEY, value);
@@ -42,6 +45,76 @@ export const useSettingsStore = defineStore('settings', () => {
   function saveRssPort(value: string) {
     savePort(RSS_PORT_KEY, value);
     rssPort.value = value;
+  }
+
+  async function startOpds() {
+    opdsBusy.value = true;
+    opdsError.value = null;
+    try {
+      opdsUrl.value = await api.startOpdsServer(Number(opdsPort.value));
+      opdsRunning.value = true;
+    } catch (e) {
+      opdsError.value = String(e);
+    } finally {
+      opdsBusy.value = false;
+    }
+  }
+
+  async function stopOpds() {
+    opdsBusy.value = true;
+    opdsError.value = null;
+    try {
+      await api.stopOpdsServer();
+      opdsUrl.value = null;
+      opdsRunning.value = false;
+    } catch (e) {
+      opdsError.value = String(e);
+    } finally {
+      opdsBusy.value = false;
+    }
+  }
+
+  async function toggleOpds() {
+    if (opdsRunning.value) await stopOpds();
+    else await startOpds();
+  }
+
+  async function startRss() {
+    rssBusy.value = true;
+    rssError.value = null;
+    try {
+      rssUrl.value = await api.startRssServer(Number(rssPort.value));
+      rssRunning.value = true;
+    } catch (e) {
+      rssError.value = String(e);
+    } finally {
+      rssBusy.value = false;
+    }
+  }
+
+  async function stopRss() {
+    rssBusy.value = true;
+    rssError.value = null;
+    try {
+      await api.stopRssServer();
+      rssUrl.value = null;
+      rssRunning.value = false;
+    } catch (e) {
+      rssError.value = String(e);
+    } finally {
+      rssBusy.value = false;
+    }
+  }
+
+  async function toggleRss() {
+    if (rssRunning.value) await stopRss();
+    else await startRss();
+  }
+
+  /** App.vue calls this on mount so the sharing servers are running the moment
+   *  the app opens, using the saved ports (single source of truth). */
+  async function autoStartAll() {
+    await Promise.all([startOpds(), startRss()]);
   }
 
   function reset() {
@@ -60,8 +133,17 @@ export const useSettingsStore = defineStore('settings', () => {
     rssUrl,
     opdsBusy,
     rssBusy,
+    opdsError,
+    rssError,
     saveOpdsPort,
     saveRssPort,
+    startOpds,
+    stopOpds,
+    toggleOpds,
+    startRss,
+    stopRss,
+    toggleRss,
+    autoStartAll,
     reset,
   };
 });

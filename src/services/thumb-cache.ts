@@ -50,3 +50,12 @@ export async function deleteThumb(bookId: string): Promise<void> {
     // ignore
   }
 }
+
+/** Drop every cached thumbnail (Settings → 清除缓存). */
+export async function clearThumbs(): Promise<void> {
+  try {
+    await (await db()).clear(STORE);
+  } catch {
+    // ignore
+  }
+}

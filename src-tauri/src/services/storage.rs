@@ -124,6 +124,29 @@ impl StorageService {
         Some(Self::shrink_to_jpeg(&raw, max_edge))
     }
 
+    /// Read `ComicInfo.xml` out of a CB7/CBZ archive and parse it back into
+    /// BookMetadata, so an imported cb7 recovers its title / tags / source /
+    /// delays. Returns None for archives without ComicInfo.xml (cbr/pdf, or
+    /// cbz from tools that don't write one).
+    pub fn read_comic_info(&self, cb7_path: &Path) -> Option<BookMetadata> {
+        let file = std::fs::File::open(cb7_path).ok()?;
+        let mut archive = zip::ZipArchive::new(file).ok()?;
+        let mut xml = String::new();
+        for i in 0..archive.len() {
+            let Ok(mut entry) = archive.by_index(i) else {
+                continue;
+            };
+            if entry.name() == "ComicInfo.xml" {
+                entry.read_to_string(&mut xml).ok()?;
+                break;
+            }
+        }
+        if xml.is_empty() {
+            return None;
+        }
+        parse_comic_info(&xml)
+    }
+
     /// Decode `raw` (jpg/png/webp) and re-encode as a JPEG whose longest edge
     /// is ≤ `max_edge` (aspect ratio preserved). Returns the original bytes on
     /// any decode/encode failure.
@@ -201,21 +224,127 @@ impl StorageService {
 }
 
 fn create_comic_info(metadata: &BookMetadata) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <Title>{}</Title>
-  <Writer>{}</Writer>
-  <Penciller>{}</Penciller>
-  <Summary>{}</Summary>
-  <Tags>{}</Tags>
-</ComicInfo>"#,
-        xml_escape(&metadata.title),
-        xml_escape(metadata.author.as_deref().unwrap_or("")),
-        xml_escape(metadata.artist.as_deref().unwrap_or("")),
-        xml_escape(metadata.description.as_deref().unwrap_or("")),
-        xml_escape(&metadata.tags.join(", ")),
-    )
+    let mut s = String::new();
+    s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    s.push_str(
+        "<ComicInfo xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" \
+         xmlns:ero=\"https://xrl.im/erolib\">\n",
+    );
+    s.push_str(&format!(
+        "  <Title>{}</Title>\n",
+        xml_escape(&metadata.title)
+    ));
+    s.push_str(&format!(
+        "  <Writer>{}</Writer>\n",
+        xml_escape(metadata.author.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <Penciller>{}</Penciller>\n",
+        xml_escape(metadata.artist.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <Summary>{}</Summary>\n",
+        xml_escape(metadata.description.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <Tags>{}</Tags>\n",
+        xml_escape(&metadata.tags.join(", "))
+    ));
+    // erolib provenance under a custom namespace — standard ComicInfo readers
+    // ignore unknown elements, but our own importer reads them back so an
+    // exported cb7 round-trips losslessly.
+    s.push_str(&format!(
+        "  <ero:SourcePlugin>{}</ero:SourcePlugin>\n",
+        xml_escape(metadata.source_plugin.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <ero:SourceURL>{}</ero:SourceURL>\n",
+        xml_escape(metadata.source_url.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <ero:SourcePostID>{}</ero:SourcePostID>\n",
+        xml_escape(metadata.source_post_id.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <ero:PublishedAt>{}</ero:PublishedAt>\n",
+        xml_escape(metadata.published_at.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <ero:ScrapedAt>{}</ero:ScrapedAt>\n",
+        xml_escape(metadata.scraped_at.as_deref().unwrap_or(""))
+    ));
+    s.push_str(&format!(
+        "  <ero:Delays>{}</ero:Delays>\n",
+        xml_escape(metadata.delays.as_deref().unwrap_or(""))
+    ));
+    s.push_str("</ComicInfo>");
+    s
+}
+
+/// Parse a ComicInfo.xml string back into BookMetadata. Standard fields map to
+/// the obvious slots; erolib provenance lives under the `ero:` namespace.
+/// Returns None when no `<Title>` text was found (nothing useful to register).
+fn parse_comic_info(xml: &str) -> Option<BookMetadata> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.trim_text(true);
+
+    let mut cur: String = String::new();
+    let mut meta = BookMetadata::default();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                cur = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+            }
+            Ok(Event::Empty(_)) => {
+                // Self-closed element carries no text content; clear the cursor
+                // so a stray Text event can't attach to the wrong field.
+                cur.clear();
+            }
+            Ok(Event::Text(t)) => {
+                let Ok(text) = t.unescape() else {
+                    continue;
+                };
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                match cur.as_str() {
+                    "Title" => meta.title = text.to_string(),
+                    "Writer" => meta.author = Some(text.to_string()),
+                    "Penciller" => meta.artist = Some(text.to_string()),
+                    "Summary" => meta.description = Some(text.to_string()),
+                    "Tags" => {
+                        meta.tags = text
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    "ero:SourcePlugin" => meta.source_plugin = Some(text.to_string()),
+                    "ero:SourceURL" => meta.source_url = Some(text.to_string()),
+                    "ero:SourcePostID" => meta.source_post_id = Some(text.to_string()),
+                    "ero:PublishedAt" => meta.published_at = Some(text.to_string()),
+                    "ero:ScrapedAt" => meta.scraped_at = Some(text.to_string()),
+                    "ero:Delays" => meta.delays = Some(text.to_string()),
+                    _ => {}
+                }
+            }
+            Ok(Event::End(_)) => cur.clear(),
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    if meta.title.is_empty() {
+        None
+    } else {
+        Some(meta)
+    }
 }
 
 fn xml_escape(s: &str) -> String {

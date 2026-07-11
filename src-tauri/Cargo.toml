@@ -44,16 +44,13 @@ http = "1.4.2"
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
 
-# Workaround: rustc (1.8x–1.96) emits malformed Mach-O ("mis-aligned LINKEDIT
-# string pool") for proc-macro dylibs when debuginfo is absent (release's default
-# `debuginfo = 0`) — dyld on macOS 26 rejects them, breaking every release build.
-# dev builds (`debuginfo = 2`) are unaffected. Keeping `debuginfo = 2` on the
-# release profile makes the proc-macro codegen match dev, so all derive crates
-# (serde_derive/thiserror/phf/zerofrom/ctor/tauri_macros/…) link cleanly. The
-# final binary's debuginfo is then `strip`ped, so the shipped app isn't bloated.
-# (`sqlx`'s default `macros`/`migrate`/`json`/`any` features are off —
-# `sqlx-macros` was malformed even with debuginfo — and FromRow/migrate are
-# hand-implemented; see src/models/mod.rs, src/services/task.rs, src/db/mod.rs.)
+# `debug = 2` was added on macOS 26 as a guard: rustc ≤1.96 could emit proc-macro
+# dylibs that dyld rejected unless debuginfo matched dev's, so matching it kept
+# release builds linking. On macOS 27 it no longer seems required, but it's
+# harmless (the final binary is `strip`ped), so it stays as cheap insurance.
+# Heads-up: a `can't find crate for <proc-macro>` in release is usually a cargo
+# cache inconsistency from mixing feature configs (e.g. `cargo build --release`
+# then `tauri build`) — fix it with `cargo clean`, not by editing this profile.
 [profile.release]
 opt-level = 3
 debug = 2

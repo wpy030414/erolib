@@ -64,6 +64,17 @@ pub async fn task_retry(
         .map_err(|e| e.to_string())
 }
 
+/// Delete all terminal tasks (completed/failed/cancelled) in one shot.
+#[tauri::command]
+pub async fn tasks_clear_completed(
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<u64, String> {
+    manager
+        .clear_completed_tasks()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn task_enqueue_pixiv_bookmarks(
     cookie: String,
@@ -120,6 +131,7 @@ pub async fn task_enqueue_pixiv_work(
 pub async fn task_enqueue_ehentai_gallery(
     cookie: String,
     gallery_url: String,
+    title: String,
     manager: State<'_, Arc<TaskManager>>,
 ) -> Result<String, String> {
     let (gid, token) =
@@ -130,8 +142,16 @@ pub async fn task_enqueue_ehentai_gallery(
         gid,
         token,
     };
+    // Match the source site so completed toasts / task lists read
+    // "EHentai: …" or "EXHentai: …" instead of a raw URL.
+    let prefix = if gallery_url.contains("exhentai.org") {
+        "EXHentai"
+    } else {
+        "EHentai"
+    };
+    let task_title = format!("{prefix}: {}", title.trim());
     manager
-        .enqueue(payload, format!("EHentai gallery: {gallery_url}"))
+        .enqueue(payload, task_title)
         .await
         .map_err(|e| e.to_string())
 }

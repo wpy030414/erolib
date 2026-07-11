@@ -4,6 +4,8 @@ import type {
   Book,
   BookMetadata,
   Collection,
+  EhentaiBrowseStatus,
+  GalleryListItem,
   PixivBrowseStatus,
   PixivWork,
   SearchQuery,
@@ -21,6 +23,11 @@ export interface TaskItem {
   progress_total: number;
   retry_count: number;
   max_retries: number;
+  speed: number;
+  total_bytes: number;
+  elapsed_ms: number;
+  logs: string[];
+  book_id: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -112,6 +119,16 @@ export const api = {
 
   cancelEHentaiDownload: () => invoke<void>('ehentai_cancel_download'),
 
+  // EHentai browse grid (search + proxied thumbs + per-gallery state)
+  ehentaiSearch: (keyword: string | null, category: string | null, next: string | null, ex: boolean) =>
+    invoke<GalleryListItem[]>('ehentai_search', { keyword, category, next, ex }),
+
+  ehentaiProxyThumb: (url: string) =>
+    invoke<number[]>('ehentai_proxy_thumb', { url }),
+
+  ehentaiBrowseStatus: (galleryUrls: string[]) =>
+    invoke<EhentaiBrowseStatus[]>('ehentai_browse_status', { galleryUrls }),
+
   // Pixiv in-app login
   getPixivLogin: () =>
     invoke<{ cookie: string; user_id: string; user_name?: string } | null>('pixiv_get_login'),
@@ -121,7 +138,9 @@ export const api = {
 
   openPixivLoginWindow: () => invoke<void>('pixiv_open_login_window'),
 
-  reLoginPixiv: () => invoke<void>('pixiv_clear_login'),
+  pixivLogout: () => invoke<void>('pixiv_clear_login'),
+
+  ehentaiLogout: () => invoke<void>('ehentai_clear_login'),
 
   // Pixiv followings + per-user works
   fetchPixivFollowings: (limit: number) =>
@@ -142,6 +161,12 @@ export const api = {
 
   listPixivFollowingFeed: (page: number) =>
     invoke<PixivWork[]>('pixiv_list_following_feed', { page }),
+
+  listPixivRecommended: (page: number) =>
+    invoke<PixivWork[]>('pixiv_list_recommended', { page }),
+
+  searchPixivIllusts: (keyword: string, page: number) =>
+    invoke<PixivWork[]>('pixiv_search_illusts', { keyword, page }),
 
   pixivProxyImage: (url: string) => invoke<number[]>('pixiv_proxy_image', { url }),
 
@@ -170,14 +195,17 @@ export const api = {
   taskRetry: (taskId: string) =>
     invoke<void>('task_retry', { taskId }),
 
+  tasksClearCompleted: () =>
+    invoke<number>('tasks_clear_completed'),
+
   taskEnqueuePixivBookmarks: (cookie: string, userId: string, limit: number) =>
     invoke<string>('task_enqueue_pixiv_bookmarks', { cookie, userId, limit }),
 
   taskEnqueuePixivUserWorks: (cookie: string, targetUserId: string, limit: number) =>
     invoke<string>('task_enqueue_pixiv_user_works', { cookie, targetUserId, limit }),
 
-  taskEnqueueEhentaiGallery: (cookie: string, galleryUrl: string) =>
-    invoke<string>('task_enqueue_ehentai_gallery', { cookie, galleryUrl }),
+  taskEnqueueEhentaiGallery: (cookie: string, galleryUrl: string, title: string) =>
+    invoke<string>('task_enqueue_ehentai_gallery', { cookie, galleryUrl, title }),
 
   taskEnqueuePixivWork: (cookie: string, workId: string, title: string) =>
     invoke<string>('task_enqueue_pixiv_work', { cookie, workId, title }),

@@ -24,7 +24,7 @@ use tauri::Manager;
 
 #[cfg(target_os = "macos")]
 mod native {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     // ObjC runtime functions / symbols (linked by libobjc on macOS).
@@ -38,6 +38,11 @@ mod native {
 
     static CAPTURED: Mutex<Option<String>> = Mutex::new(None);
     static DONE: AtomicBool = AtomicBool::new(false);
+    /// The httpCookieStore pointer the delete handler deletes from (set before
+    /// `getAllCookies:` fires, since the completion block can't capture state).
+    static STORE_PTR: AtomicUsize = AtomicUsize::new(0);
+    /// Domain suffixes (lowercased, no leading dot) to match for deletion.
+    static DELETE_DOMAINS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
     /// Minimal block descriptor (no copy/dispose, no signature).
     /// The runtime only needs `size` to memcpy the block on `_Block_copy`.
@@ -245,6 +250,149 @@ mod native {
         f(store, http_sel)
     }
 
+    /// No-op completion block for `deleteCookie:completionHandler:` (1-arg:
+    /// block self only). Transmuted to the 2-arg invoke field type at the call
+    /// site — same pointer size, the runtime only calls it with the block ptr.
+    unsafe extern "C" fn noop_completion_invoke(_block: *mut std::ffi::c_void) {}
+
+    /// Completion handler for the delete pass: enumerate every cookie the store
+    /// returns, and `deleteCookie:completionHandler:` those whose domain matches
+    /// one of `DELETE_DOMAINS` on the store held in `STORE_PTR`. No captures
+    /// (flags=0). Note: WKHTTPCookieStore has NO `deleteCookie:` — it is always
+    /// `deleteCookie:completionHandler:`, with a required completion block.
+    unsafe extern "C" fn delete_handler_invoke(
+        _block: *mut std::ffi::c_void,
+        cookies: *mut std::ffi::c_void,
+    ) {
+        let store = STORE_PTR.load(Ordering::Acquire) as *mut std::ffi::c_void;
+        if cookies.is_null() || store.is_null() {
+            DONE.store(true, Ordering::SeqCst);
+            return;
+        }
+        let count_sel = sel_registerName(c"count".as_ptr());
+        let obj_at_idx_sel = sel_registerName(c"objectAtIndex:".as_ptr());
+        let domain_sel = sel_registerName(c"domain".as_ptr());
+        let utf8_sel = sel_registerName(c"UTF8String".as_ptr());
+        let delete_sel = sel_registerName(c"deleteCookie:completionHandler:".as_ptr());
+
+        type Send0RetISize =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> isize;
+        type Send1RetPtr = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            isize,
+        ) -> *mut std::ffi::c_void;
+        type SendRetPtr =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type SendDelete = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *const BlockLiteral,
+        );
+
+        // Reusable no-op completion block (deleteCookie:completionHandler:).
+        let completion_block = BlockLiteral {
+            isa: std::ptr::addr_of!(_NSConcreteStackBlock) as *mut std::ffi::c_void,
+            flags: 0,
+            reserved: 0,
+            invoke: std::mem::transmute::<
+                unsafe extern "C" fn(*mut std::ffi::c_void),
+                unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void),
+            >(noop_completion_invoke),
+            descriptor: &BLOCK_DESCRIPTOR,
+        };
+
+        let count: isize = {
+            let f: Send0RetISize = std::mem::transmute(objc_msgSend as *const ());
+            f(cookies, count_sel)
+        };
+        let suffixes = DELETE_DOMAINS.lock().unwrap();
+        let mut deleted = 0usize;
+        for i in 0..count {
+            let cookie = {
+                let f: Send1RetPtr = std::mem::transmute(objc_msgSend as *const ());
+                f(cookies, obj_at_idx_sel, i)
+            };
+            let domain_ptr = {
+                let f: SendRetPtr = std::mem::transmute(objc_msgSend as *const ());
+                f(cookie, domain_sel)
+            };
+            let dom_raw = nsstring_utf8(domain_ptr, utf8_sel).unwrap_or_default();
+            let dom = dom_raw.trim_start_matches('.').to_ascii_lowercase();
+            let matches = suffixes
+                .iter()
+                .any(|s| dom == s.as_str() || dom.ends_with(&format!(".{s}")));
+            if matches {
+                let f: SendDelete = std::mem::transmute(objc_msgSend as *const ());
+                f(store, delete_sel, cookie, &completion_block);
+                deleted += 1;
+            }
+        }
+        tracing::info!(target: "erolib::cookies", deleted, "deleted matching cookies");
+        DONE.store(true, Ordering::SeqCst);
+    }
+
+    /// Delete every cookie whose domain matches one of `suffixes` (lowercased,
+    /// no leading dot) from the shared `defaultDataStore`. Blocks the calling
+    /// thread until the `getAllCookies:` completion fires or 2.5s elapse. The
+    /// actual `deleteCookie:` calls are fire-and-forget on the store's queue.
+    pub fn delete_cookies_for(suffixes: Vec<String>) -> bool {
+        {
+            let mut guard = DELETE_DOMAINS.lock().unwrap();
+            guard.clear();
+            guard.extend(suffixes.into_iter().map(|s| s.to_ascii_lowercase()));
+        }
+        reset_state();
+        unsafe {
+            let cls = objc_getClass(c"WKWebsiteDataStore".as_ptr());
+            if cls.is_null() {
+                return false;
+            }
+            type SendRetPtr =
+                unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            let f: SendRetPtr = std::mem::transmute(objc_msgSend as *const ());
+            let default_sel = sel_registerName(c"defaultDataStore".as_ptr());
+            let store = f(cls, default_sel);
+            if store.is_null() {
+                return false;
+            }
+            let http_sel = sel_registerName(c"httpCookieStore".as_ptr());
+            let cookie_store = f(store, http_sel);
+            if cookie_store.is_null() {
+                return false;
+            }
+            // deleteCookie: lives on WKHTTPCookieStore, NOT WKWebsiteDataStore —
+            // storing the dataStore here crashes with an unrecognized selector.
+            STORE_PTR.store(cookie_store as usize, Ordering::Release);
+
+            let block = BlockLiteral {
+                isa: std::ptr::addr_of!(_NSConcreteStackBlock) as *mut std::ffi::c_void,
+                flags: 0,
+                reserved: 0,
+                invoke: delete_handler_invoke,
+                descriptor: &BLOCK_DESCRIPTOR,
+            };
+            let get_all_sel = sel_registerName(c"getAllCookies:".as_ptr());
+            type SendBlock = unsafe extern "C" fn(
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+                *const BlockLiteral,
+            );
+            let f: SendBlock = std::mem::transmute(objc_msgSend as *const ());
+            f(cookie_store, get_all_sel, &block);
+
+            for _ in 0..250 {
+                if DONE.load(Ordering::SeqCst) {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            tracing::warn!(target: "erolib::cookies", "native delete timed out");
+            false
+        }
+    }
+
     /// Capture ALL cookies (incl. HttpOnly) from the shared WKWebView cookie
     /// store.  Tries both `defaultDataStore` and `nonPersistentDataStore` since
     /// Tauri's webview may use either.
@@ -277,6 +425,9 @@ mod native {
 mod native {
     pub fn capture() -> Option<String> {
         None
+    }
+    pub fn delete_cookies_for(_suffixes: Vec<String>) -> bool {
+        false
     }
 }
 
@@ -375,6 +526,22 @@ pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
         }
     }
     None
+}
+
+/// Delete cookies whose domain matches one of `host_suffixes` from the shared
+/// WKWebView data store (macOS). This wipes the in-app browser's "remember me"
+/// state for the given site without touching the main window's localStorage or
+/// the *other* source's cookies. No-op (returns `true`) on non-macOS.
+pub fn clear_section_cookies(host_suffixes: &[&str]) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        native::delete_cookies_for(host_suffixes.iter().map(|s| (*s).to_string()).collect())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = host_suffixes;
+        true
+    }
 }
 
 /// Run `with_webview` synchronously on the main thread and capture the native
