@@ -244,7 +244,7 @@ async function startLogin() {
     await api.openPixivLoginWindow();
   } catch (e) {
     loggingIn.value = false;
-    console.error('opening login window:', e);
+    toast.addToast('error', t('pixiv.login.loginFailed', { error: String(e) }));
   }
 }
 
@@ -253,8 +253,9 @@ async function startLogin() {
 async function onLogout() {
   try {
     await api.pixivLogout();
+    toast.addToast('success', t('pixiv.login.loggedOut'));
   } catch (e) {
-    console.error('pixiv logout:', e);
+    toast.addToast('error', t('pixiv.login.logoutFailed', { error: String(e) }));
   }
   store.resetAll();
   login.value = null;
@@ -300,6 +301,7 @@ onMounted(async () => {
         user_name: evt.payload.user_name,
       };
       loggingIn.value = false;
+      toast.addToast('success', t('pixiv.login.loggedInToast'));
     },
   );
 

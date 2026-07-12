@@ -12,6 +12,7 @@
           :path="item.icon"
           :view-box="item.viewBox"
           :fill-rule="item.fillRule"
+          :brand="item.brand"
           :size="24"
         />
       </div>
@@ -41,13 +42,15 @@ const ehStore = useEhentaiBrowseStore();
 
 interface NavItem {
   path: string;
-  labelKey: 'nav.library' | 'nav.pixiv' | 'nav.ehentai' | 'nav.tasks' | 'nav.settings';
+  labelKey: 'nav.library' | 'nav.pixiv' | 'nav.ehentai' | 'nav.ahentai' | 'nav.tasks' | 'nav.settings';
   /** Icon path (mdi or brand), rendered monochrome via currentColor. */
   icon: string;
   /** Override the 24×24 viewBox for brand marks drawn on another grid. */
   viewBox?: string;
   /** `evenodd` for paths with holes. */
   fillRule?: 'nonzero' | 'evenodd';
+  /** True for brand marks that need an 0.75× inset to match MDI visual weight. */
+  brand?: boolean;
 }
 
 /** Pixiv brand mark (single 24×24 path). The source svg is solid black, so we
@@ -62,10 +65,16 @@ const PIXIV_PATH =
 const EHENTAI_PATH =
   'M50 50 h20 v20 h-20 Z M20 100 h30 v20 h-30 Z M0 0 h20 v120 h-20 Z M20 0 h30 v20 h-30 Z M80 0 h20 v120 h-20 Z M120 0 h20 v120 h-20 Z M100 50 h20 v20 h-20 Z M20 50 h20 v20 h-20 Z';
 
+/** AHentai "AH" monogram — pixel-perfect trace of the asmhentai.com favicon
+ *  (16×16 ICO, thresholded to solid blocks), scaled into the 24×24 MDI grid. */
+const AHENTAI_PATH =
+  'M6.0,0.0h9.0v1.5h-9.0Z M19.5,0.0h4.5v1.5h-4.5Z M6.0,1.5h9.0v1.5h-9.0Z M19.5,1.5h4.5v1.5h-4.5Z M6.0,3.0h9.0v1.5h-9.0Z M19.5,3.0h4.5v1.5h-4.5Z M4.5,4.5h10.5v1.5h-10.5Z M19.5,4.5h4.5v1.5h-4.5Z M4.5,6.0h10.5v1.5h-10.5Z M19.5,6.0h4.5v1.5h-4.5Z M4.5,7.5h10.5v1.5h-10.5Z M19.5,7.5h4.5v1.5h-4.5Z M4.5,9.0h19.5v1.5h-19.5Z M3.0,10.5h21.0v1.5h-21.0Z M3.0,12.0h4.5v1.5h-4.5Z M9.0,12.0h15.0v1.5h-15.0Z M3.0,13.5h4.5v1.5h-4.5Z M9.0,13.5h6.0v1.5h-6.0Z M19.5,13.5h4.5v1.5h-4.5Z M1.5,15.0h13.5v1.5h-13.5Z M19.5,15.0h4.5v1.5h-4.5Z M1.5,16.5h13.5v1.5h-13.5Z M19.5,16.5h4.5v1.5h-4.5Z M1.5,18.0h13.5v1.5h-13.5Z M19.5,18.0h4.5v1.5h-4.5Z M1.5,19.5h4.5v1.5h-4.5Z M9.0,19.5h6.0v1.5h-6.0Z M19.5,19.5h4.5v1.5h-4.5Z M0.0,21.0h6.0v1.5h-6.0Z M9.0,21.0h6.0v1.5h-6.0Z M19.5,21.0h4.5v1.5h-4.5Z M0.0,22.5h6.0v1.5h-6.0Z M9.0,22.5h6.0v1.5h-6.0Z M19.5,22.5h4.5v1.5h-4.5Z';
+
 const navItems: NavItem[] = [
   { path: '/library', labelKey: 'nav.library', icon: mdiBookOutline },
-  { path: '/pixiv', labelKey: 'nav.pixiv', icon: PIXIV_PATH },
-  { path: '/ehentai', labelKey: 'nav.ehentai', icon: EHENTAI_PATH, viewBox: '0 0 140 120' },
+  { path: '/pixiv', labelKey: 'nav.pixiv', icon: PIXIV_PATH, brand: true },
+  { path: '/ehentai', labelKey: 'nav.ehentai', icon: EHENTAI_PATH, viewBox: '0 0 140 120', brand: true },
+  { path: '/ahentai', labelKey: 'nav.ahentai', icon: AHENTAI_PATH, viewBox: '0 0 24 24', brand: true },
   { path: '/tasks', labelKey: 'nav.tasks', icon: mdiClipboardList },
   { path: '/settings', labelKey: 'nav.settings', icon: mdiCogOutline },
 ];

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -19,7 +20,7 @@ use crate::models::{BookMetadata, BookSource};
 use crate::services::pixiv::{find_existing_by_source, PixivClient};
 use crate::services::task::{TaskPayload, TaskSnapshot, TaskSource, TaskStatus};
 use crate::services::aria2::ProgressUpdate;
-use crate::services::{Aria2Client, EhentaiClient, LibraryService, StorageService};
+use crate::services::{Aria2Client, AhentaiClient, EhentaiClient, LibraryService, StorageService};
 
 /// Aggregated per-slot progress for one in-flight image download: (completed
 /// bytes, total bytes, instantaneous speed). Shared between the per-gid aria2
@@ -837,6 +838,9 @@ async fn process_task(
         }
         TaskPayload::PixivSingleWork { cookie, work_id } => {
             process_pixiv_single(manager.clone(), task, runtime.clone(), &temp_dir, cookie, work_id).await
+        }
+        TaskPayload::AhentaiGallery { gallery_id, title } => {
+            process_ahentai(manager.clone(), task, runtime.clone(), &temp_dir, gallery_id, title).await
         }
     }
 }
@@ -1871,6 +1875,237 @@ async fn process_ehentai(
 
     let _ = manager.set_book_id(&task.id, &book_id).await;
     let _ = manager.append_log(&task.id, &format!("registered book: {title}")).await;
+
+    manager
+        .set_progress(&task.id, total, total, "done")
+        .await?;
+    let _ = manager.append_log(&task.id, "done").await;
+    let _ = manager.emit_progress(&task.id).await;
+    Ok(Some(book_id))
+}
+
+// ====================== AHentai processing ======================
+
+async fn process_ahentai(
+    manager: Arc<TaskManager>,
+    task: &crate::services::task::Task,
+    runtime: Arc<TaskRuntime>,
+    _temp_dir: &std::path::Path,
+    gallery_id: &str,
+    fallback_title: &str,
+) -> Result<Option<String>> {
+    let client = AhentaiClient::new().context("build ahentai client")?;
+    let library = LibraryService::new(manager.db.clone(), manager.storage.clone());
+
+    manager
+        .set_progress(&task.id, 0, 0, "fetching metadata...")
+        .await?;
+    let _ = manager.append_log(&task.id, "fetching gallery metadata...").await;
+    let _ = manager.emit_progress(&task.id).await;
+
+    let meta = client
+        .fetch_gallery_meta(gallery_id)
+        .await
+        .context("fetch gallery meta")?;
+
+    let total = meta.page_count as i64;
+    if total == 0 {
+        anyhow::bail!("gallery {gallery_id} has 0 pages (missing or deleted?)");
+    }
+
+    // Prefer the scraped title; fall back to the task title.
+    let title = if meta.title.is_empty() {
+        fallback_title.to_string()
+    } else {
+        meta.title.clone()
+    };
+
+    manager
+        .set_progress(&task.id, 0, total, "downloading...")
+        .await?;
+    let _ = manager
+        .append_log(&task.id, &format!("downloading {total} pages"))
+        .await;
+    let _ = manager.emit_progress(&task.id).await;
+
+    let load_dir = meta.load_dir.clone();
+    let gid = gallery_id.to_string();
+
+    // Download all pages concurrently (8 at a time). asmhentai's image CDN
+    // (images.asmhentai.com) doesn't have the same harsh rate-limiting as
+    // e-hentai, so a single concurrent download phase suffices.
+    let sem = Arc::new(Semaphore::new(8));
+    let mut results: Vec<Option<Vec<u8>>> = vec![None; total as usize];
+    let mut set: JoinSet<(usize, Result<Vec<u8>>)> = JoinSet::new();
+
+    for page in 1..=total {
+        let img_url = format!(
+            "https://images.asmhentai.com/{}/{}/{}.jpg",
+            load_dir, gid, page
+        );
+        let permit = sem.clone().acquire_owned().await.unwrap();
+        // Clone just the reqwest::Client (cheap — it's an Arc inside).
+        let client_http = client.http().clone();
+        let referer = format!("{}/", crate::services::ahentai::AHENTAI_BASE);
+        let runtime = Arc::clone(&runtime);
+        let manager = Arc::clone(&manager);
+        let task_id = task.id.clone();
+        let current = page;
+        let total_u = total;
+
+        set.spawn(async move {
+            let _permit = permit;
+            if runtime.cancelled.load(Ordering::Relaxed) {
+                return (current as usize, Err(anyhow::anyhow!("cancelled")));
+            }
+            while runtime.paused.load(Ordering::Relaxed) {
+                if runtime.cancelled.load(Ordering::Relaxed) {
+                    return (current as usize, Err(anyhow::anyhow!("cancelled")));
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+
+            let t0 = Instant::now();
+            let result = async {
+                let resp = client_http
+                    .get(&img_url)
+                    .header("Referer", &referer)
+                    .send()
+                    .await
+                    .context("download image")?;
+                let bytes = resp.bytes().await.context("read bytes")?.to_vec();
+                if bytes.len() < 200 {
+                    anyhow::bail!("suspiciously small image");
+                }
+                Ok(bytes)
+            }
+            .await;
+
+            let _ = manager
+                .set_progress(
+                    &task_id,
+                    current,
+                    total_u,
+                    &format!("page {current}/{total_u}"),
+                )
+                .await;
+            // After set_progress reset speed to 0, push a per-page speed so the
+            // frontend readout shows progress. The EMA inside set_speed smooths
+            // the jitter across concurrent slots.
+            if let Ok(ref bytes) = result {
+                let elapsed = t0.elapsed().as_secs_f64().max(0.05);
+                let speed = (bytes.len() as f64 / elapsed) as i64;
+                if speed > 0 {
+                    let _ = manager.set_speed(&task_id, speed).await;
+                }
+            }
+            let _ = manager.append_log(&task_id, &format!("page {current}/{total_u} ok")).await;
+            let _ = manager.emit_progress(&task_id).await;
+
+            (current as usize, result)
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok((idx, Ok(bytes))) => {
+                let len = bytes.len();
+                results[idx - 1] = Some(bytes);
+                let _ = manager.add_bytes(&task.id, len as i64).await;
+            }
+            Ok((idx, Err(e))) => {
+                let _ = manager
+                    .append_log(&task.id, &format!("page {idx} failed: {e}"))
+                    .await;
+            }
+            Err(e) => {
+                let _ = manager
+                    .append_log(&task.id, &format!("download task panicked: {e}"))
+                    .await;
+            }
+        }
+    }
+
+    if runtime.cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("cancelled");
+    }
+
+    let images: Vec<Vec<u8>> = results.into_iter().flatten().collect();
+    if images.is_empty() {
+        anyhow::bail!("no images downloaded from gallery {gallery_id}");
+    }
+
+    manager
+        .set_progress(&task.id, total, total, "packaging...")
+        .await?;
+    let _ = manager.append_log(&task.id, "packaging cb7...").await;
+    let _ = manager.emit_progress(&task.id).await;
+
+    // Merge all tag-like metadata for the book.
+    let mut all_tags: Vec<String> = Vec::new();
+    all_tags.extend(meta.tags.clone());
+    all_tags.extend(meta.artists.clone());
+    all_tags.extend(meta.groups.clone());
+    all_tags.extend(meta.languages.clone());
+    if !meta.category.is_empty() {
+        all_tags.push(meta.category.clone());
+    }
+    all_tags.extend(meta.parodies.clone());
+
+    // Uploader from the gallery page's artist list — join with ", ".
+    let author = if meta.artists.is_empty() {
+        None
+    } else {
+        Some(meta.artists.join(", "))
+    };
+
+    let source_url = format!("{}/g/{}/", crate::services::ahentai::AHENTAI_BASE, gid);
+    let source = BookSource {
+        plugin: "asmhentai".into(),
+        source_url: source_url.clone(),
+        source_post_id: Some(gid.to_string()),
+        scraped_at: Some(Utc::now()),
+        author: author.clone(),
+        author_id: None,
+        published_at: None,
+    };
+
+    let file_path = manager
+        .storage
+        .create_cb7(
+            &images,
+            &BookMetadata {
+                title: title.clone(),
+                tags: all_tags.clone(),
+                author,
+                source_plugin: Some("asmhentai".into()),
+                source_url: Some(source_url),
+                source_post_id: Some(gid.to_string()),
+                scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
+                ..Default::default()
+            },
+        )
+        .context("create cb7")?;
+    let _ = manager.append_log(&task.id, "packaged cb7 ok").await;
+
+    let book_id = Uuid::new_v4().to_string();
+    library
+        .register_stored_book(
+            &book_id,
+            &title,
+            &file_path,
+            images.len() as i32,
+            Some(&source),
+            &all_tags,
+            None,
+        )
+        .await
+        .context("register book")?;
+
+    let _ = manager.set_book_id(&task.id, &book_id).await;
+    let _ = manager
+        .append_log(&task.id, &format!("registered book: {title}"))
+        .await;
 
     manager
         .set_progress(&task.id, total, total, "done")

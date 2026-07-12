@@ -44,6 +44,14 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 - OPDS feed（`services/opds.rs`）+ RSS feed（`services/rss.rs`）都 `SELECT * FROM books`；`/download/:id`（OPDS + RSS 共用 `serve_download`）发整本、`/covers/:id` 发封面。
 - 前端 `stores/settings.ts` 管 opds/rss 的 port/running/busy/url/error + `autoStartAll()`（`App.vue` onMounted 调，开机即跑）。
 
+## ASMHentai 浏览
+
+- 无需登录，公开站点 `asmhentai.com`；浏览式（`stores/ahentai-browse.ts`）：关键词搜索，无 tab 无分类 chip，48 条/前端页（源站 20 条/页缓冲）。
+- listing 页仅提取 id / title / thumb_url / category；`page_count` 始终 0、`uploader` 始终 None（节省带宽简化设计）。下载时才通过 `fetch_gallery_meta` 抓详情页补全标签 / 作者 / 页数，并用 `strip_tag_count()` 清洗 tag 名末尾的 ` (12,345)` 计数后缀。
+- 卡片两态（无页码 badge、无作者副标题）：本地有 → 阅读器；未下载 → 入队下载；下载中走 `task://progress` 监听。
+- 图片 CDN：`images.asmhentai.com/{load_dir}/{id}/{page}.jpg`；封面走 `ahentai_proxy_thumb` 代理 + IndexedDB 缓存。
+- 任务标题统一 `ASMHentai: {title}`；`process_ahentai` 走 JoinSet + Semaphore(8) 并发下载，含 `add_bytes` + `set_speed` 实时追踪。
+
 ## 登录与 cookie 采取
 
 - **Pixiv**：`commands/pixiv_login.rs` 开应用内浏览器，**不导航**到设置页，登录后直接 capture cookie；`services/pixiv.rs` `fetch_current_user_id` 先从 PHPSESSID `{user_id}_{secret}` 解析（零网络），失败再回退抓重定向。

@@ -114,6 +114,36 @@
             <dt>{{ row.label }}</dt>
             <dd>{{ row.value }}</dd>
           </template>
+          <dt>{{ t('lib.meta.tags') }}</dt>
+          <dd>
+            <div v-if="metaTags.length" class="tag-chips">
+              <span
+                v-for="tag in metaTags"
+                :key="tag"
+                class="tag-chip tag-chip--readonly"
+              >{{ tag }}</span>
+            </div>
+            <span v-else>—</span>
+          </dd>
+          <template v-for="row in metaRowsMid(metaBook)" :key="row.label">
+            <dt>{{ row.label }}</dt>
+            <dd>{{ row.value }}</dd>
+          </template>
+          <dt>{{ t('lib.meta.sourceUrl') }}</dt>
+          <dd>
+            <a
+              v-if="metaBook?.source_url"
+              class="meta-link"
+              :href="metaBook!.source_url"
+              target="_blank"
+              rel="noreferrer"
+            >{{ metaBook!.source_url }}</a>
+            <span v-else>—</span>
+          </dd>
+          <template v-for="row in metaRowsAfter(metaBook)" :key="row.label">
+            <dt>{{ row.label }}</dt>
+            <dd>{{ row.value }}</dd>
+          </template>
         </dl>
       </div>
     </dialog>
@@ -121,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import {
@@ -261,8 +291,13 @@ async function onImport() {
     { name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'pdf'] },
   ]);
   if (typeof file === 'string') {
-    await api.importBook(file);
-    await libraryStore.refresh();
+    try {
+      const book = await api.importBook(file);
+      await libraryStore.refresh();
+      toast.addToast('success', t('lib.imported', { title: book.title }));
+    } catch (e) {
+      toast.addToast('error', t('lib.importFailed', { error: String(e) }));
+    }
   }
 }
 
@@ -273,8 +308,7 @@ async function deleteBookItem(book: Book) {
     void deleteThumb(book.id);
     toast.addToast('success', t('lib.deleted', { title: book.title }));
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error(t('common.error', { message: String(e) }));
+    toast.addToast('error', t('lib.deleteFailed', { error: String(e) }));
   }
 }
 
@@ -289,7 +323,12 @@ async function saveToLocal(book: Book) {
     ],
   });
   if (dest) {
-    await api.saveBook(book.id, dest);
+    try {
+      await api.saveBook(book.id, dest);
+      toast.addToast('success', t('lib.saved', { title: book.title }));
+    } catch (e) {
+      toast.addToast('error', t('lib.saveFailed', { error: String(e) }));
+    }
   }
 }
 
@@ -310,19 +349,37 @@ function onDialogBackdrop(e: MouseEvent) {
   if (e.target === e.currentTarget) closeMeta();
 }
 
-/** Ordered label/value rows shown in the metadata dialog. */
+/** Tags from the comma-joined DB string, split for chip display. */
+const metaTags = computed<string[]>(() =>
+  (metaBook.value?.tags ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0),
+);
+
+/** Meta rows before tags (title, author). */
 function metaRows(book: Book): { label: string; value: string }[] {
   return [
     { label: t('lib.meta.title'), value: book.title || '—' },
     { label: t('lib.meta.author'), value: book.author || '—' },
+  ];
+}
+
+/** Meta rows between tags and sourceUrl (published, source, postId). */
+function metaRowsMid(book: Book): { label: string; value: string }[] {
+  return [
+    { label: t('lib.meta.published'), value: formatDate(book.published_at) || '—' },
     { label: t('lib.meta.source'), value: book.source_plugin || '—' },
     { label: t('lib.meta.postId'), value: book.source_post_id || '—' },
-    { label: t('lib.meta.published'), value: formatDate(book.published_at) || '—' },
-    { label: t('lib.meta.pages'), value: String(book.page_count ?? 0) },
+  ];
+}
+
+/** Meta rows after sourceUrl (format, pages, size, imported, scraped). */
+function metaRowsAfter(book: Book): { label: string; value: string }[] {
+  return [
     { label: t('lib.meta.format'), value: (book.format || '').toUpperCase() || '—' },
+    { label: t('lib.meta.pages'), value: String(book.page_count ?? 0) },
     { label: t('lib.meta.size'), value: formatSize(book.file_size) },
-    { label: t('lib.meta.tags'), value: book.tags || '—' },
-    { label: t('lib.meta.sourceUrl'), value: book.source_url || '—' },
     { label: t('lib.meta.imported'), value: formatDate(book.created_at) },
     { label: t('lib.meta.scraped'), value: formatDate(book.scraped_at) || '—' },
   ];
@@ -419,6 +476,16 @@ function metaRows(book: Book): { label: string; value: string }[] {
   word-break: break-all;
 }
 
+.meta-link {
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.meta-link:hover {
+  text-decoration: underline;
+}
+
 .tag-chips {
   display: flex;
   flex-wrap: wrap;
@@ -465,6 +532,12 @@ function metaRows(book: Book): { label: string; value: string }[] {
 .tag-chip__count {
   font-size: 11px;
   opacity: 0.75;
+}
+
+/* Read-only chips in the metadata dialog — same look, no interaction. */
+.tag-chip--readonly {
+  cursor: default;
+  pointer-events: none;
 }
 
 /* Non-interactive ellipsis chip shown when the chip row hits its cap. */

@@ -28,7 +28,7 @@
           <span class="md3-card__subtitle">&ldquo;Do one thing, and do it well.&rdquo;</span>
         </div>
         <span class="md3-card__header-action">
-          <BrandIcon :path="BILIBILI_PATH" fill-rule="evenodd" :size="22" />
+          <BrandIcon :path="BILIBILI_PATH" fill-rule="evenodd" :size="22" brand />
         </span>
       </a>
     </div>
