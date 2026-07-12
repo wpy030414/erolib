@@ -1,12 +1,22 @@
 name: build
 
 # Builds macOS arm64 (.dmg) and Windows amd64 (.msi) installers on every push
-# to main, and on manual dispatch. Artifacts are uploaded per-platform.
+# to main, and on manual dispatch. After all platform builds complete,
+# artifacts are published as a GitHub Release.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+env:
+  # Safety net: force any remaining Node 20 actions (e.g. rust-cache,
+  # rust-toolchain) onto the Node 24 runtime.  All actions/* are already
+  # on Node-24-native major versions.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write # needed by gh release create
 
 jobs:
   build:
@@ -23,12 +33,14 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
+          # Disable v5's automatic package-manager cache — pnpm manages its own.
+          package-manager-cache: false
 
       - name: Enable pnpm
         run: corepack enable pnpm
@@ -49,11 +61,77 @@ jobs:
       - name: Build installers (tauri)
         run: pnpm tauri build --target ${{ matrix.target }}
 
+      - name: Strip language suffix from MSI filename
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd "src-tauri/target/${{ matrix.target }}/release/bundle/msi"
+          for f in *_en-US.msi; do
+            [ -f "$f" ] || continue
+            new="${f//_en-US/}"
+            mv "$f" "$new"
+            echo "Renamed $f → $new"
+          done
+
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: EroLib-${{ matrix.label }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
           if-no-files-found: error
+
+  # ── Release ──────────────────────────────────────────────────────────
+  # Waits for ALL platform builds, then publishes a single GitHub Release
+  # with every installer attached.  The release tag & title are driven by
+  # the version field in src-tauri/tauri.conf.json; the body is the commit
+  # message that triggered the build.
+  # ──────────────────────────────────────────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          TAG="${VER}"
+          TITLE="EroLib v${VER}"
+          # Use the triggering commit's message as the release body.
+          BODY="$(git log -1 --pretty=%B)"
+
+          echo "→ version : ${VER}"
+          echo "→ tag     : ${TAG}"
+          echo "→ title   : ${TITLE}"
+          ls -R artifacts/
+
+          # Idempotent: if we're re-running for the same version (manual
+          # dispatch), drop the old release + tag first.
+          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
+          sleep 2
+
+          gh release create "${TAG}" \
+            --title "${TITLE}" \
+            --notes "${BODY}" \
+            artifacts/EroLib-macos-arm64/**/*.dmg \
+            artifacts/EroLib-windows-amd64/**/*.msi
+
+          echo "✅ Release ${TAG} published"

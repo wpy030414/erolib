@@ -3,6 +3,7 @@ import Library from '@/views/Library.vue';
 import Reader from '@/views/Reader.vue';
 import PixivDownload from '@/views/PixivDownload.vue';
 import EHentai from '@/views/EHentai.vue';
+import AHentai from '@/views/AHentai.vue';
 import Tasks from '@/views/Tasks.vue';
 import Settings from '@/views/Settings.vue';
 
@@ -12,6 +13,7 @@ const routes = [
   { path: '/reader/:id', component: Reader, props: true },
   { path: '/pixiv', component: PixivDownload },
   { path: '/ehentai', component: EHentai },
+  { path: '/ahentai', component: AHentai },
   { path: '/tasks', component: Tasks },
   { path: '/settings', component: Settings },
 ];

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import type {
+  AhentaiBrowseStatus,
+  AhentaiGalleryItem,
   Book,
   BookMetadata,
   Collection,
@@ -134,6 +136,16 @@ export const api = {
   ehentaiBrowseStatus: (galleryUrls: string[]) =>
     invoke<EhentaiBrowseStatus[]>('ehentai_browse_status', { galleryUrls }),
 
+  // AHentai browse grid (no login — search + proxied thumbs + per-gallery state)
+  ahentaiSearch: (keyword: string | null, page: number | null) =>
+    invoke<AhentaiGalleryItem[]>('ahentai_search', { keyword, page }),
+
+  ahentaiProxyThumb: (url: string) =>
+    invoke<number[]>('ahentai_proxy_thumb', { url }),
+
+  ahentaiBrowseStatus: (galleryIds: string[]) =>
+    invoke<AhentaiBrowseStatus[]>('ahentai_browse_status', { galleryIds }),
+
   // Pixiv in-app login
   getPixivLogin: () =>
     invoke<{ cookie: string; user_id: string; user_name?: string } | null>('pixiv_get_login'),
@@ -214,6 +226,9 @@ export const api = {
 
   taskEnqueuePixivWork: (cookie: string, workId: string, title: string) =>
     invoke<string>('task_enqueue_pixiv_work', { cookie, workId, title }),
+
+  taskEnqueueAhentaiGallery: (galleryId: string, title: string) =>
+    invoke<string>('task_enqueue_ahentai_gallery', { galleryId, title }),
 
   openFile: (filters?: Array<{ name: string; extensions: string[] }>) =>
     dialogOpen({

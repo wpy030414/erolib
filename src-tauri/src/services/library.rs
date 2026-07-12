@@ -36,7 +36,7 @@ impl LibraryService {
             .to_string();
 
         let format = detect_format(&file_name);
-        let page_count = count_archive_pages(path, &format).unwrap_or(0);
+        let mut page_count = count_archive_pages(path, &format).unwrap_or(0);
 
         let book_id = Uuid::new_v4().to_string();
         let dest = self
@@ -63,6 +63,12 @@ impl LibraryService {
             .unwrap_or(file_stem);
         let tags = meta.as_ref().map(|m| m.tags.clone()).unwrap_or_default();
         let delays = meta.as_ref().and_then(|m| m.delays.clone());
+        // Animated books (ugoira) contain per-frame delays and are logically a
+        // single page — the reader plays the jpg sequence on a timer. The raw
+        // image count (count_archive_pages) would be the frame count, not 1.
+        if delays.as_deref().map_or(false, |d| !d.is_empty()) {
+            page_count = 1;
+        }
         // Only reconstruct a BookSource when the archive actually carried an
         // erolib source plugin; otherwise leave source as None.
         let source = meta.as_ref().and_then(|m| {
@@ -118,6 +124,13 @@ impl LibraryService {
             return Err(AppError::Other("No images provided".into()));
         }
 
+        // Animated books: frame count ≠ page count (always 1 logical page).
+        let page_count = if metadata.delays.as_deref().map_or(false, |d| !d.is_empty()) {
+            1
+        } else {
+            images.len() as i32
+        };
+
         let book_id = Uuid::new_v4().to_string();
         let file_path = self.storage.create_cb7(&images, &metadata)?;
 
@@ -137,7 +150,7 @@ impl LibraryService {
             file_path: file_path.to_string_lossy().to_string(),
             file_size,
             format: "cb7".into(),
-            page_count: images.len() as i32,
+            page_count,
             cover_path,
             source_plugin: None,
             source_url: None,

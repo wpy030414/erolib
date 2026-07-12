@@ -170,7 +170,7 @@ async function startLogin() {
     await api.openEHentaiLoginWindow();
   } catch (e) {
     loggingIn.value = false;
-    console.error('opening login window:', e);
+    toast.addToast('error', t('eh.login.loginFailed', { error: String(e) }));
   }
 }
 
@@ -179,8 +179,9 @@ async function startLogin() {
 async function onLogout() {
   try {
     await api.ehentaiLogout();
+    toast.addToast('success', t('eh.login.loggedOut'));
   } catch (e) {
-    console.error('ehentai logout:', e);
+    toast.addToast('error', t('eh.login.logoutFailed', { error: String(e) }));
   }
   cookie.value = '';
   store.resetAll();
@@ -219,6 +220,7 @@ onMounted(async () => {
       cookie.value = evt.payload.cookie;
       loggedIn.value = true;
       loggingIn.value = false;
+      toast.addToast('success', t('eh.login.loggedInToast'));
     }
   });
 

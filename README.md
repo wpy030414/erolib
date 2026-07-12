@@ -15,7 +15,7 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 
 </div>
 
-> **EroLib** 是一个桌面端的本地漫画库管理器，内置 **Pixiv** 与 **EHentai / EXHentai** 的浏览式下载，开箱即用的 **CB7** 书库与沉浸式阅读器，并通过 **OPDS / RSS** 把书库共享给同一局域网内的任何设备。它把「找图 → 下本 → 看本」收进一个连贯的 Material Design 3 界面里，一切数据都留在你自己的机器上。
+> **EroLib** 是一个桌面端的本地漫画库管理器，内置 **Pixiv**、**EHentai / EXHentai** 与 **ASMHentai** 的浏览式下载，开箱即用的 **CB7** 书库与沉浸式阅读器，并通过 **OPDS / RSS** 把书库共享给同一局域网内的任何设备。它把「找图 → 下本 → 看本」收进一个连贯的 Material Design 3 界面里，一切数据都留在你自己的机器上。
 
 <div align="center">
 
@@ -50,6 +50,11 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 - 登录后 **关键词搜索 + 10 大分类**（同人志 / 漫画 / 画家CG / 游戏CG / 欧美 / 非H / 画像集 / Cosplay / 亚洲 / 杂项）多选并集筛选
 - **EXHentai 一键切换**（需 exhentai 资格）；未登录时自动隐藏搜索框与 EXHentai 开关
 - 同样三态卡片 + 懒加载无限滚动
+
+### 🔞 ASMHentai 浏览式下载
+- 无需登录，直接浏览 `asmhentai.com` 首页与关键词搜索
+- 卡片两态（已下载 → 阅读器；未下载 → 一键入队），无页码 badge
+- 下载时自动抓取详情页补充标签 / 作者 / 页数元信息
 
 ### ⚙️ 任务系统（aria2 后端）
 - 所有下载统一经 **TaskManager + aria2**，无进程内回退

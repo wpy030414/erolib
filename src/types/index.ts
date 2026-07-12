@@ -129,3 +129,21 @@ export interface CardStatus {
 export interface EhentaiBrowseStatus extends CardStatus {
   galleryUrl: string;
 }
+
+/** A gallery row from an asmhentai.com listing (mirrors backend AhentaiGalleryItem). */
+export interface AhentaiGalleryItem {
+  id: string;
+  title: string;
+  thumbUrl: string;
+  pageCount: number;
+  /** Uploader/artist name extracted from the title bracket convention. */
+  uploader?: string;
+  /** Category display name, e.g. "Doujinshi", "Manga". */
+  category: string;
+}
+
+/** Local state of an AHentai gallery in the browse grid (mirrors backend
+ *  AhentaiBrowseStatus). Keyed by gallery numeric ID. */
+export interface AhentaiBrowseStatus extends CardStatus {
+  galleryId: string;
+}
