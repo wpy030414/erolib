@@ -1,6 +1,6 @@
 {
   "productName": "EroLib",
-  "version": "26.7.12+0240",
+  "version": "26.7.12+1520",
   "identifier": "im.xrl.erolib",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -49,7 +49,7 @@
       "binaries/aria2c-bin/windows/aria2c.exe"
     ],
     "shortDescription": "EroLib — 工口图书馆",
-    "targets": "all"
+    "targets": ["dmg", "msi"]
   },
   "plugins": {}
 }

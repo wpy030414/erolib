@@ -417,6 +417,7 @@ mod native {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 mod native {
     pub fn capture() -> Option<String> {
         None
@@ -555,6 +556,7 @@ fn get_wkwebview_ptr(window: &tauri::WebviewWindow) -> Option<*mut std::ffi::c_v
             }
             #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             {
+                let _ = &webview;
                 let _ = tx.send(None);
             }
         })

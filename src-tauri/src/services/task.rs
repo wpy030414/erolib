@@ -19,6 +19,7 @@ pub fn default_task_payload() -> TaskPayload {
 pub enum TaskSource {
     Pixiv,
     Ehentai,
+    Ahentai,
 }
 
 impl fmt::Display for TaskSource {
@@ -26,6 +27,7 @@ impl fmt::Display for TaskSource {
         match self {
             TaskSource::Pixiv => write!(f, "pixiv"),
             TaskSource::Ehentai => write!(f, "ehentai"),
+            TaskSource::Ahentai => write!(f, "ahentai"),
         }
     }
 }
@@ -36,6 +38,7 @@ impl FromStr for TaskSource {
         match s {
             "pixiv" => Ok(TaskSource::Pixiv),
             "ehentai" => Ok(TaskSource::Ehentai),
+            "ahentai" => Ok(TaskSource::Ahentai),
             _ => Err(format!("unknown task source: {s}")),
         }
     }
@@ -103,6 +106,10 @@ pub enum TaskPayload {
         cookie: String,
         work_id: String,
     },
+    AhentaiGallery {
+        gallery_id: String,
+        title: String,
+    },
 }
 
 impl TaskPayload {
@@ -112,6 +119,7 @@ impl TaskPayload {
             | TaskPayload::PixivUserWorks { .. }
             | TaskPayload::PixivSingleWork { .. } => TaskSource::Pixiv,
             TaskPayload::EhentaiGallery { .. } => TaskSource::Ehentai,
+            TaskPayload::AhentaiGallery { .. } => TaskSource::Ahentai,
         }
     }
 }

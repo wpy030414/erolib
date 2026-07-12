@@ -1,3 +1,7 @@
+// Hide the console window on Windows; keep it in debug builds so
+// println! / eprintln! output is still visible during development.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod commands;
 mod db;
 mod errors;
@@ -182,6 +186,9 @@ fn main() {
             commands::ehentai::ehentai_search,
             commands::ehentai::ehentai_proxy_thumb,
             commands::ehentai::ehentai_browse_status,
+            commands::ahentai::ahentai_search,
+            commands::ahentai::ahentai_proxy_thumb,
+            commands::ahentai::ahentai_browse_status,
             commands::tasks::tasks_list,
             commands::tasks::task_pause,
             commands::tasks::task_resume,
@@ -193,6 +200,7 @@ fn main() {
             commands::tasks::task_enqueue_pixiv_user_works,
             commands::tasks::task_enqueue_ehentai_gallery,
             commands::tasks::task_enqueue_pixiv_work,
+            commands::tasks::task_enqueue_ahentai_gallery,
         ])
         .run(tauri::generate_context!())
         .unwrap();
