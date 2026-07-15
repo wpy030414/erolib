@@ -25,7 +25,41 @@ impl Database {
             crate::errors::AppError::Other(format!("create_dir_all {}: {e}", data_dir.display()))
         })?;
 
-        let db_path = data_dir.join("manga-manager.db");
+        let db_path = data_dir.join("erolib.db");
+
+        // 一次性文件名迁移：项目原名 manga-manager，DB 文件曾叫
+        // manga-manager.db。首次启动新版时把旧文件（含 WAL/SHM 附属文件，WAL
+        // 模式开着会生成它们）原地重命名为 erolib.db，既有库无损搬迁。仅当
+        // 新名不存在时执行——主人已跑过新版（erolib.db 已在）则不覆盖；两者
+        // 都在时优先新名，旧文件原样留作备份。同一目录内 rename 是原子的。
+        if !db_path.exists() {
+            let legacy = data_dir.join("manga-manager.db");
+            if legacy.exists() {
+                for (old_name, new_name) in [
+                    ("manga-manager.db", "erolib.db"),
+                    ("manga-manager.db-wal", "erolib.db-wal"),
+                    ("manga-manager.db-shm", "erolib.db-shm"),
+                ] {
+                    let from = data_dir.join(old_name);
+                    if from.exists() {
+                        let to = data_dir.join(new_name);
+                        if let Err(e) = std::fs::rename(&from, &to) {
+                            tracing::warn!(
+                                target: "erolib::db",
+                                "rename {} -> {}: {e}",
+                                from.display(),
+                                to.display()
+                            );
+                        }
+                    }
+                }
+                tracing::info!(
+                    target: "erolib::db",
+                    "Migrated legacy DB manga-manager.db -> erolib.db"
+                );
+            }
+        }
+
         // `mode=rwc` makes SQLite create the file if absent and read/write
         // otherwise. `SqliteConnectOptions::from_str` parses the `sqlite:`
         // URL form including the query string.
@@ -65,6 +99,30 @@ impl Database {
             .execute(&pool)
             .await
             .map_err(|e| crate::errors::AppError::Other(format!("apply schema: {e}")))?;
+
+        // One-time data fixup (PRAGMA user_version guards it to a single run).
+        // Historical reading_sessions.duration_ms stored the frontend's per-book
+        // *cumulative* total (pushed every second, last-write-wins), not the
+        // per-session span — so SUM(duration_ms) wildly inflated "本周已阅读".
+        // The reader now reports a per-session delta; zero the corrupted
+        // historical values so old rows stop skewing the stat and new sessions
+        // accumulate correctly from 0. (No _sqlx_migrations table exists;
+        // user_version is this app's lightweight migration guard.)
+        let user_version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| crate::errors::AppError::Other(format!("read user_version: {e}")))?;
+        if user_version < 1 {
+            sqlx::query("UPDATE reading_sessions SET duration_ms = 0")
+                .execute(&pool)
+                .await
+                .map_err(|e| crate::errors::AppError::Other(format!("reset reading durations: {e}")))?;
+            sqlx::query("PRAGMA user_version = 1")
+                .execute(&pool)
+                .await
+                .map_err(|e| crate::errors::AppError::Other(format!("set user_version=1: {e}")))?;
+            tracing::info!(target: "erolib::db", "Reset corrupted reading-session durations to 0 (user_version 0 -> 1)");
+        }
 
         Ok(Self { pool })
     }

@@ -16,6 +16,7 @@ import AppToast from './components/AppToast.vue';
 import { useSettingsStore } from './stores/settings';
 import { usePixivBrowseStore } from './stores/pixiv-browse';
 import { useEhentaiBrowseStore } from './stores/ehentai-browse';
+import { useNicecatBrowseStore } from './stores/nicecat-browse';
 
 const route = useRoute();
 const isReader = computed(() => route.path.startsWith('/reader'));
@@ -114,14 +115,15 @@ onMounted(() => {
   // app opens (saved ports — single source of truth).
   void settingsStore.autoStartAll();
 
-  // Instantiate both browse stores at app start so their task://progress
-  // listeners are armed immediately — a download that finishes while the user
-  // is on the Tasks page (or anywhere else) flips the corresponding card in
-  // either source, not just the one whose view happens to be mounted. Pinia
-  // returns the same singleton on later usePixivBrowseStore()/useEhentaiBrowseStore()
-  // calls, so the listener registers exactly once per source.
+  // Instantiate browse stores at app start so their task://progress listeners
+  // are armed immediately — a download that finishes while the user is on the
+  // Tasks page (or anywhere else) flips the corresponding card in any source,
+  // not just the one whose view happens to be mounted. Pinia returns the same
+  // singleton on later useXxxBrowseStore() calls, so each listener registers
+  // exactly once per source.
   usePixivBrowseStore();
   useEhentaiBrowseStore();
+  useNicecatBrowseStore();
 });
 
 onBeforeUnmount(() => {

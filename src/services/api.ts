@@ -8,6 +8,7 @@ import type {
   Collection,
   EhentaiBrowseStatus,
   GalleryListItem,
+  NicecatBrowseStatus,
   PixivBrowseStatus,
   PixivWork,
   SearchQuery,
@@ -64,6 +65,25 @@ export const api = {
 
   listBooks: (limit?: number, offset?: number) =>
     invoke<Book[]>('list_books', { limit, offset }),
+
+  // Reading-time tracking — one session_id is minted per Reader mount by
+  // `open_book`; `record_reading` is fire-and-forget and the backend stores
+  // the latest per-session delta (last-write-wins on `duration_ms`).
+  openBook: (id: string) =>
+    invoke<number>('open_book', { id }),
+
+  recordReading: (id: string, sessionId: number, durationMs: number) =>
+    invoke<void>('record_reading', { id, sessionId, durationMs }),
+
+  // Home-page aggregates.
+  getWeeklyReadingMs: () =>
+    invoke<number>('get_weekly_reading_ms'),
+
+  listRecentBooks: (limit: number) =>
+    invoke<Book[]>('list_recent_books', { limit }),
+
+  getRecentFavoriteBook: (days: number) =>
+    invoke<Book | null>('get_recent_favorite_book', { days }),
 
   // One-way local sync: mirror the library into a directory as
   // ${title}-${metaHash}.cb7 (copies new books, mirror-deletes removed).
@@ -145,6 +165,16 @@ export const api = {
 
   ahentaiBrowseStatus: (galleryIds: string[]) =>
     invoke<AhentaiBrowseStatus[]>('ahentai_browse_status', { galleryIds }),
+
+  // NiceCat browse — API calls go through hidden WebView to bypass Cloudflare.
+  nicecatFetchApi: (path: string, formFields: Record<string, string>) =>
+    invoke<any>('nicecat_fetch_api', { path, formFields }),
+
+  nicecatProxyThumb: (url: string) =>
+    invoke<number[]>('nicecat_proxy_thumb', { url }),
+
+  nicecatBrowseStatus: (comicIds: string[]) =>
+    invoke<NicecatBrowseStatus[]>('nicecat_browse_status', { comicIds }),
 
   // Pixiv in-app login
   getPixivLogin: () =>
@@ -229,6 +259,9 @@ export const api = {
 
   taskEnqueueAhentaiGallery: (galleryId: string, title: string) =>
     invoke<string>('task_enqueue_ahentai_gallery', { galleryId, title }),
+
+  taskEnqueueNicecatGallery: (comicId: string, title: string) =>
+    invoke<string>('task_enqueue_nicecat_gallery', { comicId, title }),
 
   openFile: (filters?: Array<{ name: string; extensions: string[] }>) =>
     dialogOpen({

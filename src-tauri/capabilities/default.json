@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for EroLib",
-  "windows": ["main", "pixiv-login"],
+  "windows": ["main", "pixiv-login", "nicecat-api-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -26,6 +26,13 @@
         { "path": "$HOME/**" }
       ]
     },
-    "core:path:default"
+    "core:path:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://gxxa.fun/**" },
+        { "url": "https://ncmm.cc/**" }
+      ]
+    }
   ]
 }

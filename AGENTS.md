@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下载源支持 Pixiv 与 EHentai。UI 用 Google Material Design 3 Web Components（@material/web）手搓。应用标识符 `im.xrl.erolib`。
+EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下载源支持 Pixiv、EHentai / EXHentai、ASMHentai 与 NiceCat。UI 用 Google Material Design 3 Web Components（@material/web）手搓。应用标识符 `im.xrl.erolib`。
 
 ## 架构分层
 
@@ -12,6 +12,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 
 ## 状态与持久化
 
+- **SQLite 库文件** `data_dir/erolib.db`（Tauri `app_local_data_dir`，bundle id `im.xrl.erolib`）。启动时若旧 `manga-manager.db` 存在则连同 `-wal`/`-shm` 原子重命名迁移，绝不覆盖已存在的 `erolib.db`。
 - **localStorage**：主题/语言、阅读器缩放模式 `erolib.reader.zoomMode`、每书阅读进度 `erolib.reader.progress.{bookId}`、Pixiv tab `erolib.pixiv.tab`、Settings tab `erolib.settings.tab`。
 - **IndexedDB**：书库封面低清缩略图缓存，见 `src/services/thumb-cache.ts`（DB `erolib`，store `thumbs`，key=bookId，value=Blob）。
 - **Pinia store（内存，跨视图存活到退出）**：`stores/pixiv-browse.ts`（关注/收藏 feed、封面、卡片任务状态）、`stores/library.ts`（搜索/标签/结果）。
@@ -19,7 +20,9 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 
 ## 下载与任务系统
 
-- **所有下载统一经 TaskManager**（`src-tauri/src/services/task_manager.rs`），底层用 aria2，无进程内回退。任务 payload 是枚举 `TaskPayload`：`PixivBookmarks` / `PixivUserWorks` / `PixivSingleWork{cookie,work_id}` / `EhentaiGallery`。
+- **所有下载统一经 TaskManager**（`src-tauri/src/services/task_manager.rs`），无进程内回退。任务 payload 是枚举 `TaskPayload`：`PixivBookmarks` / `PixivUserWorks` / `PixivSingleWork{cookie,work_id}` / `EhentaiGallery` / `AhentaiGallery` / `NicecatGallery`。`TaskSource` 对应为 `Pixiv` / `Ehentai` / `Ahentai` / `Nicecat`。
+- **下载后端**：Pixiv / EHentai 走 aria2（`Aria2Client`，8 路并发 gid，带字节级进度 + 平滑速度）；ASMHentai / NiceCat 走 8 路并发 reqwest 直连（`JoinSet` + `Semaphore(8)`，`add_bytes` + `set_speed` 实时追踪）。两种都进同一个 `TaskManager`，共享暂停 / 取消 / 进度语义。
+- **aria2 自动 HTTP 代理**：`services/proxy.rs` `detect_http_proxy()` 取 env（`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` + 小写）+ macOS `scutil --proxy`（Clash / V2Ray「设为系统代理」后写入系统配置），结果 60s 缓存（避免一本几十张图每张都 spawn scutil）；跳过 aria2 不支持的 SOCKS。`Aria2Client::add_uri` 检测到则注入 `all-proxy` option，Pixiv / EHentai 等翻墙下载零配置。
 - **任务模型**（`services/task.rs` `TaskSnapshot`）含 `speed`（实时下行速度 B/s）、`logs`（步骤日志 JSON 数组，上限 ~200 行）、`book_id`（完成后回填，前端一键跳阅读器）。`enqueue` 保留最新 **100 条**（先 `DELETE … NOT IN (SELECT … ORDER BY created_at DESC LIMIT 99)` 再插入）。
 - aria2 进度：`wait_for_gid_with_progress` 轮询 `tell_status`，回调里 `set_progress(.., speed)` + `append_log`；成功后 `register_stored_book` → `set_book_id`。
 - 前端 `stores/tasks.ts` 全局监听 `task://progress`（更新列表 + 书库刷新）与 `task://toast`（终态 toast）；`views/Tasks.vue` 左右分栏——运行中卡片右下角显示速度，详情 pane 显示步骤日志 / 创建完成时间 / 操作区。
@@ -27,7 +30,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 
 ## Pixiv 浏览
 
-- 浏览式：关注 feed（`/ajax/follow_latest/illust?p=&mode=all`，**不带 user_id**，session 识别用户）+ 收藏（`/ajax/user/{id}/illusts/bookmarks?offset=&limit=`），懒加载 ~30/页（IntersectionObserver sentinel）。
+- 浏览式：推荐 feed（`/ajax/top/illust?mode=all`，一次性拉取，**不分页**）+ 关注 feed（`/ajax/follow_latest/illust?p=&mode=all`，**不带 user_id**，session 识别用户）+ 收藏（`/ajax/user/{id}/illusts/bookmarks?tag=&offset=&limit=&rest=show`）+ 关键词搜索（`/ajax/search/artworks/{keyword}?word=&mode=all&s_mode=s_tag&type=all&order=date_d&p=`，`p` 分页）。四个 feed 共用 `body.thumbnails.illust` 结构。
 - 封面防盗链：`i.pximg.net` 需 `Referer: https://www.pixiv.net/`，走后端代理 `pixiv_proxy_image`（前端 `<img>` 不能设 Referer）。
 - 卡片三态：本地有→点进阅读器；下载中→遮罩 + SVG 环形进度（**别用 md-circular-progress determinate**，会卡）；未下载→标题左上红点。`task://progress` 在 **store 层**监听（跨视图存活，下载完成自动翻转卡片）。
 
@@ -39,9 +42,10 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 
 ## 共享服务器（OPDS / RSS）
 
-- `commands/server.rs`：axum 起 OPDS（5269）/ RSS（1269）HTTP 服务，`start_*` 幂等、返回 base_url；`ServerHandle` 持 watch channel 做优雅关闭。
-- 监听 `0.0.0.0`（局域网全开放、无鉴权）；base_url 用 `local_lan_ip()`（connected UDP socket 取出口 IP）使 feed 内链接对其它设备可达。
-- OPDS feed（`services/opds.rs`）+ RSS feed（`services/rss.rs`）都 `SELECT * FROM books`；`/download/:id`（OPDS + RSS 共用 `serve_download`）发整本、`/covers/:id` 发封面。
+- `commands/server.rs`：axum 起 OPDS（5269）/ RSS（1269）HTTP 服务，`start_*` 幂等、返回 base_url；`ServerState`（`Clone` struct）持 `db / storage / covers_path / base_url / rss_service / opds_service`（共享已配置的 service，替代原先每处理器 `::new(db)` 重建，避免 base_url / handler 不一致）；watch channel 做优雅关闭。
+- **直出图片**：新增 `/pages/:id/:n`（`serve_page`，单页图，复用 cb7 归档内存缓存 + `guess_image_mime` 嗅探 MIME）+ `/article/:id`（`serve_article`，整本 HTML 画廊，`<img src="{base}/pages/{id}/{n}">` 逐页）；注册进 OPDS + RSS 两个 router。RSS 阅读器可**直接翻看整本图片序列**，不再只给下载链接。
+- **富摘要**（`services/feed.rs` 抽出共享 `book_metadata_blurb`：作者｜页数·格式·大小｜标签｜来源｜链接｜原始文件｜发布日期｜阅读记录）：RSS `<description>` + `<content:encoded>`（全页 `<img>` 条）与 OPDS `<summary type="html">` 统一复用；feed 标题统一 `EroLib`（非 "EroLib Library"）。
+- 监听 `0.0.0.0`（局域网全开放、无鉴权）；base_url 用 `local_lan_ip()`（connected UDP socket 取出口 IP）使 feed 内链接对其它设备可达。`/download/:id`（`serve_download`）发整本、`/covers/:id` 发封面。
 - 前端 `stores/settings.ts` 管 opds/rss 的 port/running/busy/url/error + `autoStartAll()`（`App.vue` onMounted 调，开机即跑）。
 
 ## ASMHentai 浏览
@@ -51,6 +55,16 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 - 卡片两态（无页码 badge、无作者副标题）：本地有 → 阅读器；未下载 → 入队下载；下载中走 `task://progress` 监听。
 - 图片 CDN：`images.asmhentai.com/{load_dir}/{id}/{page}.jpg`；封面走 `ahentai_proxy_thumb` 代理 + IndexedDB 缓存。
 - 任务标题统一 `ASMHentai: {title}`；`process_ahentai` 走 JoinSet + Semaphore(8) 并发下载，含 `add_bytes` + `set_speed` 实时追踪。
+
+## NiceCat 浏览
+
+- 无需登录，公开站点 `ncmm.cc`；**全程纯 HTTP，无需内嵌 WebView**——通过 RC4 动态令牌直连 `gxxa.fun` API（`services/nicecat.rs` `NicecatApiClient`）。
+- 浏览式（`stores/nicecat-browse.ts`）：首页话题板块（`HomeFeed/randomFeed`，横向滚动）+ 关键词搜索。搜索走两阶段——`ComicSearch/search` 解析关键词到多个标签，取 `comic_number` 最大的单一最优标签，再 `ComicSearch/searchTag` 取结果页 + `searchId` 游标；前端回传 `cursor` 字段翻页（空 = 页 1，非空 = 推进游标），页粒度 60，游标耗尽或短页即 end。
+- 卡片三态同 Pixiv / EHentai（`components/SourceCard` + `useBrowseFeed` 复用）：本地有 → 阅读器；下载中 → 遮罩 + 环形进度；未下载 → 红点。`nicecat_browse_status` 按 `source_plugin='nicecat'` + `source_post_id` 归一化匹配本地书与在途任务。
+- 封面走 `nicecat_proxy_thumb` 代理绕过 `vurm.fun` CDN 防盗链（需 `Referer` + `Origin`）。
+- **下载**（`process_nicecat`，`task_manager.rs`）：纯 HTTP——并发拉 `ComicInfo/info`（元信息：标题 / 作者 / 标签）+ `ComicOrder/getComicOrder`（翻页图 URL，需当日 `dateKey` = Base64(SHA-256(本地午夜毫秒))），解析出页图 URL 后 8 路并发 reqwest 直连 `vurm.fun` 下载，打包 cb7。**无 WebView**。
+- 任务标题 `NiceCat: {title}`；payload `NicecatGallery { comic_id, title }`，`TaskSource::Nicecat`。
+- **RC4 令牌**：每请求新随机 token（一次性，复用 403）。`generate_token` = Base64(RC4(key, JSON({uid, auth})))，key `Zo1Eq4V2mr269K4doL9U4093U25acjMQ`，auth `ec8be430bc634535b258b3591a414a67`（`nicecat.rs`）。
 
 ## 登录与 cookie 采取
 
@@ -63,6 +77,14 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 
 - 书库封面走低清 thumb：后端 `get_book_cover_thumb`（`image` crate 降采样最长边 256px JPEG），前端先查 IndexedDB，miss 再取并缓存；原图 `get_book_cover` 给 OPDS/详情。
 - 搜索框 text 匹配 title / author / **tags**；标签 chip 行并集(OR)过滤，计数随文本结果变（文本优先），上限 30，满 30 末尾加不可选 `…` chip。
+
+## 首页与阅读时长追踪
+
+- 首页 `views/Home.vue`（路由 `/`）：Hero 区显示 **本周阅读时长**（`get_weekly_reading_ms`，按周一起点 Monday 00:00 local 归属，跨周一致不重不漏）+ 库封面 **旋转墙**（`WallCover`，21 本旋转展示）；下方「最近阅读」书架（`list_recent_books` 按 `last_read_at` 降序，点卡片进阅读器）。
+- `reading_sessions` 表追踪每次阅读会话（id / book_id / started_at / ended_at / duration_ms）。`open_book` 开会话（同时 bump `last_read_at` + `read_count`）并返回 session id；`record_reading(session_id)` 收尾，写 `ended_at` + 本次 `duration_ms`。
+- **前端 `Reader.vue` 增量上报**：每 tick 上报**本次会话增量**——`readTimeSessionBaseline` 在会话开启时快照 `readTimeAccumulated`（该书历史累计），delta = 累计 − baseline；仅前台（`document.hidden === false`）累计，后台不计时。`close_stale_sessions` 在启动收尾遗留的 `ended_at IS NULL` 行（duration=0）。
+- **`open_book` 取 id 必须用 `INSERT … RETURNING id`**：`last_insert_rowid()` 是连接级，sqlx 连接池（max_connections=8）两条语句跨连接会返回别的连接上一次插入的 rowid（或 0）→ `record_reading` 的 `WHERE id = ?` 永远命不中真正那行 → 每会话 `duration_ms` 恒 0、首页统计恒 0（已踩坑，见 memory `sqlx-pool-last-insert-rowid`）。
+- 历史污染修复：`user_version=1` 一次性清零被污染的历史 `duration_ms`（旧前端每秒推累计而非增量）。
 
 ## 阅读器
 

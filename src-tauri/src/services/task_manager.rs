@@ -842,6 +842,9 @@ async fn process_task(
         TaskPayload::AhentaiGallery { gallery_id, title } => {
             process_ahentai(manager.clone(), task, runtime.clone(), &temp_dir, gallery_id, title).await
         }
+        TaskPayload::NicecatGallery { comic_id, title } => {
+            process_nicecat(manager.clone(), task, runtime.clone(), comic_id, title).await
+        }
     }
 }
 
@@ -2105,6 +2108,437 @@ async fn process_ahentai(
     let _ = manager.set_book_id(&task.id, &book_id).await;
     let _ = manager
         .append_log(&task.id, &format!("registered book: {title}"))
+        .await;
+
+    manager
+        .set_progress(&task.id, total, total, "done")
+        .await?;
+    let _ = manager.append_log(&task.id, "done").await;
+    let _ = manager.emit_progress(&task.id).await;
+    Ok(Some(book_id))
+}
+
+// ====================== NiceCat processing ======================
+
+/// Parse a raw `getComicOrder` API response into `(image_urls, title)`.
+///
+/// The input is the **full response envelope** (including the `{"code":...,
+/// "data":...}` wrapper), e.g. `{"code":"4000200","data":{"imageData":[...],
+/// "comicData":{...}}}`.  Image URLs are read from `data.imageData[*].imageUrl`;
+/// the title is taken from `data.comicData.name` (or `.title`).
+///
+/// Falls back to a recursive search via `find_page_image_urls` if `imageData`
+/// is absent/empty.
+fn parse_nicecat_order_response(
+    order_json_str: &str,
+    comic_id: &str,
+) -> Result<(Vec<String>, Option<String>)> {
+    let order: serde_json::Value =
+        serde_json::from_str(order_json_str).context("parse nicecat order response")?;
+    // The response is the full envelope; imageData lives under data.
+    let order_data = order.get("data").unwrap_or(&order);
+
+    // --- Extract page image URLs ---
+    let image_urls: Vec<String> = order_data
+        .get("imageData")
+        .and_then(|arr| arr.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|it| it.get("imageUrl").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if image_urls.is_empty() {
+        if let Some(found) = find_page_image_urls(&order) {
+            tracing::info!(target: "erolib::tasks::nicecat", comic_id = %comic_id, count = found.len(), "found image URLs via fallback recursive search");
+            return Ok((found, None));
+        }
+        anyhow::bail!("no imageData found in nicecat API response for {} (top keys: {:?})", comic_id, order_data.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+    }
+
+    tracing::info!(target: "erolib::tasks::nicecat", comic_id = %comic_id, page_count = image_urls.len(), "extracted image URLs from getComicOrder response");
+
+    let comic_data = order_data.get("comicData");
+    let title = comic_data.and_then(|c| c.get("name").or_else(|| c.get("title"))).and_then(|v| v.as_str()).map(String::from);
+    Ok((image_urls, title))
+}
+
+/// Parse the `ComicInfo/info` API response from the NiceCat info page.
+///
+/// Returns (author, published_at, tags, title).
+/// - author: from `tagData.artist[0].name` (画师)
+/// - published_at: from `update_time` (上传时间)
+/// - tags: all tag names across all `tagData` categories
+/// - title: from `name_one` (or `name`)
+fn parse_nicecat_info_response(json_str: &str) -> (Option<String>, Option<String>, Vec<String>, Option<String>) {
+    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return (None, None, vec![], None),
+    };
+
+    let comic_data = parsed
+        .get("data")
+        .and_then(|d| d.get("comicData"));
+
+    // --- Title: prefer name_one (original title) ---
+    let title = comic_data
+        .and_then(|c| c.get("name_one"))
+        .or_else(|| comic_data.and_then(|c| c.get("name")))
+        .or_else(|| comic_data.and_then(|c| c.get("title")))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // --- Author: from tagData.artist[0].name ---
+    let author = comic_data
+        .and_then(|c| c.get("tagData"))
+        .and_then(|t| t.get("artist"))
+        .and_then(|a| a.get(0))
+        .and_then(|a| a.get("name"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // --- Published date: from update_time ---
+    let published_at = comic_data
+        .and_then(|c| c.get("update_time"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // --- Tags: collect all tag names from ALL tagData categories ---
+    let mut tags: Vec<String> = Vec::new();
+    if let Some(tag_data) = comic_data.and_then(|c| c.get("tagData")) {
+        if let Some(obj) = tag_data.as_object() {
+            for (_category, tag_array) in obj {
+                if let Some(arr) = tag_array.as_array() {
+                    for tag in arr {
+                        if let Some(name) = tag.get("name").and_then(|v| v.as_str()) {
+                            tags.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Deduplicate (some tags may appear in multiple categories).
+    tags.sort();
+    tags.dedup();
+
+    (author, published_at, tags, title)
+}
+
+/// Extract the first non-empty string value for any of the given keys by
+/// walking the JSON tree depth-first.
+#[allow(dead_code)]
+fn extract_field(val: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    match val {
+        serde_json::Value::Object(map) => {
+            for k in keys {
+                if let Some(v) = map.get(*k) {
+                    if let Some(s) = v.as_str() {
+                        if !s.is_empty() {
+                            return Some(s.to_string());
+                        }
+                    }
+                }
+            }
+            for (_k, v) in map {
+                if let Some(found) = extract_field(v, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                if let Some(found) = extract_field(item, keys) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Recursively search a JSON value for an array of image-like URLs.
+/// (Fallback when the standard `imageData` structure is absent.)
+fn find_page_image_urls(val: &serde_json::Value) -> Option<Vec<String>> {
+    match val {
+        serde_json::Value::Array(arr) => {
+            if arr.iter().all(|v| v.is_string()) {
+                let urls: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                if !urls.is_empty()
+                    && urls.iter().any(|u| {
+                        let lower = u.to_lowercase();
+                        lower.ends_with(".jpg")
+                            || lower.ends_with(".jpeg")
+                            || lower.ends_with(".png")
+                            || lower.ends_with(".webp")
+                            || lower.ends_with(".gif")
+                            || lower.contains("/img/")
+                            || lower.contains("/images/")
+                            || lower.contains("/comic-content/")
+                    })
+                {
+                    return Some(urls);
+                }
+            }
+            for item in arr {
+                if let Some(found) = find_page_image_urls(item) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Object(map) => {
+            for key in &["imageList", "images", "pages", "pageList", "pageUrls", "imageData"] {
+                if let Some(v) = map.get(*key) {
+                    if let Some(found) = find_page_image_urls(v) {
+                        return Some(found);
+                    }
+                }
+            }
+            for (_k, v) in map {
+                if let Some(found) = find_page_image_urls(v) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+async fn process_nicecat(
+    manager: Arc<TaskManager>,
+    task: &crate::services::task::Task,
+    runtime: Arc<TaskRuntime>,
+    comic_id: &str,
+    fallback_title: &str,
+) -> Result<Option<String>> {
+    let library = LibraryService::new(manager.db.clone(), manager.storage.clone());
+
+    manager
+        .set_progress(&task.id, 0, 0, "extracting page data...")
+        .await?;
+
+    // 1. Fetch comic metadata + page-order via pure HTTP (concurrency-safe:
+    //    each call is independent, unlike the old shared-WebView localStorage).
+    let _ = manager
+        .append_log(&task.id, "fetching NiceCat metadata + page order via HTTP...")
+        .await;
+    let _ = manager.emit_progress(&task.id).await;
+
+    // Run the two independent HTTP calls concurrently.
+    let (info_res, order_res) = tokio::join!(
+        crate::services::nicecat::fetch_comic_info_raw(comic_id),
+        crate::services::nicecat::fetch_comic_order_raw(comic_id),
+    );
+    let info_raw = info_res.map_err(|e| anyhow::anyhow!("ComicInfo/info failed: {e}"))?;
+    let order_raw = order_res.map_err(|e| anyhow::anyhow!("getComicOrder failed: {e}"))?;
+
+    let _ = manager
+        .append_log(
+            &task.id,
+            &format!("info {} bytes, order {} bytes", info_raw.len(), order_raw.len()),
+        )
+        .await;
+
+    // 2. Parse page image URLs from the order response.
+    let (page_urls, order_title) = parse_nicecat_order_response(&order_raw, comic_id)?;
+
+    let total = page_urls.len() as i64;
+    if total == 0 {
+        anyhow::bail!("no page images found for comic {comic_id}");
+    }
+
+    // 3. Extract metadata from the info response.
+    let (scraped_author, scraped_published, scraped_tags, info_title) =
+        parse_nicecat_info_response(&info_raw);
+
+    // Prefer info-page title, fall back to order title, then fallback_title.
+    let title = info_title
+        .or(order_title)
+        .unwrap_or_else(|| fallback_title.to_string());
+    let author = scraped_author;
+    let published_at = scraped_published;
+    let all_tags: Vec<String> = if scraped_tags.is_empty() {
+        vec!["nicecat".into()]
+    } else {
+        scraped_tags
+    };
+
+    manager
+        .set_progress(&task.id, 0, total, "downloading...")
+        .await?;
+    let _ = manager
+        .append_log(&task.id, &format!("downloading {} pages", total))
+        .await;
+    let _ = manager.emit_progress(&task.id).await;
+
+    // 3. Download all pages concurrently (8 at a time).  Images are on
+    //    vurm.fun CDN — reqwest with Referer header works (same as covers).
+    let http = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("build http client")?;
+
+    let sem = Arc::new(Semaphore::new(8));
+    let mut results: Vec<Option<Vec<u8>>> = vec![None; total as usize];
+    let mut set: JoinSet<(usize, Result<Vec<u8>>)> = JoinSet::new();
+
+    for (idx, img_url) in page_urls.iter().enumerate() {
+        let img_url = img_url.clone();
+        let permit = sem.clone().acquire_owned().await.unwrap();
+        let client_http = http.clone();
+        let referer = "https://ncmm.cc/".to_string();
+        let manager = Arc::clone(&manager);
+        let task_id = task.id.clone();
+        let runtime = Arc::clone(&runtime);
+        let current = idx as i64 + 1;
+        let total_u = total;
+
+        set.spawn(async move {
+            let _permit = permit;
+            if runtime.cancelled.load(Ordering::Relaxed) {
+                return (idx, Err(anyhow::anyhow!("cancelled")));
+            }
+            while runtime.paused.load(Ordering::Relaxed) {
+                if runtime.cancelled.load(Ordering::Relaxed) {
+                    return (idx, Err(anyhow::anyhow!("cancelled")));
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+
+            let t0 = Instant::now();
+            let result = async {
+                let resp = client_http
+                    .get(&img_url)
+                    .header("Referer", &referer)
+                    .header("Origin", "https://ncmm.cc")
+                    .send()
+                    .await
+                    .context("download image")?;
+                let bytes = resp.bytes().await.context("read bytes")?.to_vec();
+                if bytes.len() < 200 {
+                    anyhow::bail!("suspiciously small image ({} bytes)", bytes.len());
+                }
+                Ok(bytes)
+            }
+            .await;
+
+            let _ = manager
+                .set_progress(
+                    &task_id,
+                    current,
+                    total_u,
+                    &format!("page {}/{}", current, total_u),
+                )
+                .await;
+            if let Ok(ref bytes) = result {
+                let elapsed = t0.elapsed().as_secs_f64().max(0.05);
+                let speed = (bytes.len() as f64 / elapsed) as i64;
+                if speed > 0 {
+                    let _ = manager.set_speed(&task_id, speed).await;
+                }
+            }
+            let _ = manager
+                .append_log(&task_id, &format!("page {}/{} ok", current, total_u))
+                .await;
+            let _ = manager.emit_progress(&task_id).await;
+
+            (idx, result)
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok((idx, Ok(bytes))) => {
+                let len = bytes.len();
+                results[idx] = Some(bytes);
+                let _ = manager.add_bytes(&task.id, len as i64).await;
+            }
+            Ok((idx, Err(e))) => {
+                let _ = manager
+                    .append_log(&task.id, &format!("page {} failed: {}", idx + 1, e))
+                    .await;
+            }
+            Err(e) => {
+                let _ = manager
+                    .append_log(&task.id, &format!("download task panicked: {}", e))
+                    .await;
+            }
+        }
+    }
+
+    if runtime.cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("cancelled");
+    }
+
+    let images: Vec<Vec<u8>> = results.into_iter().flatten().collect();
+    if images.is_empty() {
+        anyhow::bail!("no images downloaded for comic {comic_id}");
+    }
+
+    // 4. Package as CB7 and register.
+    manager
+        .set_progress(&task.id, total, total, "packaging...")
+        .await?;
+    let _ = manager.append_log(&task.id, "packaging cb7...").await;
+    let _ = manager.emit_progress(&task.id).await;
+
+    let source_url = format!("https://ncmm.cc/comic/info/id.{}", comic_id);
+    let source = BookSource {
+        plugin: "nicecat".into(),
+        source_url: source_url.clone(),
+        source_post_id: Some(comic_id.to_string()),
+        scraped_at: Some(Utc::now()),
+        author: author.clone(),
+        author_id: None,
+        published_at: published_at.clone(),
+    };
+
+    let file_path = manager
+        .storage
+        .create_cb7(
+            &images,
+            &BookMetadata {
+                title: title.clone(),
+                tags: all_tags.clone(),
+                author,
+                source_plugin: Some("nicecat".into()),
+                source_url: Some(source_url),
+                source_post_id: Some(comic_id.to_string()),
+                scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
+                ..Default::default()
+            },
+        )
+        .context("create cb7")?;
+    let _ = manager.append_log(&task.id, "packaged cb7 ok").await;
+
+    let book_id = Uuid::new_v4().to_string();
+    library
+        .register_stored_book(
+            &book_id,
+            &title,
+            &file_path,
+            images.len() as i32,
+            Some(&source),
+            &all_tags,
+            None,
+        )
+        .await
+        .context("register book")?;
+
+    let _ = manager.set_book_id(&task.id, &book_id).await;
+    let _ = manager
+        .append_log(&task.id, &format!("registered book: {}", title))
         .await;
 
     manager

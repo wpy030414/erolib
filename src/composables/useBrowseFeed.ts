@@ -69,6 +69,10 @@ export interface UseBrowseFeedOptions<
  *  past a page boundary stay buffered for the next loadMore. */
 const BROWSE_PAGE_SIZE = 48;
 
+/** Max concurrent cover proxy-fetch calls. Prevents flooding the Tauri IPC
+ *  queue + shared reqwest client when 48+ cards render at once. */
+const COVER_MAX_CONCURRENT = 6;
+
 const TERMINAL = ['completed', 'failed', 'cancelled'];
 
 export function useBrowseFeed<
@@ -152,13 +156,38 @@ export function useBrowseFeed<
 
   /** Fetch a cover via the backend proxy (the source host hotlink-blocks the
    *  WKWebView). Cached in coverMap as a blob URL; backed by IndexedDB so
-   *  repeat covers load instantly across reloads/view-switches. */
+   *  repeat covers load instantly across reloads/view-switches.
+   *
+   *  Concurrency-limited (COVER_MAX_CONCURRENT): the watch calls loadCover for
+   *  every item in a page (up to 48), but only 6 proxy-fetch + IndexedDB
+   *  operations run at once.  The rest queue up without flooding the IPC
+   *  channel / reqwest client / microtask queue. */
+  let coverGate = 0;
+  const coverQueue: Array<() => void> = [];
+
+  function coverGateEnter(): Promise<void> {
+    if (coverGate < COVER_MAX_CONCURRENT) {
+      coverGate++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      coverQueue.push(() => { coverGate++; resolve(); });
+    });
+  }
+
+  function coverGateLeave() {
+    coverGate--;
+    const next = coverQueue.shift();
+    if (next) next();
+  }
+
   async function loadCover(item: TItem) {
     const key = coverKeyOf(item);
     const url = opts.coverUrlOf(item);
     if (!url || key in coverMap || coverLoading.has(key)) return;
     coverLoading.add(key);
     coverMap[key] = null;
+    await coverGateEnter();
     try {
       let blob = await getThumb(key);
       if (!blob) {
@@ -171,6 +200,7 @@ export function useBrowseFeed<
       coverMap[key] = null;
     } finally {
       coverLoading.delete(key);
+      coverGateLeave();
     }
   }
 

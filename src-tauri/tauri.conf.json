@@ -1,11 +1,11 @@
 {
   "productName": "EroLib",
-  "version": "26.7.12+1520",
+  "version": "26.7.15+1500",
   "identifier": "im.xrl.erolib",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:13269",
     "frontendDist": "../dist"
   },
   "app": {

@@ -308,6 +308,14 @@ impl Aria2Client {
             options.insert("dir".to_string(), json!(d.to_string_lossy().to_string()));
         }
 
+        // Auto-detect the system HTTP proxy (env vars + macOS `scutil --proxy`,
+        // cached ~60s) so Pixiv/EHentai downloads route through the user's
+        // Clash/V2Ray proxy with zero configuration. aria2's all-proxy is
+        // http/https-only (no SOCKS), which detect_http_proxy already filters for.
+        if let Some(proxy) = crate::services::proxy::detect_http_proxy().await {
+            options.insert("all-proxy".to_string(), json!(proxy));
+        }
+
         let result = self
             .call("aria2.addUri", vec![json!([uri]), json!(options)])
             .await?;

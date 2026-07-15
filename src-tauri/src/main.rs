@@ -71,6 +71,14 @@ fn main() {
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             let storage = Arc::new(StorageService::new(storage_dir.clone()));
             let app_state = AppState::new(db.clone(), storage.clone());
+            // Neutralize reading sessions left open by a prior force-quit so they
+            // render in history but contribute 0 to duration stats. Best-effort:
+            // a failure here must not block startup.
+            if let Err(e) = tauri::async_runtime::block_on(async {
+                app_state.library_service.close_stale_sessions().await
+            }) {
+                tracing::warn!(target: "erolib::setup", %e, "close stale reading sessions failed");
+            }
             app.manage(app_state.clone());
             app.manage(Arc::new(commands::server::ServerHandle::new()));
             // Persist the Pixiv login under the app data dir so it survives
@@ -137,6 +145,7 @@ fn main() {
 
             Ok(())
         })
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -153,6 +162,11 @@ fn main() {
             commands::book::export_book,
             commands::book::save_book,
             commands::book::list_books,
+            commands::book::open_book,
+            commands::book::record_reading,
+            commands::book::get_weekly_reading_ms,
+            commands::book::list_recent_books,
+            commands::book::get_recent_favorite_book,
             commands::sync::sync_to_dir,
             commands::reset::reset_app_data,
             commands::search::search_books,
@@ -189,6 +203,9 @@ fn main() {
             commands::ahentai::ahentai_search,
             commands::ahentai::ahentai_proxy_thumb,
             commands::ahentai::ahentai_browse_status,
+            commands::nicecat::nicecat_proxy_thumb,
+            commands::nicecat::nicecat_browse_status,
+            commands::nicecat::nicecat_fetch_api,
             commands::tasks::tasks_list,
             commands::tasks::task_pause,
             commands::tasks::task_resume,
@@ -201,6 +218,7 @@ fn main() {
             commands::tasks::task_enqueue_ehentai_gallery,
             commands::tasks::task_enqueue_pixiv_work,
             commands::tasks::task_enqueue_ahentai_gallery,
+            commands::tasks::task_enqueue_nicecat_gallery,
         ])
         .run(tauri::generate_context!())
         .unwrap();

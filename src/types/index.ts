@@ -147,3 +147,29 @@ export interface AhentaiGalleryItem {
 export interface AhentaiBrowseStatus extends CardStatus {
   galleryId: string;
 }
+
+/** A single comic item from NiceCat API. */
+export interface NicecatComicItem {
+  uid: string;
+  image: string;
+  name: string;
+  categories?: string;
+}
+
+/** A topic section on the NiceCat homepage: one topic/author name + its comics. */
+export interface NicecatTopicSection {
+  name: string;
+  comics: NicecatComicItem[];
+}
+
+/** The cooked homepage feed from the NiceCat randomFeed API. */
+export interface NicecatRandomFeed {
+  recommend?: NicecatComicItem;
+  tagData?: Array<{ uid: string; name: string; dataType: number }>;
+  sections: NicecatTopicSection[];
+}
+
+/** Local state of a NiceCat comic in the browse grid (mirrors backend NicecatBrowseStatus). */
+export interface NicecatBrowseStatus extends CardStatus {
+  comicId: string;
+}

@@ -1,6 +1,6 @@
 {
   "name": "erolib",
-  "version": "26.7.12+0240",
+  "version": "0.1.0",
   "packageManager": "pnpm@11.9.0",
   "description": "A desktop manga library and downloader app with Tauri, Vue 3, and Material Design 3",
   "type": "module",
@@ -20,6 +20,7 @@
     "@mdi/js": "^7.4.47",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "idb": "^8.0.0",
     "pinia": "^2.1.7",
