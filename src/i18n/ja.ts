@@ -7,6 +7,7 @@ const ja: Record<string, string> = {
   'nav.ahentai': 'AHentai',
   'nav.tasks': 'タスク',
   'nav.settings': '設定',
+  'nav.home': 'ホーム',
 
   'lib.search.placeholder': 'タイトル / 作者 / タグで検索',
   'lib.search': '検索',
@@ -232,6 +233,23 @@ const ja: Record<string, string> = {
   'tasks.duration.ms': '{m}分{s}秒',
   'tasks.duration.s': '{s}秒',
   'tasks.error.noAria2': 'aria2 が実行されていません。aria2 をインストールするかサービスを起動してください。',
+
+  // NiceCat
+  'nav.nicecat': 'NiceCat',
+  'nc.search.placeholder': '漫画を検索',
+  'nc.browse.empty': '漫画が見つかりません',
+  'nc.browse.loadingMore': '読み込み中…',
+  'nc.browse.end': 'すべて表示しました',
+  'nc.home.refresh': '更新',
+  'nc.browse.queued': 'ダウンロードキューに追加：{title}',
+
+  // Home page
+  'home.weekly': '今週の読書時間',
+  'home.unit.minute': '分',
+  'home.unit.hour': '時間',
+  'home.recently': '最近読んだ本',
+  'home.favoriteBook': 'お気に入りの本',
+  'home.noData': 'まだ読書記録がありません',
 
   // Settings reset toast
   'settings.reset.toast': 'すべてのデータを削除しました。',

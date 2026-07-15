@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Local, TimeZone, Utc};
 use sqlx::{Row, Sqlite};
 use uuid::Uuid;
 
@@ -427,6 +427,159 @@ impl LibraryService {
         }
         Ok(())
     }
+
+    /// Mark a book as just-read and open a fresh reading session for it.
+    ///
+    /// Bumps `last_read_at` + `read_count` (the routine read marker) and inserts a
+    /// new `reading_sessions` row whose `duration_ms` starts at 0; the returned
+    /// session id is later passed to `record_reading` when the book is closed so
+    /// the span's duration can be finalized. The two writes are independent: a
+    /// failure to open a session must not roll back the read marker.
+    pub async fn open_book(&self, id: &str) -> Result<i64, AppError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE books SET last_read_at = ?, read_count = read_count + 1 WHERE id = ?")
+            .bind(&now)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await
+            .map_err(AppError::Db)?;
+
+        // RETURNING id yields the freshly inserted row's id on the SAME
+        // connection that ran the INSERT. This replaces a separate
+        // `SELECT last_insert_rowid()`, which is per-connection and unsafe across
+        // sqlx's pool (max_connections=8): the INSERT and that SELECT could land
+        // on different connections, returning some OTHER connection's last rowid
+        // (e.g. a concurrent tasks insert) or 0. A wrong id meant record_reading's
+        // `WHERE id = ?` never matched the real session row, so every session was
+        // left at duration_ms=0 / ended_at=NULL — the Home "本周已阅读" stayed 0.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO reading_sessions (book_id, started_at, duration_ms) \
+             VALUES (?, ?, 0) \
+             RETURNING id",
+        )
+        .bind(id)
+        .bind(&now)
+        .fetch_one(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(id)
+    }
+
+    /// Finalize a reading span: stamp `ended_at` and the session's
+    /// `duration_ms` (the per-session delta reported by the reader). Scoped to
+    /// both the session id and its book so a stale session id can't mutate
+    /// another book's row.
+    pub async fn record_reading(
+        &self,
+        id: &str,
+        session_id: i64,
+        duration_ms: i64,
+    ) -> Result<(), AppError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE reading_sessions SET ended_at = ?, duration_ms = ? WHERE id = ? AND book_id = ?",
+        )
+        .bind(&now)
+        .bind(duration_ms)
+        .bind(session_id)
+        .bind(id)
+        .execute(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(())
+    }
+
+    /// Crash recovery: any session left open (NULL `ended_at`) means the app
+    /// closed without recording. Neutralize them with a zero-length closed span
+    /// so they still render in history but contribute 0 to duration stats.
+    pub async fn close_stale_sessions(&self) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE reading_sessions \
+             SET ended_at = started_at, duration_ms = 0 \
+             WHERE ended_at IS NULL",
+        )
+        .execute(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(())
+    }
+
+    /// Total reading duration (ms) for the current week (Monday 00:00 local →
+    /// now). Aggregated purely from `reading_sessions`; returns 0 when there are
+    /// no sessions in the window.
+    pub async fn get_weekly_reading_ms(&self) -> Result<i64, AppError> {
+        let week_start = monday_start_local().to_rfc3339();
+        let total: Option<i64> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(duration_ms), 0) \
+             FROM reading_sessions \
+             WHERE started_at >= ?",
+        )
+        .bind(&week_start)
+        .fetch_one(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(total.unwrap_or(0))
+    }
+
+    /// Most-recently-read books first (those with a `last_read_at`), for the
+    /// home "recently read" shelf. Reuses the same `books.* + tags` projection
+    /// the rest of the library uses so the `Book` FromRow mapping lines up.
+    pub async fn list_recent_books(&self, limit: i64) -> Result<Vec<Book>, AppError> {
+        sqlx::query_as::<_, Book>(
+            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             WHERE books.last_read_at IS NOT NULL \
+             GROUP BY books.id \
+             ORDER BY books.last_read_at DESC \
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.db.pool)
+        .await
+        .map_err(AppError::Db)
+    }
+
+    /// The single book with the highest cumulative reading duration over the
+    /// last `days` days — the "近 N 天最爱" pick. Ties break by most recent
+    /// `last_read_at`. Returns None when nothing's been read in the window.
+    pub async fn get_recent_favorite_book(&self, days: i64) -> Result<Option<Book>, AppError> {
+        let since = (Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        let book = sqlx::query_as::<_, Book>(
+            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+             FROM books \
+             JOIN reading_sessions rs ON rs.book_id = books.id \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             WHERE rs.started_at >= ? \
+             GROUP BY books.id \
+             ORDER BY SUM(rs.duration_ms) DESC, books.last_read_at DESC \
+             LIMIT 1",
+        )
+        .bind(&since)
+        .fetch_optional(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(book)
+    }
+}
+
+/// Monday 00:00:00 in the local timezone, as a UTC DateTime — the start of the
+/// current week for the "本周阅读时长" stat. RFC3339-comparable against the
+/// UTC `started_at` strings stored in `reading_sessions`.
+fn monday_start_local() -> DateTime<Utc> {
+    let now = Local::now();
+    let days_from_monday = now.weekday().num_days_from_monday() as i64;
+    let monday = now.date_naive() - chrono::Duration::days(days_from_monday);
+    let monday_local = monday
+        .and_hms_opt(0, 0, 0)
+        .expect("00:00:00 is a valid time");
+    Local
+        .from_local_datetime(&monday_local)
+        .single()
+        .expect("midnight is unambiguous")
+        .with_timezone(&Utc)
 }
 
 /// Parse an RFC3339 timestamp (as written into ComicInfo's ero:ScrapedAt) back

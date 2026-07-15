@@ -26,6 +26,7 @@ import {
   mdiBookOutline,
   mdiClipboardList,
   mdiCogOutline,
+  mdiHome,
 } from '@mdi/js';
 import { useRoute } from 'vue-router';
 import BrandIcon from '@/components/BrandIcon.vue';
@@ -42,7 +43,7 @@ const ehStore = useEhentaiBrowseStore();
 
 interface NavItem {
   path: string;
-  labelKey: 'nav.library' | 'nav.pixiv' | 'nav.ehentai' | 'nav.ahentai' | 'nav.tasks' | 'nav.settings';
+  labelKey: 'nav.home' | 'nav.library' | 'nav.pixiv' | 'nav.ehentai' | 'nav.ahentai' | 'nav.nicecat' | 'nav.tasks' | 'nav.settings';
   /** Icon path (mdi or brand), rendered monochrome via currentColor. */
   icon: string;
   /** Override the 24×24 viewBox for brand marks drawn on another grid. */
@@ -70,11 +71,19 @@ const EHENTAI_PATH =
 const AHENTAI_PATH =
   'M6.0,0.0h9.0v1.5h-9.0Z M19.5,0.0h4.5v1.5h-4.5Z M6.0,1.5h9.0v1.5h-9.0Z M19.5,1.5h4.5v1.5h-4.5Z M6.0,3.0h9.0v1.5h-9.0Z M19.5,3.0h4.5v1.5h-4.5Z M4.5,4.5h10.5v1.5h-10.5Z M19.5,4.5h4.5v1.5h-4.5Z M4.5,6.0h10.5v1.5h-10.5Z M19.5,6.0h4.5v1.5h-4.5Z M4.5,7.5h10.5v1.5h-10.5Z M19.5,7.5h4.5v1.5h-4.5Z M4.5,9.0h19.5v1.5h-19.5Z M3.0,10.5h21.0v1.5h-21.0Z M3.0,12.0h4.5v1.5h-4.5Z M9.0,12.0h15.0v1.5h-15.0Z M3.0,13.5h4.5v1.5h-4.5Z M9.0,13.5h6.0v1.5h-6.0Z M19.5,13.5h4.5v1.5h-4.5Z M1.5,15.0h13.5v1.5h-13.5Z M19.5,15.0h4.5v1.5h-4.5Z M1.5,16.5h13.5v1.5h-13.5Z M19.5,16.5h4.5v1.5h-4.5Z M1.5,18.0h13.5v1.5h-13.5Z M19.5,18.0h4.5v1.5h-4.5Z M1.5,19.5h4.5v1.5h-4.5Z M9.0,19.5h6.0v1.5h-6.0Z M19.5,19.5h4.5v1.5h-4.5Z M0.0,21.0h6.0v1.5h-6.0Z M9.0,21.0h6.0v1.5h-6.0Z M19.5,21.0h4.5v1.5h-4.5Z M0.0,22.5h6.0v1.5h-6.0Z M9.0,22.5h6.0v1.5h-6.0Z M19.5,22.5h4.5v1.5h-4.5Z';
 
+/** NiceCat "cat face" favicon — pixel-perfect trace of the ncmm.cc favicon
+ *  (128×128 ICO, thresholded and scaled into the 24×24 MDI grid), uniformly
+ *  scaled 1.3× about the grid centre (12, 12). */
+const NICECAT_PATH =
+  'M17.2,0.3h2.6v1.3h-2.6ZM2.9,1.6h2.6v1.3h-2.6ZM15.9,1.6h3.9v1.3h-3.9ZM4.2,2.9h2.6v1.3h-2.6ZM17.2,2.9h3.9v1.3h-3.9ZM4.2,4.2h3.9v1.3h-3.9ZM15.9,4.2h3.9v1.3h-3.9ZM2.9,5.5h16.9v1.3h-16.9ZM2.9,6.8h16.9v1.3h-16.9ZM2.9,8.1h16.9v1.3h-16.9ZM2.9,9.4h16.9v1.3h-16.9ZM22.4,9.4h1.3v1.3h-1.3ZM4.2,10.7h15.6v1.3h-15.6ZM21.1,10.7h2.6v1.3h-2.6ZM4.2,12h15.6v1.3h-15.6ZM21.1,12h1.3v1.3h-1.3ZM4.2,13.3h18.2v1.3h-18.2ZM4.2,14.6h18.2v1.3h-18.2ZM4.2,15.9h18.2v1.3h-18.2ZM4.2,17.2h15.6v1.3h-15.6ZM21.1,17.2h1.3v1.3h-1.3ZM4.2,18.5h15.6v1.3h-15.6ZM21.1,18.5h2.6v1.3h-2.6ZM2.9,19.8h16.9v1.3h-16.9ZM22.4,19.8h1.3v1.3h-1.3ZM4.2,21.1h19.5v1.3h-19.5ZM5.5,22.4h16.9v1.3h-16.9Z';
+
 const navItems: NavItem[] = [
+  { path: '/home', labelKey: 'nav.home', icon: mdiHome },
   { path: '/library', labelKey: 'nav.library', icon: mdiBookOutline },
   { path: '/pixiv', labelKey: 'nav.pixiv', icon: PIXIV_PATH, brand: true },
   { path: '/ehentai', labelKey: 'nav.ehentai', icon: EHENTAI_PATH, viewBox: '0 0 140 120', brand: true },
   { path: '/ahentai', labelKey: 'nav.ahentai', icon: AHENTAI_PATH, viewBox: '0 0 24 24', brand: true },
+  { path: '/nicecat', labelKey: 'nav.nicecat', icon: NICECAT_PATH, viewBox: '0 0 24 24', brand: true },
   { path: '/tasks', labelKey: 'nav.tasks', icon: mdiClipboardList },
   { path: '/settings', labelKey: 'nav.settings', icon: mdiCogOutline },
 ];

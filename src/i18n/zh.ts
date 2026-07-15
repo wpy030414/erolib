@@ -7,6 +7,7 @@ const zh: Record<string, string> = {
   'nav.ahentai': 'AHentai',
   'nav.tasks': '任务',
   'nav.settings': '设置',
+  'nav.home': '首页',
 
   'lib.search.placeholder': '搜索标题 / 作者 / 标签',
   'lib.search': '搜索',
@@ -233,6 +234,23 @@ const zh: Record<string, string> = {
   'tasks.duration.ms': '{m}分{s}秒',
   'tasks.duration.s': '{s}秒',
   'tasks.error.noAria2': 'aria2 未运行，请安装 aria2 或启动服务',
+
+  // NiceCat
+  'nav.nicecat': 'NiceCat',
+  'nc.search.placeholder': '搜索漫画',
+  'nc.browse.empty': '没有找到漫画',
+  'nc.browse.loadingMore': '加载中…',
+  'nc.browse.end': '没有更多了',
+  'nc.home.refresh': '刷新',
+  'nc.browse.queued': '已添加到下载队列：{title}',
+
+  // Home page
+  'home.weekly': '本周已阅读',
+  'home.unit.minute': '分钟',
+  'home.unit.hour': '小时',
+  'home.recently': '最近阅读',
+  'home.favoriteBook': '最喜欢的书籍',
+  'home.noData': '还没有阅读记录',
 
   // Settings reset toast
   'settings.reset.toast': '已清除全部数据',

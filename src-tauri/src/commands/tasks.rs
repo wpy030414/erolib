@@ -172,3 +172,20 @@ pub async fn task_enqueue_ahentai_gallery(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn task_enqueue_nicecat_gallery(
+    comic_id: String,
+    title: String,
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<String, String> {
+    let payload = TaskPayload::NicecatGallery {
+        comic_id: comic_id.clone(),
+        title: title.clone(),
+    };
+    let task_title = format!("NiceCat: {}", title.trim());
+    manager
+        .enqueue(payload, task_title)
+        .await
+        .map_err(|e| e.to_string())
+}

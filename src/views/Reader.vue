@@ -3,7 +3,7 @@
     class="reader fill-height"
     :class="{ 'reader--ui-hidden': uiHidden }"
     @mousemove="onMouseMove"
-    @mouseleave="uiHidden = true"
+    @mouseleave="onMouseLeave"
   >
     <header class="reader-topbar">
       <button
@@ -124,7 +124,57 @@ const blobs = ref<Record<number, string>>({});
 const current = ref(0);
 const zoomMode = ref<ZoomMode>(readZoomMode());
 const uiHidden = ref(false);
+
+// Backend reading-session id for this Reader mount (one session per mount).
+// `null` until `api.openBook` resolves — if the call fails we still track time
+// locally, we just don't report it to the reading-sessions table.
+let readSessionId: number | null = null;
+// True once we've logged the "no session yet" warning for the current session,
+// so the per-second tick doesn't spam the console while open_book is pending.
+let warnedNoSession = false;
+
+/** Report this session's reading delta (ms) to the backend. The delta is
+ *  accumulated - baseline, where baseline was captured when the session opened —
+ *  never the cumulative all-time total, which would inflate the weekly stat. */
+function reportReadTimeToBackend(bookId: string) {
+  if (readSessionId === null) {
+    // Either open_book hasn't resolved yet, or it failed permanently. Warn once
+    // per "still null" streak so a silent failure (which would leave the Home
+    // hero stat stuck) is visible in the console without flooding it every tick.
+    if (!warnedNoSession) {
+      warnedNoSession = true;
+      console.warn(
+        `[Reader] recordReading skipped — no session_id yet for ${bookId} (open_book pending or failed)`
+      );
+    }
+    return;
+  }
+  warnedNoSession = false;
+  const deltaMs = Math.max(0, Math.round((readTimeAccumulated - readTimeSessionBaseline) * 1000));
+  void api
+    .recordReading(bookId, readSessionId, deltaMs)
+    .catch((e) => console.warn(`[Reader] recordReading failed for ${bookId}:`, e));
+}
+
+// Auto-hide the bars on a grace period: while the cursor is parked inside the
+// bar zone there is NO timer and the bar stays visible.  Only the *transition
+// out of* the zone starts a 2s timer; if the cursor re-enters before it fires
+// the timer is canceled and the bar stays.  The timer firing hides the bar.
 let uiHideTimer: ReturnType<typeof setTimeout> | null = null;
+let wasInZone = false;
+function clearUiHideTimer() {
+  if (uiHideTimer) {
+    clearTimeout(uiHideTimer);
+    uiHideTimer = null;
+  }
+}
+function scheduleUiHide() {
+  clearUiHideTimer();
+  uiHideTimer = setTimeout(() => {
+    uiHidden.value = true;
+    uiHideTimer = null;
+  }, 2000);
+}
 
 watch(zoomMode, (v) => {
   saveZoomMode(v);
@@ -306,6 +356,128 @@ function saveBookProgress(bookId: string, page: number) {
   }
 }
 
+// ── Reading-time tracking ───────────────────────────────────────────────
+// Tracks how long the user spends reading each book. Only counts while the
+// tab is visible (document.hidden === false) so backgrounded tabs don't
+// inflate the number. Accumulated seconds are persisted per book in
+// localStorage so they survive reloads; a ticking ref keeps the footer
+// readout live. Animated (ugoira) books are tracked the same way.
+//
+// Accumulation is *incremental*, not "wall span": every tick reads the delta
+// from the last tick and only adds it if it falls within TICK_CAP_SECONDS.
+// That bound is what keeps an OS-level JS freeze (which WKWebView applies when
+// the app is backgrounded or the lid closes, WITHOUT firing visibilitychange)
+// from dumping the whole frozen span into the tally at once. In steady state
+// each tick contributes ≈1s, freezes contribute nothing, and at most ~1–2s can
+// ever leak through.
+const TICK_CAP_SECONDS = 2;
+
+const readTimeDisplay = ref('0m');
+let readTimeStart: number | null = null; // wallclock (ms) when the active window opened — "is running" marker
+let readTimeLastTick: number | null = null; // wallclock (ms) of the previous tick — delta reference
+let readTimeAccumulated = 0; // confirmed seconds banked for this book (before + ticks)
+let readTimeSessionBaseline = 0; // readTimeAccumulated snapshot when the backend session opened; reported delta = accumulated - this
+let readTimeBookId: string | null = null; // which book the accumulated time belongs to
+let readTimeTimer: ReturnType<typeof setInterval> | null = null;
+
+function readTimeKey(bookId: string): string {
+  return `erolib.reader.readtime.${bookId}`;
+}
+
+function loadReadTime(bookId: string): number {
+  try {
+    const raw = window.localStorage.getItem(readTimeKey(bookId));
+    const parsed = raw ? Number(raw) : 0;
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveReadTime(bookId: string, seconds: number) {
+  try {
+    window.localStorage.setItem(readTimeKey(bookId), String(Math.max(0, Math.round(seconds))));
+  } catch {
+    // ignore
+  }
+}
+
+function formatReadTime(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+/** Live footer readout reflects the banked total for the open book. */
+function refreshReadTime() {
+  readTimeDisplay.value = formatReadTime(readTimeAccumulated);
+}
+
+function startReadTime(bookId: string) {
+  if (!bookId || readTimeStart != null) return;
+  readTimeAccumulated = loadReadTime(bookId);
+  readTimeBookId = bookId;
+  readTimeStart = Date.now();
+  readTimeLastTick = readTimeStart;
+  refreshReadTime();
+  // Open a backend reading session so the Home page can aggregate per-book
+  // stats. Failure is non-fatal — the localStorage fallback still works.
+  if (readSessionId === null) {
+    // Snapshot the banked total at the moment this backend session opens so we
+    // report the per-session DELTA (accumulated - baseline), not the cumulative
+    // all-time total. Set synchronously before the async openBook resolves: early
+    // ticks are dropped (readSessionId still null) but no time is lost, since the
+    // delta is always measured from this preserved baseline.
+    readTimeSessionBaseline = readTimeAccumulated;
+    void api.openBook(bookId).then((id) => { readSessionId = id; }).catch(() => {});
+  }
+}
+
+/** Halt accumulation and mark the window ended. Last-tick fields are reset so
+ *  the next start picks a fresh baseline. */
+function stopReadTime() {
+  readTimeStart = null;
+  readTimeLastTick = null;
+}
+
+function clearReadTimeTimer() {
+  if (readTimeTimer != null) {
+    clearInterval(readTimeTimer);
+    readTimeTimer = null;
+  }
+}
+
+function ensureReadTimeTimer() {
+  if (readTimeTimer != null) return;
+  // Incremental accumulation: each tick credits only (now - lastTick)/1000, and
+  // only if it's within TICK_CAP_SECONDS — anything larger means JS was frozen
+  // (WKWebView backgrounding / OS sleep) and must NOT be counted. In normal
+  // running the delta is ≈1s; on a freeze-resume we skip it, losing at most the
+  // 1s before the book was parked — so the tally stays truthful.
+  readTimeTimer = setInterval(() => {
+    if (readTimeStart != null && readTimeLastTick != null && readTimeBookId) {
+      const now = Date.now();
+      const deltaSec = (now - readTimeLastTick) / 1000;
+      readTimeLastTick = now;
+      if (deltaSec > 0 && deltaSec <= TICK_CAP_SECONDS) {
+        readTimeAccumulated += deltaSec;
+      }
+      refreshReadTime();
+      saveReadTime(readTimeBookId, readTimeAccumulated);
+      reportReadTimeToBackend(readTimeBookId);
+    }
+  }, 1000);
+}
+
+function onVisibilityChangeReadTime() {
+  if (document.hidden) stopReadTime();
+  else startReadTime(props.id);
+}
+
 /** Guess a mime type from an ArrayBuffer's leading magic bytes so blob URLs
  *  render all stored formats. Raw bytes now arrive as ArrayBuffer (Tauri raw
  *  IPC), so sniff a 12-byte Uint8Array view over the buffer without copying. */
@@ -337,12 +509,15 @@ function go(delta: number) {
 }
 
 function onViewportClick(e: MouseEvent) {
-  if (isAnimated.value) return; // animated books play continuously; taps do nothing
-  const target = e.currentTarget as HTMLElement;
-  const rect = target.getBoundingClientRect();
+  // Animated books play continuously — taps do nothing.  Only static pages
+  // respond to zone taps (left/right third); the middle ~34% is inert.
+  if (isAnimated.value) return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   const x = e.clientX - rect.left;
-  if (x > rect.width / 2) go(1);
-  else go(-1);
+  const zone = x / rect.width;
+  if (zone < 0.33) go(-1);
+  else if (zone > 0.66) go(1);
+  // Middle ~34%: nothing.
 }
 
 function onKeyDown(e: KeyboardEvent) {
@@ -438,12 +613,24 @@ function toggleZoom() {
   zoomMode.value = zoomMode.value === 'fill' ? 'contain' : 'fill';
 }
 
-function onMouseMove() {
-  uiHidden.value = false;
-  if (uiHideTimer) clearTimeout(uiHideTimer);
-  uiHideTimer = setTimeout(() => {
-    uiHidden.value = true;
-  }, 2000);
+function onMouseMove(e: MouseEvent) {
+  // Bar-zone model: parked inside the zone → bar stays, NO timer.  Only the
+  // *transition out of* the zone starts a 2s grace timer; re-entering before
+  // it fires cancels it (bar stays).  Timer firing hides the bar.
+  const inZone = e.clientY < 64 || e.clientY > window.innerHeight - 56;
+  if (inZone) {
+    uiHidden.value = false;
+    clearUiHideTimer();
+  } else if (wasInZone) {
+    scheduleUiHide();
+  }
+  wasInZone = inZone;
+}
+
+function onMouseLeave() {
+  wasInZone = false;
+  uiHidden.value = true;
+  clearUiHideTimer();
 }
 
 /** Force dark theme while Reader is mounted, restore on leave. */
@@ -457,16 +644,26 @@ onMounted(() => {
   previousMode.value = themeStore.mode;
   previousSeed.value = themeStore.seed;
   applyMd3Theme(themeStore.seed, 'dark');
+  scheduleUiHide();
+  document.addEventListener('visibilitychange', onVisibilityChangeReadTime);
+  ensureReadTimeTimer();
+  if (!document.hidden) startReadTime(props.id);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown);
+  clearUiHideTimer();
   clearPlayTimer();
+  document.removeEventListener('visibilitychange', onVisibilityChangeReadTime);
+  if (readSessionId !== null && readTimeBookId) {
+    stopReadTime();
+    reportReadTimeToBackend(readTimeBookId);
+  }
+  clearReadTimeTimer();
   resizeObserver?.disconnect();
   resizeObserver = null;
   closeBitmaps();
   clearBlobs();
-  if (uiHideTimer) clearTimeout(uiHideTimer);
   if (previousMode.value && previousSeed.value) {
     applyMd3Theme(previousSeed.value, previousMode.value);
   }
@@ -476,6 +673,13 @@ watch(() => props.id, () => {
   current.value = 0;
   clearBlobs();
   closeBitmaps();
+  stopReadTime();
+  if (readSessionId !== null && readTimeBookId) {
+    reportReadTimeToBackend(readTimeBookId); // finalize the previous book's session delta + ended_at
+  }
+  readSessionId = null;
+  warnedNoSession = false;
+  startReadTime(props.id);
   loadMetadata();
 });
 

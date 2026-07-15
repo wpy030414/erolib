@@ -204,3 +204,70 @@ pub async fn list_books(
         .await
         .map_err(|e| e.to_string())
 }
+
+/// Mark a book as read and open a reading session; returns the new session id,
+/// which the reader later hands to `record_reading` when the book is closed.
+#[tauri::command]
+pub async fn open_book(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<i64, String> {
+    state
+        .library_service
+        .open_book(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Finalize a reading span recorded via `open_book`: stamp its `ended_at` and
+/// the session's `duration_ms` delta (the per-session reading time).
+#[tauri::command]
+pub async fn record_reading(
+    id: String,
+    session_id: i64,
+    duration_ms: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .library_service
+        .record_reading(&id, session_id, duration_ms)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Total reading duration (ms) for the current week (Monday 00:00 local).
+#[tauri::command]
+pub async fn get_weekly_reading_ms(state: State<'_, AppState>) -> Result<i64, String> {
+    state
+        .library_service
+        .get_weekly_reading_ms()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Most-recently-read books first, for the home shelf.
+#[tauri::command]
+pub async fn list_recent_books(
+    limit: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::Book>, String> {
+    state
+        .library_service
+        .list_recent_books(limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The book with the highest cumulative reading duration over the last `days`
+/// days — the "近 N 天最爱" pick. `days` is typically 7.
+#[tauri::command]
+pub async fn get_recent_favorite_book(
+    days: i64,
+    state: State<'_, AppState>,
+) -> Result<Option<crate::models::Book>, String> {
+    state
+        .library_service
+        .get_recent_favorite_book(days)
+        .await
+        .map_err(|e| e.to_string())
+}

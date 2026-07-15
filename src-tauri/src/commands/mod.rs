@@ -2,6 +2,7 @@ pub mod book;
 pub mod cookies;
 pub mod ehentai;
 pub mod ahentai;
+pub mod nicecat;
 pub mod pixiv;
 pub mod pixiv_login;
 pub mod reset;

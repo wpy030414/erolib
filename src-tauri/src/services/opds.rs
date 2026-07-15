@@ -4,6 +4,8 @@ use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::Book;
 
+use super::feed::xml_escape;
+
 /// Generates OPDS Atom feeds from the book library. The running HTTP server
 /// (spawned by the `start_opds_server` command) uses this to render responses.
 pub struct OpdsService {
@@ -34,7 +36,7 @@ impl OpdsService {
         .map_err(AppError::Db)?;
 
         let base = self.base_url.lock().map(|s| s.clone()).unwrap_or_default();
-        Ok(render_feed(&base, &books, "EroLib Library", "/opds"))
+        Ok(render_feed(&base, &books, "EroLib", "/opds"))
     }
 
     pub async fn search_feed(&self, query: &str) -> Result<String, AppError> {
@@ -60,10 +62,7 @@ fn render_feed(base: &str, books: &[Book], title: &str, self_path: &str) -> Stri
         let updated = book.updated_at.to_rfc3339();
         let download = format!("{}/download/{}", base, book.id);
         let cover = format!("{}/covers/{}", base, book.id);
-        let summary_xml = book
-            .original_filename
-            .as_deref()
-            .unwrap_or("");
+        let summary = format!("<![CDATA[{}]]>", super::feed::book_metadata_blurb(&book));
         entries.push_str(&format!(
             r#"<entry>
   <title>{}</title>
@@ -71,14 +70,14 @@ fn render_feed(base: &str, books: &[Book], title: &str, self_path: &str) -> Stri
   <updated>{}</updated>
   <link rel="http://opds-spec.org/acquisition" href="{}" type="application/x-cb7"/>
   <link rel="http://opds-spec.org/image/thumbnail" href="{}" type="image/jpeg"/>
-  <summary>{}</summary>
+  <summary type="html">{}</summary>
 </entry>"#,
             xml_escape(&book.title),
             book.id,
             updated,
             download,
             cover,
-            xml_escape(summary_xml),
+            summary,
         ));
     }
 
@@ -101,12 +100,4 @@ fn render_feed(base: &str, books: &[Book], title: &str, self_path: &str) -> Stri
         base,
         entries,
     )
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }

@@ -1,14 +1,17 @@
 
 
+mod feed;
 mod library;
 mod opds;
 mod rss;
 pub mod pixiv;
 pub mod ehentai;
 pub mod ahentai;
+pub mod nicecat;
 mod search;
 mod storage;
 pub mod aria2;
+pub mod proxy;
 pub mod task;
 pub mod task_manager;
 
@@ -18,6 +21,7 @@ pub use rss::RssService;
 pub use pixiv::{PixivDownloader, PixivProgress, PixivProgressSink};
 pub use ehentai::{EhentaiClient, EhentaiDownloader, GalleryListItem};
 pub use ahentai::AhentaiClient;
+pub use nicecat::NicecatClient;
 pub use search::SearchService;
 pub use storage::StorageService;
 pub use aria2::Aria2Client;

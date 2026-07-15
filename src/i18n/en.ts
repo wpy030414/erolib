@@ -7,6 +7,7 @@ const en: Record<string, string> = {
   'nav.ahentai': 'AHentai',
   'nav.tasks': 'Tasks',
   'nav.settings': 'Settings',
+  'nav.home': 'Home',
 
   'lib.search.placeholder': 'Search title / author / tags',
   'lib.search': 'Search',
@@ -232,6 +233,23 @@ const en: Record<string, string> = {
   'tasks.duration.ms': '{m}m {s}s',
   'tasks.duration.s': '{s}s',
   'tasks.error.noAria2': 'aria2 is not running. Please install aria2 or start the service.',
+
+  // NiceCat
+  'nav.nicecat': 'NiceCat',
+  'nc.search.placeholder': 'Search comics',
+  'nc.browse.empty': 'No comics found',
+  'nc.browse.loadingMore': 'Loading…',
+  'nc.browse.end': 'No more',
+  'nc.home.refresh': 'Refresh',
+  'nc.browse.queued': 'Added to download queue: {title}',
+
+  // Home page
+  'home.weekly': "This week you've read",
+  'home.unit.minute': ' min',
+  'home.unit.hour': 'h',
+  'home.recently': 'Recently read',
+  'home.favoriteBook': 'Favorite book',
+  'home.noData': 'No reading records yet',
 
   // Settings reset toast
   'settings.reset.toast': 'All data cleared.',
