@@ -4,6 +4,8 @@ use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::Book;
 
+use super::feed::xml_escape;
+
 /// Generates an RSS 2.0 feed from the local library. The running HTTP server
 /// (spawned by `start_rss_server`) uses this to render the `/rss` route.
 pub struct RssService {
@@ -50,17 +52,28 @@ fn render_feed(base: &str, books: &[Book]) -> String {
             .to_string();
         let download = format!("{}/download/{}", base, book.id);
         let cover = format!("{}/covers/{}", base, book.id);
-        let description = format!(
-            "{} pages · {}",
-            book.page_count,
-            book.format.to_uppercase()
-        );
+        let article = format!("{}/article/{}", base, book.id);
+        // Rich per-field metadata blurb, shared with OPDS via the `feed` module,
+        // CDATA-wrapped so the structural <br>/<a> stay intact.
+        let description = format!("<![CDATA[{}]]>", super::feed::book_metadata_blurb(&book));
         let enclosure_type = match book.format.to_lowercase().as_str() {
             "cbz" => "application/x-cbz",
             "cbr" => "application/x-cbr",
             "pdf" => "application/pdf",
             _ => "application/x-cb7",
         };
+
+        // Full-page image strip embedded as the article body so RSS readers
+        // render the book as an image sequence. Without `<content:encoded>`,
+        // readers fall back to fetching `<link>` — formerly the raw cb7 — and
+        // showed garbled bytes. `<link>` now points at the HTML gallery route.
+        let mut content = String::new();
+        for n in 0..book.page_count.max(1) as usize {
+            content.push_str(&format!(
+                r#"<img src="{}/pages/{}/{}" alt="page {}" loading="lazy" style="max-width:100%;height:auto;display:block"/>"#,
+                base, book.id, n, n + 1,
+            ));
+        }
 
         items.push_str(&format!(
             r#"<item>
@@ -69,14 +82,16 @@ fn render_feed(base: &str, books: &[Book]) -> String {
       <guid isPermaLink="false">urn:uuid:{}</guid>
       <pubDate>{}</pubDate>
       <description>{}</description>
+      <content:encoded><![CDATA[{}]]></content:encoded>
       <enclosure url="{}" length="{}" type="{}"/>
-      <media:thumbnail url="{}"/>
+      <media:thumbnail url="{}" type="image/jpeg"/>
     </item>"#,
             xml_escape(&book.title),
-            download,
+            article,
             book.id,
             pub_date,
-            xml_escape(&description),
+            description,
+            content,
             download,
             book.file_size,
             enclosure_type,
@@ -86,9 +101,9 @@ fn render_feed(base: &str, books: &[Book]) -> String {
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>EroLib Library</title>
+    <title>EroLib</title>
     <link>{}</link>
     <description>EroLib 本地书库 RSS 订阅</description>
     <language>zh-cn</language>
@@ -99,12 +114,4 @@ fn render_feed(base: &str, books: &[Book]) -> String {
 </rss>"#,
         base, build_date, items
     )
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }

@@ -20,6 +20,7 @@ pub enum TaskSource {
     Pixiv,
     Ehentai,
     Ahentai,
+    Nicecat,
 }
 
 impl fmt::Display for TaskSource {
@@ -28,6 +29,7 @@ impl fmt::Display for TaskSource {
             TaskSource::Pixiv => write!(f, "pixiv"),
             TaskSource::Ehentai => write!(f, "ehentai"),
             TaskSource::Ahentai => write!(f, "ahentai"),
+            TaskSource::Nicecat => write!(f, "nicecat"),
         }
     }
 }
@@ -39,6 +41,7 @@ impl FromStr for TaskSource {
             "pixiv" => Ok(TaskSource::Pixiv),
             "ehentai" => Ok(TaskSource::Ehentai),
             "ahentai" => Ok(TaskSource::Ahentai),
+            "nicecat" => Ok(TaskSource::Nicecat),
             _ => Err(format!("unknown task source: {s}")),
         }
     }
@@ -110,6 +113,10 @@ pub enum TaskPayload {
         gallery_id: String,
         title: String,
     },
+    NicecatGallery {
+        comic_id: String,
+        title: String,
+    },
 }
 
 impl TaskPayload {
@@ -120,6 +127,7 @@ impl TaskPayload {
             | TaskPayload::PixivSingleWork { .. } => TaskSource::Pixiv,
             TaskPayload::EhentaiGallery { .. } => TaskSource::Ehentai,
             TaskPayload::AhentaiGallery { .. } => TaskSource::Ahentai,
+            TaskPayload::NicecatGallery { .. } => TaskSource::Nicecat,
         }
     }
 }

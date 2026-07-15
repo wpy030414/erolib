@@ -9,10 +9,7 @@
     <div v-if="feed.end && feed.items.length" class="feed-end text-center text-medium-emphasis">
       {{ texts.end }}
     </div>
-    <div v-if="feed.loading" class="feed-loading text-center text-medium-emphasis">
-      <md-circular-progress indeterminate />
-      <span>{{ texts.loadingMore }}</span>
-    </div>
+    <FeedLoading v-if="feed.loading">{{ texts.loadingMore }}</FeedLoading>
     <div ref="sentinel" class="feed-sentinel" />
   </div>
 </template>
@@ -20,6 +17,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
+import FeedLoading from '@/components/FeedLoading.vue';
 
 /**
  * Browse-grid scaffolding shared by every feed (Pixiv recommend/following/
@@ -44,18 +42,6 @@ useInfiniteSentinel(sentinel, () => emit('load-more'));
 </script>
 
 <style scoped>
-.feed-sentinel {
-  height: 1px;
-}
-
-.feed-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 24px 0;
-}
-
 .feed-end {
   padding: 20px 0;
   font-size: 13px;
