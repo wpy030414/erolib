@@ -1,7 +1,10 @@
 <template>
   <div class="pa-6">
     <div class="library-header d-flex align-center gap-4 mb-6">
-      <h2 class="text-h5 library-header__title">{{ t('nav.library') }}</h2>
+      <h2 class="text-h5 library-header__title">
+        <template v-if="collectionsStore.isAllActive">{{ t('nav.library') }}</template>
+        <template v-else>"{{ collectionsStore.activeCollectionName }}"</template>
+      </h2>
       <span class="spacer" />
 
       <SearchBox
@@ -65,6 +68,10 @@
           positioning="fixed"
           @closed="menuOpen[book.id] = false"
         >
+          <md-menu-item @click="openCollectionPicker(book.id)">
+            <MdiIcon slot="start" :path="mdiPlaylistPlus" :size="18" />
+            <div slot="headline">{{ t('lib.collections.addTo') }}</div>
+          </md-menu-item>
           <md-menu-item @click="viewMeta(book)">
             <MdiIcon slot="start" :path="mdiInformationOutline" :size="18" />
             <div slot="headline">{{ t('lib.viewMeta') }}</div>
@@ -147,12 +154,31 @@
         </dl>
       </div>
     </dialog>
+
+    <!-- Collection management FAB + dialogs -->
+    <FabButton
+      :icon="mdiPlaylistPlay"
+      :aria-label="t('lib.collections.manage')"
+      @click="showCollectionDialog = true"
+    />
+
+    <CollectionDialog
+      :model-value="showCollectionDialog"
+      @update:model-value="showCollectionDialog = $event"
+      @close="showCollectionDialog = false"
+    />
+
+    <BookCollectionPicker
+      v-if="pickerBookId"
+      :book-id="pickerBookId"
+      @close="pickerBookId = null"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import {
   mdiFolderOpen,
@@ -160,8 +186,11 @@ import {
   mdiDelete,
   mdiInformationOutline,
   mdiClose,
+  mdiPlaylistPlay,
+  mdiPlaylistPlus,
 } from '@mdi/js';
 import { useLibraryStore } from '@/stores/library';
+import { useCollectionsStore } from '@/stores/collections';
 import { api } from '@/services/api';
 import { getThumb, setThumb, deleteThumb } from '@/services/thumb-cache';
 import { useToastStore } from '@/stores/toast';
@@ -169,6 +198,9 @@ import { useI18n } from '@/i18n';
 import MdiIcon from '@/components/MdiIcon.vue';
 import SourceCard from '@/components/SourceCard.vue';
 import SearchBox from '@/components/SearchBox.vue';
+import FabButton from '@/components/FabButton.vue';
+import CollectionDialog from '@/components/CollectionDialog.vue';
+import BookCollectionPicker from '@/components/BookCollectionPicker.vue';
 import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
 import { formatSize } from '@/utils/format';
 import type { Book } from '@/types';
@@ -180,7 +212,9 @@ type MdMenuElement = HTMLElement & {
 };
 
 const router = useRouter();
+const route = useRoute();
 const libraryStore = useLibraryStore();
+const collectionsStore = useCollectionsStore();
 const toast = useToastStore();
 const { t } = useI18n();
 
@@ -192,6 +226,8 @@ useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore());
 const coverMap = reactive<Record<string, string | null>>({});
 const menuOpen = reactive<Record<string, boolean>>({});
 const menuRefs = new Map<string, MdMenuElement | null>();
+const showCollectionDialog = ref(false);
+const pickerBookId = ref<string | null>(null);
 
 /** Chip-row display cap (backend `get_all_tags` returns the top 30). When the
  *  cap is reached we append a non-interactive "…" chip to signal more exist. */
@@ -213,6 +249,11 @@ function openMenu(bookId: string) {
   if (menuEl && typeof menuEl.show === 'function') {
     menuEl.show();
   }
+}
+
+function openCollectionPicker(bookId: string) {
+  menuOpen[bookId] = false;
+  pickerBookId.value = bookId;
 }
 
 async function loadCover(book: Book) {
@@ -245,7 +286,7 @@ async function loadCover(book: Book) {
   };
 }
 
-const stopWatch = watch(
+const stopCoverWatch = watch(
   () => libraryStore.books,
   (books) => {
     const currentIds = new Set(books.map((b) => b.id));
@@ -266,10 +307,46 @@ const stopWatch = watch(
 
 onMounted(() => {
   libraryStore.ensureLoaded();
+  collectionsStore.ensureLoaded();
 });
 
+// When the active collection changes, re-filter the library and re-tally tags.
+const stopCollectionWatch = watch(
+  () => collectionsStore.activeCollectionId,
+  () => {
+    libraryStore.collectionFilter = collectionsStore.activeCollectionName;
+    // reload() fetches books, but we also need tag counts scoped to the
+    // collection. applySearch() calls loadTags() with the current text filter.
+    libraryStore.applySearch();
+  },
+);
+
+// When navigated to (e.g. from Tasks "view" button) with ?search=…,
+// set the text box and trigger a search. Also sync the collection filter
+// so the switch to "All" (done by Tasks before navigating) takes effect.
+const stopRouteWatch = watch(
+  () => route.query.search,
+  (val) => {
+    const text = (typeof val === 'string' && val) ? val : '';
+    if (!text) return;
+    // Always sync collectionFilter to the current store state first, so a
+    // prior setActiveCollection(null) from another view takes effect.
+    libraryStore.collectionFilter = collectionsStore.activeCollectionName;
+    if (text === libraryStore.query) {
+      // Same query text but collection may have changed — still reload.
+      libraryStore.applySearch();
+      return;
+    }
+    libraryStore.query = text;
+    libraryStore.applySearch();
+  },
+  { immediate: true },
+);
+
 onBeforeUnmount(() => {
-  stopWatch();
+  stopCoverWatch();
+  stopRouteWatch();
+  stopCollectionWatch();
   for (const url of Object.values(coverMap)) {
     if (url) URL.revokeObjectURL(url);
   }

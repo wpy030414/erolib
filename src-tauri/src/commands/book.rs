@@ -1,8 +1,6 @@
 
 use tauri::{Emitter, State};
 
-use crate::errors::AppError;
-use crate::models::BookMetadata;
 use crate::AppState;
 
 #[tauri::command]
@@ -13,19 +11,6 @@ pub async fn import_book(
     state
         .library_service
         .import_book(file_path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn import_book_from_images(
-    images: Vec<Vec<u8>>,
-    metadata: BookMetadata,
-    state: State<'_, AppState>,
-) -> Result<crate::models::Book, String> {
-    state
-        .library_service
-        .import_from_images(images, metadata)
         .await
         .map_err(|e| e.to_string())
 }
@@ -47,19 +32,6 @@ pub async fn delete_book(
     // this just brings the in-memory state in sync.
     let _ = app.emit("book://deleted", serde_json::json!({ "bookId": id }));
     Ok(())
-}
-
-#[tauri::command]
-pub async fn update_book_metadata(
-    id: String,
-    metadata: BookMetadata,
-    state: State<'_, AppState>,
-) -> Result<crate::models::Book, String> {
-    state
-        .library_service
-        .update_metadata(id, metadata)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 /// Metadata for a book (page count, title, file path on disk).
@@ -127,18 +99,6 @@ pub async fn get_book_page_count(
 }
 
 #[tauri::command]
-pub async fn get_book_cover(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
-    state
-        .library_service
-        .get_cover(&id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn get_book_cover_thumb(
     id: String,
     state: State<'_, AppState>,
@@ -148,23 +108,6 @@ pub async fn get_book_cover_thumb(
         .get_cover_thumb(&id)
         .await
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn export_book(
-    id: String,
-    format: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let book = state
-        .library_service
-        .get_book(&id)
-        .await
-        .map_err(|e| e.to_string())?;
-    if format == book.format {
-        return Ok(book.file_path);
-    }
-    Err(AppError::Other(format!("Export to {} not yet implemented", format)).to_string())
 }
 
 /// Copy a book file to a destination chosen by the user (via the save dialog).
@@ -254,20 +197,6 @@ pub async fn list_recent_books(
     state
         .library_service
         .list_recent_books(limit)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// The book with the highest cumulative reading duration over the last `days`
-/// days — the "近 N 天最爱" pick. `days` is typically 7.
-#[tauri::command]
-pub async fn get_recent_favorite_book(
-    days: i64,
-    state: State<'_, AppState>,
-) -> Result<Option<crate::models::Book>, String> {
-    state
-        .library_service
-        .get_recent_favorite_book(days)
         .await
         .map_err(|e| e.to_string())
 }

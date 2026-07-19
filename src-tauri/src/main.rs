@@ -11,7 +11,7 @@ mod services;
 use std::sync::Arc;
 
 use services::{
-    task_manager::TaskManager, LibraryService, OpdsService,
+    task_manager::TaskManager, CollectionService, LibraryService, OpdsService,
     RssService, SearchService, StorageService,
 };
 use std::time::Duration;
@@ -21,6 +21,7 @@ use tauri::Manager;
 #[derive(Clone)]
 struct AppState {
     library_service: Arc<LibraryService>,
+    collection_service: Arc<CollectionService>,
     search_service: Arc<SearchService>,
     opds_service: Arc<OpdsService>,
     rss_service: Arc<RssService>,
@@ -32,18 +33,17 @@ impl AppState {
     fn db_inner(&self) -> Arc<db::Database> {
         self.db.clone()
     }
-    fn storage_inner(&self) -> Arc<StorageService> {
-        self.storage.clone()
-    }
 
     fn new(db: Arc<db::Database>, storage: Arc<StorageService>) -> Self {
         let library_service = Arc::new(LibraryService::new(db.clone(), storage.clone()));
+        let collection_service = Arc::new(CollectionService::new(db.clone()));
         let search_service = Arc::new(SearchService::new(db.clone()));
         let opds_service = Arc::new(OpdsService::new(db.clone()));
         let rss_service = Arc::new(RssService::new(db.clone()));
 
         Self {
             library_service,
+            collection_service,
             search_service,
             opds_service,
             rss_service,
@@ -71,6 +71,13 @@ fn main() {
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             let storage = Arc::new(StorageService::new(storage_dir.clone()));
             let app_state = AppState::new(db.clone(), storage.clone());
+            // Migrate collections table — add `position` column if missing from
+            // the original schema. Safe to call on every startup.
+            if let Err(e) = tauri::async_runtime::block_on(async {
+                app_state.collection_service.ensure_position_column().await
+            }) {
+                tracing::warn!(target: "erolib::setup", %e, "ensure collection position column failed");
+            }
             // Neutralize reading sessions left open by a prior force-quit so they
             // render in history but contribute 0 to duration stats. Best-effort:
             // a failure here must not block startup.
@@ -151,39 +158,28 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             commands::book::import_book,
-            commands::book::import_book_from_images,
             commands::book::delete_book,
-            commands::book::update_book_metadata,
             commands::book::get_book,
             commands::book::get_book_page,
             commands::book::get_book_page_count,
-            commands::book::get_book_cover,
             commands::book::get_book_cover_thumb,
-            commands::book::export_book,
             commands::book::save_book,
             commands::book::list_books,
             commands::book::open_book,
             commands::book::record_reading,
             commands::book::get_weekly_reading_ms,
             commands::book::list_recent_books,
-            commands::book::get_recent_favorite_book,
             commands::sync::sync_to_dir,
             commands::reset::reset_app_data,
             commands::search::search_books,
             commands::search::get_all_tags,
-            commands::search::get_all_collections,
             commands::server::start_opds_server_cmd,
             commands::server::stop_opds_server_cmd,
             commands::server::start_rss_server_cmd,
             commands::server::stop_rss_server_cmd,
-            commands::pixiv::pixiv_test_cookie,
             commands::pixiv::pixiv_get_login,
             commands::pixiv::pixiv_set_login,
             commands::pixiv::pixiv_clear_login,
-            commands::pixiv::pixiv_download_bookmarks,
-            commands::pixiv::pixiv_cancel_download,
-            commands::pixiv::pixiv_fetch_followings,
-            commands::pixiv::pixiv_download_user_works,
             commands::pixiv::pixiv_list_bookmarks,
             commands::pixiv::pixiv_list_following_feed,
             commands::pixiv::pixiv_list_recommended,
@@ -192,10 +188,7 @@ fn main() {
             commands::pixiv::pixiv_browse_status,
             commands::pixiv_login::pixiv_open_login_window,
             commands::ehentai::ehentai_open_login_window,
-            commands::ehentai::ehentai_download_gallery,
-            commands::ehentai::ehentai_cancel_download,
             commands::ehentai::ehentai_get_login,
-            commands::ehentai::ehentai_set_login,
             commands::ehentai::ehentai_clear_login,
             commands::ehentai::ehentai_search,
             commands::ehentai::ehentai_proxy_thumb,
@@ -213,12 +206,18 @@ fn main() {
             commands::tasks::task_delete,
             commands::tasks::task_retry,
             commands::tasks::tasks_clear_completed,
-            commands::tasks::task_enqueue_pixiv_bookmarks,
-            commands::tasks::task_enqueue_pixiv_user_works,
             commands::tasks::task_enqueue_ehentai_gallery,
             commands::tasks::task_enqueue_pixiv_work,
             commands::tasks::task_enqueue_ahentai_gallery,
             commands::tasks::task_enqueue_nicecat_gallery,
+            commands::collection::list_collections,
+            commands::collection::reorder_collections,
+            commands::collection::create_collection,
+            commands::collection::rename_collection,
+            commands::collection::delete_collection,
+            commands::collection::add_book_to_collection,
+            commands::collection::remove_book_from_collection,
+            commands::collection::get_book_collections,
         ])
         .run(tauri::generate_context!())
         .unwrap();

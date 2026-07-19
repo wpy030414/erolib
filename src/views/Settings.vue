@@ -94,29 +94,19 @@
         </div>
       </section>
 
-      <!-- Personal data -->
+      <!-- Usage data -->
       <section class="mb-6">
         <div class="d-flex align-center mb-2">
-          <MdiIcon :path="mdiDeleteForever" :size="22" class="mr-2" />
+          <MdiIcon :path="mdiDatabaseOutline" :size="22" class="mr-2" />
           <h3 class="text-h6">{{ t('settings.reset.title') }}</h3>
         </div>
 
-        <div class="data-row">
-          <div class="data-row__text">
-            <div class="data-row__title">{{ t('settings.reset.clearCache') }}</div>
-            <div class="data-row__sub">{{ t('settings.reset.clearCacheHint') }}</div>
-          </div>
+        <div class="d-flex gap-3">
           <md-outlined-button :disabled="clearingCache" @click="onClearCache">
             <MdiIcon slot="icon" :path="mdiBroom" :size="20" />
             {{ t('settings.reset.clearCache') }}
           </md-outlined-button>
-        </div>
 
-        <div class="data-row">
-          <div class="data-row__text">
-            <div class="data-row__title">{{ t('settings.reset.clearAll') }}</div>
-            <div class="data-row__sub">{{ t('settings.reset.clearAllHint') }}</div>
-          </div>
           <md-filled-button :disabled="resetting" @click="onClearAll">
             <MdiIcon slot="icon" :path="mdiDeleteForever" :size="20" />
             {{ resetting ? t('settings.reset.running') : t('settings.reset.clearAll') }}
@@ -256,7 +246,6 @@
     <md-dialog ref="clearAllDialogRef" @close="onDialogClose">
       <div slot="headline">{{ t('settings.reset.clearAll') }}</div>
       <form id="clear-all-form" slot="content" method="dialog" class="clear-all-dialog__content">
-        <p class="text-body-2 text-medium-emphasis">{{ t('settings.reset.clearAllHint') }}</p>
         <p class="text-body-2 text-error">{{ t('settings.reset.confirmWarn') }}</p>
         <md-outlined-text-field
           :label="t('settings.reset.typeConfirm', { phrase: confirmPhrase })"
@@ -281,6 +270,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
   mdiBroom,
   mdiCheckCircle,
+  mdiDatabaseOutline,
   mdiDeleteForever,
   mdiFolderSyncOutline,
   mdiGithub,
@@ -565,28 +555,6 @@ onBeforeUnmount(() => {
   display: inline-flex;
   flex-shrink: 0;
   margin-left: auto;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.data-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
-}
-
-.data-row__text {
-  min-width: 0;
-}
-
-.data-row__title {
-  font: 500 var(--md-sys-typescale-body-large-size) / var(--md-sys-typescale-body-large-line-height) var(--md-sys-typescale-font);
-  color: var(--md-sys-color-on-surface);
-}
-
-.data-row__sub {
-  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font);
   color: var(--md-sys-color-on-surface-variant);
 }
 

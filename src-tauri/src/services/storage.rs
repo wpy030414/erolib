@@ -25,8 +25,6 @@ const PAGE_CACHE_MAX: usize = 8;
 /// Manages on-disk storage of CB7 files, covers, and cache.
 pub struct StorageService {
     pub library_path: PathBuf,
-    #[allow(dead_code)]
-    pub cache_path: PathBuf,
     pub cover_path: PathBuf,
     /// Per-book zip handle cache: path -> opened archive + image entry indices.
     /// Reused across `read_page`/`count_pages` calls so a book's central
@@ -37,17 +35,15 @@ pub struct StorageService {
 impl StorageService {
     pub fn new(base_path: PathBuf) -> Self {
         let library_path = base_path.join("library");
-        let cache_path = base_path.join("cache");
         let cover_path = base_path.join("covers");
 
         // Best-effort creation; failures surface on first real IO.
-        for p in [&library_path, &cache_path, &cover_path] {
+        for p in [&library_path, &cover_path] {
             let _ = std::fs::create_dir_all(p);
         }
 
         Self {
             library_path,
-            cache_path,
             cover_path,
             page_cache: Mutex::new(HashMap::new()),
         }

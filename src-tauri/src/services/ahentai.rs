@@ -33,8 +33,6 @@ pub struct AhentaiGalleryItem {
 #[derive(Debug, Default, Clone)]
 pub struct AhentaiGalleryMeta {
     pub title: String,
-    #[allow(dead_code)]
-    pub title_alt: Option<String>,
     pub page_count: i32,
     pub load_dir: String,
     pub tags: Vec<String>,
@@ -60,12 +58,6 @@ impl AhentaiClient {
             .build()
             .context("build reqwest client")?;
         Ok(Self { http })
-    }
-
-    /// Access the underlying reqwest::Client for direct requests (used by the
-    /// task manager's concurrent download loop).
-    pub fn http(&self) -> Client {
-        self.http.clone()
     }
 
     /// Every GET request carries a Referer header pointing at the site root.
@@ -236,13 +228,6 @@ impl AhentaiClient {
             .map(|n| n.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
-        // Alt title: `.book_page .right .info h2`
-        let title_alt = doc
-            .select(&Selector::parse(".book_page .right .info h2").map_err(|e| anyhow::anyhow!("{e:?}"))?)
-            .next()
-            .map(|n| n.text().collect::<String>().trim().to_string())
-            .filter(|s| !s.is_empty());
-
         // Page count: `.pages h3` → "Pages: 35"
         let page_count = doc
             .select(&Selector::parse(".pages h3").map_err(|e| anyhow::anyhow!("{e:?}"))?)
@@ -278,7 +263,6 @@ impl AhentaiClient {
 
         Ok(AhentaiGalleryMeta {
             title,
-            title_alt,
             page_count,
             load_dir,
             tags,
@@ -290,26 +274,6 @@ impl AhentaiClient {
         })
     }
 
-    /// Download a full-resolution page image from the CDN.
-    /// URL format: `https://images.asmhentai.com/{load_dir}/{id}/{page}.jpg`
-    #[allow(dead_code)]
-    pub async fn download_image(&self, url: &str) -> Result<Vec<u8>> {
-        let bytes = self
-            .http
-            .get(url)
-            .header("Referer", &format!("{}/", AHENTAI_BASE))
-            .send()
-            .await
-            .context("download image")?
-            .bytes()
-            .await
-            .context("read image bytes")?
-            .to_vec();
-        if bytes.len() < 200 {
-            anyhow::bail!("suspiciously small image from {url}");
-        }
-        Ok(bytes)
-    }
 }
 
 // ---------------------------------------------------------------------------

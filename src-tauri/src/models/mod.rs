@@ -5,7 +5,7 @@ use sqlx::Row;
 /// Source metadata for a book obtained from scraper/plugins/userscripts.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BookSource {
-    pub plugin: String,
+    pub source_plugin: String,
     pub source_url: String,
     pub scraped_at: Option<DateTime<Utc>>,
     /// Source-site post/work id (Pixiv illust id, EHentai gid).
@@ -115,41 +115,13 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for TagCount {
         })
     }
 }
-
-/// A recorded span of reading one book. Spans are opened on book open and closed
-/// on close; per-session duration powers the "本周阅读时长" stat and
-/// the "近7天最爱" pick (highest SUM(duration_ms) over the window).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct ReadingSession {
-    pub id: i64,
-    pub book_id: String,
-    /// RFC3339 UTC instant the session opened.
-    pub started_at: String,
-    /// RFC3339 UTC instant the session closed; NULL while still open.
-    pub ended_at: Option<String>,
-    /// Accumulated reading duration for this span, in milliseconds.
-    pub duration_ms: i64,
-}
-
-impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ReadingSession {
-    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            id: row.try_get("id")?,
-            book_id: row.try_get("book_id")?,
-            started_at: row.try_get("started_at")?,
-            ended_at: row.try_get("ended_at")?,
-            duration_ms: row.try_get("duration_ms")?,
-        })
-    }
-}
-
 /// A named collection of books.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Collection {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub position: i32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -159,6 +131,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Collection {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
             description: row.try_get("description")?,
+            position: row.try_get::<i32, _>("position").unwrap_or(0),
             created_at: row.try_get("created_at")?,
         })
     }

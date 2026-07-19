@@ -205,23 +205,6 @@ async fn try_capture_fallback(
     Some(result)
 }
 
-/// Extract a Pixiv numeric user id from a profile URL like
-/// `https://www.pixiv.net/users/12345678/...`, if present.
-#[allow(dead_code)]
-fn user_id_from_pixiv_url(url: &Url) -> Option<String> {
-    if url.host_str() != Some("www.pixiv.net") {
-        return None;
-    }
-    let segments: Vec<&str> = url.path_segments()?.collect();
-    if segments.first() == Some(&"users") {
-        let id = segments.get(1)?;
-        if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-            return Some(id.to_string());
-        }
-    }
-    None
-}
-
 fn persist(session: &PixivSession, login: &PixivLoginResult) {
     session.set_login(PixivLogin {
         cookie: login.cookie.clone(),

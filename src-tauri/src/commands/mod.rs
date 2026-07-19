@@ -1,4 +1,5 @@
 pub mod book;
+pub mod collection;
 pub mod cookies;
 pub mod ehentai;
 pub mod ahentai;

@@ -4,7 +4,7 @@ use sqlx::Row;
 
 use crate::db::Database;
 use crate::errors::AppError;
-use crate::models::{Book, Collection, SearchFacets, SearchQuery, SearchResult, TagCount};
+use crate::models::{Book, SearchFacets, SearchQuery, SearchResult, TagCount};
 
 pub struct SearchService {
     db: Arc<Database>,
@@ -182,12 +182,45 @@ impl SearchService {
     ///
     /// When `text` is given, counts are tallied only over the books matching
     /// that text (title/author) — the text query dominates the chips, so the
-    /// chip set and its counts reflect the text-filtered result set. Tags with
-    /// zero matches simply drop out (INNER JOIN). With no text, the full
-    /// library is tallied.
-    pub async fn tags_with_count(&self, text: Option<&str>) -> Result<Vec<TagCount>, AppError> {
-        match text {
-            Some(t) => {
+    /// chip set and its counts reflect the text-filtered result set.
+    ///
+    /// When `collection` is given, counts are further scoped to the books in
+    /// that collection via the `collection_books` join table. Tags with zero
+    /// matches simply drop out (INNER JOIN). With no text, the full library
+    /// (or full collection) is tallied.
+    pub async fn tags_with_count(
+        &self,
+        text: Option<&str>,
+        collection: Option<&str>,
+    ) -> Result<Vec<TagCount>, AppError> {
+        match (text, collection) {
+            (Some(t), Some(col)) => {
+                let pattern = format!("%{}%", t);
+                sqlx::query_as::<_, TagCount>(
+                    "SELECT t.name AS name, COUNT(bt.book_id) AS count \
+                     FROM tags t \
+                     JOIN book_tags bt ON bt.tag_id = t.id \
+                     JOIN books b ON b.id = bt.book_id \
+                     JOIN collection_books cb ON cb.book_id = b.id \
+                     JOIN collections c ON c.id = cb.collection_id \
+                     WHERE (b.title LIKE ? OR b.author LIKE ? \
+                            OR b.id IN (\
+                                SELECT bt2.book_id FROM book_tags bt2 \
+                                JOIN tags t2 ON t2.id = bt2.tag_id WHERE t2.name LIKE ?)) \
+                     AND c.name = ? \
+                     GROUP BY t.id \
+                     ORDER BY count DESC, t.name ASC \
+                     LIMIT 30",
+                )
+                .bind(&pattern)
+                .bind(&pattern)
+                .bind(&pattern)
+                .bind(col)
+                .fetch_all(&self.db.pool)
+                .await
+                .map_err(AppError::Db)
+            }
+            (Some(t), None) => {
                 let pattern = format!("%{}%", t);
                 sqlx::query_as::<_, TagCount>(
                     "SELECT t.name AS name, COUNT(bt.book_id) AS count \
@@ -209,7 +242,25 @@ impl SearchService {
                 .await
                 .map_err(AppError::Db)
             }
-            None => {
+            (None, Some(col)) => {
+                sqlx::query_as::<_, TagCount>(
+                    "SELECT t.name AS name, COUNT(bt.book_id) AS count \
+                     FROM tags t \
+                     JOIN book_tags bt ON bt.tag_id = t.id \
+                     JOIN books b ON b.id = bt.book_id \
+                     JOIN collection_books cb ON cb.book_id = b.id \
+                     JOIN collections c ON c.id = cb.collection_id \
+                     WHERE c.name = ? \
+                     GROUP BY t.id \
+                     ORDER BY count DESC, t.name ASC \
+                     LIMIT 30",
+                )
+                .bind(col)
+                .fetch_all(&self.db.pool)
+                .await
+                .map_err(AppError::Db)
+            }
+            (None, None) => {
                 sqlx::query_as::<_, TagCount>(
                     "SELECT t.name AS name, COUNT(bt.book_id) AS count \
                      FROM tags t \
@@ -225,12 +276,6 @@ impl SearchService {
         }
     }
 
-    pub async fn collections(&self) -> Result<Vec<Collection>, AppError> {
-        sqlx::query_as::<_, Collection>("SELECT * FROM collections ORDER BY name")
-            .fetch_all(&self.db.pool)
-            .await
-            .map_err(AppError::Db)
-    }
 }
 
 fn build_joins(
