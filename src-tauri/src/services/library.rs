@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::db::Database;
 use crate::errors::AppError;
-use crate::models::{Book, BookMetadata, BookSource};
+use crate::models::{Book, BookSource};
 use crate::services::StorageService;
 
 pub struct LibraryService {
@@ -77,7 +77,7 @@ impl LibraryService {
                 return None;
             }
             Some(BookSource {
-                plugin: plugin.to_string(),
+                source_plugin: plugin.to_string(),
                 source_url: m.source_url.clone().unwrap_or_default(),
                 scraped_at: m.scraped_at.as_deref().and_then(parse_rfc3339),
                 source_post_id: m.source_post_id.clone(),
@@ -114,85 +114,6 @@ impl LibraryService {
         Ok(book)
     }
 
-    /// Import a book from a set of in-memory images + metadata.
-    pub async fn import_from_images(
-        &self,
-        images: Vec<Vec<u8>>,
-        metadata: BookMetadata,
-    ) -> Result<Book, AppError> {
-        if images.is_empty() {
-            return Err(AppError::Other("No images provided".into()));
-        }
-
-        // Animated books: frame count ≠ page count (always 1 logical page).
-        let page_count = if metadata.delays.as_deref().map_or(false, |d| !d.is_empty()) {
-            1
-        } else {
-            images.len() as i32
-        };
-
-        let book_id = Uuid::new_v4().to_string();
-        let file_path = self.storage.create_cb7(&images, &metadata)?;
-
-        let cover_path = self
-            .storage
-            .extract_cover(&file_path, &book_id)
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
-
-        let file_size = std::fs::metadata(&file_path).map(|m| m.len() as i64).unwrap_or(0);
-        let now = Utc::now();
-
-        let book = Book {
-            id: book_id,
-            title: metadata.title.clone(),
-            original_filename: None,
-            file_path: file_path.to_string_lossy().to_string(),
-            file_size,
-            format: "cb7".into(),
-            page_count,
-            cover_path,
-            source_plugin: None,
-            source_url: None,
-            source_post_id: None,
-            author: None,
-            author_id: None,
-            published_at: None,
-            scraped_at: Some(now),
-            created_at: now,
-            updated_at: now,
-            last_read_at: None,
-            read_count: 0,
-            tags: None,
-            delays: None,
-        };
-
-        sqlx::query(
-            r#"INSERT INTO books
-            (id, title, file_path, file_size, format, page_count, cover_path, scraped_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&book.id)
-        .bind(&book.title)
-        .bind(&book.file_path)
-        .bind(book.file_size)
-        .bind(&book.format)
-        .bind(book.page_count)
-        .bind(&book.cover_path)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .execute(&self.db.pool)
-        .await
-        .map_err(AppError::Db)?;
-
-        // Insert tags and associations.
-        for tag_name in &metadata.tags {
-            upsert_tag_and_link(&self.db.pool, &book.id, tag_name, "custom").await?;
-        }
-
-        Ok(book)
-    }
 
     pub async fn delete_book(&self, id: String) -> Result<(), AppError> {
         let row = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id = ?")
@@ -224,31 +145,6 @@ impl LibraryService {
         Ok(())
     }
 
-    pub async fn update_metadata(
-        &self,
-        id: String,
-        metadata: BookMetadata,
-    ) -> Result<Book, AppError> {
-        let mut book = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&self.db.pool)
-            .await
-            .map_err(AppError::Db)?
-            .ok_or_else(|| AppError::BookNotFound(id.clone()))?;
-
-        book.title = metadata.title;
-        book.updated_at = Utc::now();
-
-        sqlx::query("UPDATE books SET title = ?, updated_at = ? WHERE id = ?")
-            .bind(&book.title)
-            .bind(book.updated_at.to_rfc3339())
-            .bind(&id)
-            .execute(&self.db.pool)
-            .await
-            .map_err(AppError::Db)?;
-
-        Ok(book)
-    }
 
     pub async fn get_book(&self, id: &str) -> Result<Book, AppError> {
         sqlx::query_as::<_, Book>(
@@ -314,12 +210,6 @@ impl LibraryService {
         .map_err(AppError::Db)
     }
 
-    pub async fn get_cover(&self, id: &str) -> Result<Vec<u8>, AppError> {
-        self.storage
-            .read_cover(id)
-            .ok_or_else(|| AppError::NotFound(format!("Cover for {}", id)))
-    }
-
     /// Low-res cover thumbnail (longest edge ≤ 256px JPEG) for the library
     /// grid — cheap to ship over IPC and easy to cache client-side.
     pub async fn get_cover_thumb(&self, id: &str) -> Result<Vec<u8>, AppError> {
@@ -376,7 +266,7 @@ impl LibraryService {
             .map(|p| p.to_string_lossy().to_string());
         let now = Utc::now();
 
-        let source_plugin = source.as_ref().map(|s| s.plugin.clone()).unwrap_or_default();
+        let source_plugin = source.as_ref().map(|s| s.source_plugin.clone()).unwrap_or_default();
         let source_url = source.as_ref().map(|s| s.source_url.clone()).unwrap_or_default();
         let scraped_at = source.as_ref().and_then(|s| s.scraped_at);
         let source_post_id = source.as_ref().and_then(|s| s.source_post_id.clone());
@@ -411,8 +301,15 @@ impl LibraryService {
         .await
         .map_err(AppError::Db)?;
 
-        for tag_name in tags {
-            upsert_tag_and_link(&self.db.pool, book_id, tag_name, "custom").await?;
+        if !tags.is_empty() {
+            tracing::info!(target: "erolib::library", book_id, count = tags.len(), "register_stored_book: linking tags");
+            for tag_name in tags {
+                if let Err(e) = upsert_tag_and_link(&self.db.pool, book_id, tag_name, "custom").await {
+                    tracing::error!(target: "erolib::library", %book_id, %tag_name, ?e, "link tag failed");
+                }
+            }
+        } else {
+            tracing::warn!(target: "erolib::library", %book_id, "register_stored_book: no tags to link");
         }
 
         let book = self.get_book(book_id).await?;
@@ -541,28 +438,7 @@ impl LibraryService {
         .map_err(AppError::Db)
     }
 
-    /// The single book with the highest cumulative reading duration over the
-    /// last `days` days — the "近 N 天最爱" pick. Ties break by most recent
-    /// `last_read_at`. Returns None when nothing's been read in the window.
-    pub async fn get_recent_favorite_book(&self, days: i64) -> Result<Option<Book>, AppError> {
-        let since = (Utc::now() - chrono::Duration::days(days)).to_rfc3339();
-        let book = sqlx::query_as::<_, Book>(
-            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
-             FROM books \
-             JOIN reading_sessions rs ON rs.book_id = books.id \
-             LEFT JOIN book_tags ON book_tags.book_id = books.id \
-             LEFT JOIN tags ON tags.id = book_tags.tag_id \
-             WHERE rs.started_at >= ? \
-             GROUP BY books.id \
-             ORDER BY SUM(rs.duration_ms) DESC, books.last_read_at DESC \
-             LIMIT 1",
-        )
-        .bind(&since)
-        .fetch_optional(&self.db.pool)
-        .await
-        .map_err(AppError::Db)?;
-        Ok(book)
-    }
+
 }
 
 /// Monday 00:00:00 in the local timezone, as a UTC DateTime — the start of the
@@ -637,16 +513,20 @@ async fn upsert_tag_and_link(
     tag_type: &str,
 ) -> Result<(), AppError> {
     let tag_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        r#"INSERT INTO tags (id, name, type) VALUES (?, ?, ?)
-           ON CONFLICT(name) DO UPDATE SET type = excluded.type"#,
+    let result = sqlx::query(
+        r#"INSERT INTO tags (id, name, tag_type) VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET tag_type = excluded.tag_type"#,
     )
     .bind(&tag_id)
     .bind(tag_name)
     .bind(tag_type)
     .execute(pool)
-    .await
-    .ok();
+    .await;
+
+    if let Err(e) = &result {
+        tracing::error!(target: "erolib::library", %tag_name, ?e, "upsert tag failed");
+    }
+    result.map_err(AppError::Db)?;
 
     // Fetch the (possibly existing) tag id.
     let row: (String,) = sqlx::query_as("SELECT id FROM tags WHERE name = ?")

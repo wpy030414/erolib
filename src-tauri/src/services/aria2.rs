@@ -282,6 +282,7 @@ impl Aria2Client {
         &self,
         uri: &str,
         referer: Option<&str>,
+        origin: Option<&str>,
         out: Option<&str>,
         dir: Option<&Path>,
     ) -> Result<String> {
@@ -300,6 +301,12 @@ impl Aria2Client {
 
         if let Some(r) = referer {
             options.insert("referer".to_string(), json!(r));
+        }
+        if let Some(origin) = origin {
+            options.insert(
+                "header".to_string(),
+                json!(vec![format!("Origin: {origin}")]),
+            );
         }
         if let Some(o) = out {
             options.insert("out".to_string(), json!(o));

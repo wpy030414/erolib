@@ -30,6 +30,7 @@ pub async fn reset_app_data(
         "DELETE FROM collection_books",
         "DELETE FROM collections",
         "DELETE FROM tasks",
+        "DELETE FROM reading_sessions",
     ] {
         sqlx::query(sql)
             .execute(&state.db.pool)
@@ -38,6 +39,18 @@ pub async fn reset_app_data(
     }
     // Reset autoincrement sequences so any rowids/ids start fresh.
     let _ = sqlx::query("DELETE FROM sqlite_sequence")
+        .execute(&state.db.pool)
+        .await;
+    // The FTS5 virtual table's shadow tables are NOT covered by DELETE FROM books
+    // triggers (DELETE fires the `books_ad` trigger per row, but the `content`
+    // table of an external-content FTS is separate).  Our FTS is self-contained
+    // (not external-content), so the triggers DID fire per row.  Still, to be
+    // absolutely safe, also clear the FTS shadow tables directly.
+    let _ = sqlx::query("DELETE FROM books_fts")
+        .execute(&state.db.pool)
+        .await;
+    // Shrink the DB file back to minimal size after deleting everything.
+    let _ = sqlx::query("VACUUM")
         .execute(&state.db.pool)
         .await;
 
@@ -49,7 +62,7 @@ pub async fn reset_app_data(
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("resolve app_local_data_dir: {e}"))?;
-    for sub in ["library", "covers", "cache"] {
+    for sub in ["library", "covers", "cache", "downloads"] {
         let _ = std::fs::remove_dir_all(data_dir.join(sub));
     }
     for f in ["pixiv_session.json", "ehentai_session.json"] {

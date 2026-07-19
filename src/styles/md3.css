@@ -14,11 +14,31 @@
   box-sizing: border-box;
 }
 
+/* ---- Global defaults ---- */
+
 html,
 body,
 #app {
   height: 100%;
   margin: 0;
+}
+
+/* Never show text-selection, drag-selection, or focus rings unless explicitly
+   opted in. MWC components and the book grid otherwise trigger unwanted blue
+   outlines / selection highlights on click and drag. */
+* {
+  user-select: none;
+  -webkit-user-select: none;
+}
+*:focus-visible {
+  outline: none;
+}
+/* Keep search inputs and text fields usable — they need the typing caret. */
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 body {

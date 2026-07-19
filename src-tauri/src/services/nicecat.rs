@@ -9,7 +9,6 @@ use rand::Rng;
 use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
 
 const NICECAT_BASE: &str = "https://ncmm.cc";
 const GXXA_BASE: &str = "https://gxxa.fun";
@@ -79,11 +78,6 @@ static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .expect("build shared reqwest client")
 });
 
-/// Cached RC4 key / token — retained for forward-compatibility with
-/// dynamic key extraction from getSecurityCode (phase 3).
-#[allow(dead_code)]
-pub static NC_TOKEN_CACHE: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-
 pub struct NicecatClient {
     http: Client,
 }
@@ -114,7 +108,7 @@ impl NicecatClient {
 
 /// Stateless HTTP client that calls the gxxa.fun API directly using an
 /// RC4-generated N-SECURITY-CERTIFICATIONS token — no headless browser needed.
-pub struct NicecatApiClient {
+pub(crate) struct NicecatApiClient {
     http: Client,
 }
 
