@@ -23,34 +23,10 @@ export interface Book {
   delays?: string;
 }
 
-export interface Tag {
-  id: string;
-  name: string;
-  tag_type: 'genre' | 'artist' | 'author' | 'series' | 'custom';
-  created_at: string;
-}
-
 /** A tag with the number of books linked to it, for the tag-chip filter row. */
 export interface TagCount {
   name: string;
   count: number;
-}
-
-export interface Collection {
-  id: string;
-  name: string;
-  description?: string;
-  created_at: string;
-}
-
-export interface BookMetadata {
-  title: string;
-  author?: string;
-  artist?: string;
-  description?: string;
-  tags: string[];
-  status?: string;
-  rating?: number;
 }
 
 export interface SearchQuery {
@@ -67,16 +43,9 @@ export interface SearchQuery {
   page_size: number;
 }
 
-export interface SearchFacets {
-  tags: Tag[];
-  collections: Collection[];
-  sources: string[];
-}
-
 export interface SearchResult {
   books: Book[];
   total: number;
-  facets: SearchFacets;
 }
 
 /** A Pixiv artwork shown in the 关注/收藏 browse grid (mirrors backend UserWork). */
@@ -156,20 +125,16 @@ export interface NicecatComicItem {
   categories?: string;
 }
 
-/** A topic section on the NiceCat homepage: one topic/author name + its comics. */
-export interface NicecatTopicSection {
-  name: string;
-  comics: NicecatComicItem[];
-}
-
-/** The cooked homepage feed from the NiceCat randomFeed API. */
-export interface NicecatRandomFeed {
-  recommend?: NicecatComicItem;
-  tagData?: Array<{ uid: string; name: string; dataType: number }>;
-  sections: NicecatTopicSection[];
-}
-
 /** Local state of a NiceCat comic in the browse grid (mirrors backend NicecatBrowseStatus). */
 export interface NicecatBrowseStatus extends CardStatus {
   comicId: string;
+}
+
+/** A named collection of books (reading list). */
+export interface Collection {
+  id: string;
+  name: string;
+  description?: string;
+  position: number;
+  created_at: string;
 }

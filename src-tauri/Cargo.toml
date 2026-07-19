@@ -32,7 +32,7 @@ zip = "0.6"
 sha2 = "0.10"
 # ugoira (動画作) → GIF: decode jpg frames + encode with per-frame delays.
 # GifEncoder auto-quantizes true color → 256-color palette (color_quant).
-image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
 thiserror = "1.0"
 anyhow = "1.0"
@@ -42,7 +42,6 @@ dirs = "5.0"
 urlencoding = "2.1"
 base64 = "0.22"
 rand = "0.8"
-boa_engine = "0.17"
 http = "1.4.2"
 
 [features]

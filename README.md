@@ -19,9 +19,17 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 
 <div align="center">
 
-**[✨ 核心特性](#-核心特性)** · **[📸 截图](#-截图)** · **[📥 下载](#-下载安装)** · **[🛠️ 构建](#-自行构建)** · **[❓ FAQ](#-faq)**
+**[✨ 核心特性](#-核心特性)** · **[📥 下载](#-下载安装)** · **[🛠️ 构建](#-自行构建)** · **[❓ FAQ](#-faq)**
 
 </div>
+
+| 首页 | 书库 |
+|:---:|:---:|
+| ![首页](docs/assets/home.png) | ![书库](docs/assets/library.png) |
+
+| 阅读 | 任务 |
+|:---:|:---:|
+| ![阅读](docs/assets/reader.png) | ![任务](docs/assets/tasks.png) |
 
 ---
 
@@ -30,6 +38,7 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 ### 📖 本地书库
 - 导入 **CB7 / CBZ / CBR / PDF**，封面网格直观浏览
 - 全文搜索匹配 **标题 / 作者 / 标签**；标签 chip 行 **并集 (OR)** 筛选（上限 30，满则折叠）
+- **阅读列表**：右键列表名直接内联重命名，重命名期间底部显示删除按钮，创建自动去重命名，上限 100 个
 - 低清缩略图缓存到 **IndexedDB**，二次打开秒级加载
 - 保留书源元信息（**作者 · 发布日期 · 来源 URL**），支持 **ComicInfo.xml** 无损导出 / 导入往返
 
@@ -86,22 +95,6 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 - **Material Design 3** 动态主题：种子色 + 亮 / 暗模式，全应用 token 实时切换
 - **中文 / English / 日本語** 三语界面，跟随系统或手动切换
 - 五个主页面各自记忆当前 tab 与滚动位置
-
----
-
-## 📸 截图
-
-| 书库 | 阅读器 |
-|:---:|:---:|
-| ![书库](docs/assets/library.png) | ![阅读器](docs/assets/reader.png) |
-
-| Pixiv 浏览 | EHentai 浏览 |
-|:---:|:---:|
-| ![Pixiv 浏览](docs/assets/pixiv.png) | ![EHentai 浏览](docs/assets/ehentai.png) |
-
-| 任务 | 设置 |
-|:---:|:---:|
-| ![任务](docs/assets/tasks.png) | ![设置](docs/assets/settings.png) |
 
 ---
 
@@ -203,7 +196,7 @@ erolib/
 
 - [ ] Linux 平台支持（补 aria2 二进制）
 - [ ] 阅读器书签与章节目录
-- [ ] 更精细的标签 / 收藏夹管理
+- [ ] 更精细的标签管理
 - [ ] 更多下载源接入
 - [ ] 跨设备书库同步
 

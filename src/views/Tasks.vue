@@ -35,8 +35,15 @@
           </span>
         </div>
 
-        <!-- Inline logs: expand below the progress bar when this card is selected. -->
-        <div class="task-logs-wrap" :class="{ 'task-logs-wrap--open': selectedTaskId === item.id }">
+        <!-- Inline logs: <details> handles expand/collapse natively.
+             The `open` attr is driven by selectedTaskId so clicking a different
+             card collapses the old one and expands the new one. -->
+        <details
+          class="task-logs-wrap"
+          :open="selectedTaskId === item.id"
+          @toggle.prevent
+        >
+          <summary class="task-logs-summary" />
           <div class="task-logs-inner">
             <div v-if="item.logs.length" class="logs-list">
               <div
@@ -51,16 +58,18 @@
               {{ t('tasks.detail.noLogs') }}
             </p>
           </div>
-        </div>
+        </details>
 
         <div class="task-footer">
           <div class="task-actions">
+            <!-- Completed tasks: show "View" button that navigates to Library
+                 and searches the book by title. -->
             <md-filled-button
               v-if="item.status === 'completed' && item.book_id"
-              @click.stop="readBook(item.book_id)"
+              @click.stop="viewInLibrary(item.title)"
             >
-              <MdiIcon slot="icon" :path="mdiBookOpen" :size="18" />
-              {{ t('tasks.actions.read') }}
+              <MdiIcon slot="icon" :path="mdiMagnify" :size="18" />
+              {{ t('tasks.actions.view') }}
             </md-filled-button>
 
             <md-filled-tonal-button
@@ -133,12 +142,13 @@ import {
   mdiClose,
   mdiDelete,
   mdiRefresh,
-  mdiBookOpen,
+  mdiMagnify,
   mdiBroom,
 } from '@mdi/js';
 import { useI18n } from '@/i18n';
 import { useTaskStore } from '@/stores/tasks';
 import { useToastStore } from '@/stores/toast';
+import { useCollectionsStore } from '@/stores/collections';
 import MdiIcon from '@/components/MdiIcon.vue';
 import FabButton from '@/components/FabButton.vue';
 import { formatBytes, formatSpeed, formatDuration } from '@/utils/format';
@@ -147,6 +157,7 @@ const { t } = useI18n();
 const router = useRouter();
 const toastStore = useToastStore();
 const taskStore = useTaskStore();
+const collectionsStore = useCollectionsStore();
 const { tasks, selectedTaskId } = taskStore;
 
 const clearing = ref(false);
@@ -155,17 +166,33 @@ const TERMINAL = ['completed', 'failed', 'cancelled'];
 const hasCompleted = computed(() => tasks.value.some((tk) => TERMINAL.includes(tk.status)));
 
 function progressPercent(item: { progress_current: number; progress_total: number }): number {
-  if (item.progress_total <= 0) return 0;
+  if (item.progress_total <= 0) return 100;
   return Math.min(100, Math.round((item.progress_current / item.progress_total) * 100));
 }
 
 function selectTask(id: string) {
-  // Toggle: clicking the open card again collapses it.
-  taskStore.selectTask(selectedTaskId.value === id ? null : id);
+  // Clicking the already-open card is a no-op; clicking a different card
+  // collapses the previous one and expands the new one.
+  if (selectedTaskId.value === id) return;
+  taskStore.selectTask(id);
 }
 
-function readBook(bookId: string) {
-  router.push(`/reader/${bookId}`);
+/**
+ * Task titles are formatted as "{Source}: {actual book title}" (e.g.
+ * "ASMHentai: ある作品"). Strip the source prefix so the search matches
+ * the bare book title registered in the library.
+ */
+function extractBookTitle(taskTitle: string): string {
+  // Known prefixes: "Pixiv: ", "EHentai: ", "EXHentai: ", "ASMHentai: ",
+  // "NiceCat: ".  Strip the first "Prefix: " segment if present.
+  return taskTitle.replace(/^[A-Za-z]+:\s*/, '');
+}
+
+function viewInLibrary(taskTitle: string) {
+  // Switch back to "All" so the user can see all books, then search by title.
+  collectionsStore.setActiveCollection(null);
+  const title = extractBookTitle(taskTitle);
+  router.push({ path: '/library', query: { search: title } });
 }
 
 async function onClearCompleted() {
@@ -307,22 +334,23 @@ onMounted(() => {
   color: var(--md-sys-color-on-surface-variant);
 }
 
-/* Inline logs: collapsed by default, smoothly expand when the card is selected.
-   max-height transition gives the "quickly grow taller" effect. */
+/* Inline logs: smoothly expand when the card is selected. <details> provides
+   the expand/collapse mechanics; the summary decoy hides the native arrow. */
 .task-logs-wrap {
-  max-height: 0;
   overflow: hidden;
   opacity: 0;
   transition:
-    max-height 0.2s ease,
     opacity 0.2s ease,
     margin 0.2s ease;
 }
-
-.task-logs-wrap--open {
-  /* Generous ceiling; the inner list itself scrolls beyond this. */
-  max-height: 240px;
+.task-logs-wrap[open] {
   opacity: 1;
+}
+
+/* Hide the native <summary> arrow — the open/close state is driven by
+   card selection, not by clicking the summary itself. */
+.task-logs-summary {
+  display: none;
 }
 
 .task-logs-inner {

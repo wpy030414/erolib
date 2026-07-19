@@ -76,44 +76,6 @@ pub async fn tasks_clear_completed(
 }
 
 #[tauri::command]
-pub async fn task_enqueue_pixiv_bookmarks(
-    cookie: String,
-    user_id: String,
-    limit: u64,
-    manager: State<'_, Arc<TaskManager>>,
-) -> Result<String, String> {
-    let payload = TaskPayload::PixivBookmarks {
-        cookie,
-        user_id: user_id.clone(),
-        limit,
-    };
-    let title = format!("Pixiv bookmarks (user {user_id})");
-    manager
-        .enqueue(payload, title)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn task_enqueue_pixiv_user_works(
-    cookie: String,
-    target_user_id: String,
-    limit: u64,
-    manager: State<'_, Arc<TaskManager>>,
-) -> Result<String, String> {
-    let payload = TaskPayload::PixivUserWorks {
-        cookie,
-        target_user_id: target_user_id.clone(),
-        limit,
-    };
-    let title = format!("Pixiv user works (user {target_user_id})");
-    manager
-        .enqueue(payload, title)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn task_enqueue_pixiv_work(
     cookie: String,
     work_id: String,

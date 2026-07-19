@@ -2,18 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-/// Placeholder default used only for `#[serde(skip, default)]` on Task.payload
-/// so that `serde::Deserialize` for Task compiles. The field is never
-/// deserialized from JSON in practice.
-#[allow(dead_code)] // referenced via #[serde(default = "..")] on Task.payload
-pub fn default_task_payload() -> TaskPayload {
-    TaskPayload::PixivBookmarks {
-        cookie: String::new(),
-        user_id: String::new(),
-        limit: 0,
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskSource {
@@ -89,16 +77,6 @@ impl FromStr for TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TaskPayload {
-    PixivBookmarks {
-        cookie: String,
-        user_id: String,
-        limit: u64,
-    },
-    PixivUserWorks {
-        cookie: String,
-        target_user_id: String,
-        limit: u64,
-    },
     EhentaiGallery {
         cookie: String,
         gallery_url: String,
@@ -122,9 +100,7 @@ pub enum TaskPayload {
 impl TaskPayload {
     pub fn source(&self) -> TaskSource {
         match self {
-            TaskPayload::PixivBookmarks { .. }
-            | TaskPayload::PixivUserWorks { .. }
-            | TaskPayload::PixivSingleWork { .. } => TaskSource::Pixiv,
+            TaskPayload::PixivSingleWork { .. } => TaskSource::Pixiv,
             TaskPayload::EhentaiGallery { .. } => TaskSource::Ehentai,
             TaskPayload::AhentaiGallery { .. } => TaskSource::Ahentai,
             TaskPayload::NicecatGallery { .. } => TaskSource::Nicecat,
@@ -153,7 +129,6 @@ pub struct Task {
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     /// The deserialized payload — never stored as a column.
     #[serde(skip)]
-    #[serde(default = "default_task_payload")]
     pub payload: TaskPayload,
 }
 

@@ -1,6 +1,4 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WindowEvent};
 
 use crate::commands::cookies::{capture_all_cookies, has_ehentai_session};
-use crate::services::{
-    EhentaiClient, EhentaiDownloader, GalleryListItem, PixivProgress, PixivProgressSink,
-};
+use crate::services::{EhentaiClient, GalleryListItem};
 use crate::AppState as LibState;
 
 /// Persisted EHentai login record on disk.
@@ -24,7 +20,6 @@ pub struct EhentaiSessionFile {
 /// the in-flight downloader. Mirrors the shape of `commands::pixiv::PixivSession`.
 pub struct EhentaiSession {
     pub(crate) cookie: Mutex<Option<String>>,
-    pub(crate) cancelled: AtomicBool,
     pub(crate) persist_path: Option<PathBuf>,
 }
 
@@ -39,7 +34,6 @@ impl EhentaiSession {
         }
         Self {
             cookie: Mutex::new(loaded),
-            cancelled: AtomicBool::new(false),
             persist_path: Some(path),
         }
     }
@@ -107,14 +101,6 @@ impl EhentaiSession {
         }
         *self.cookie.lock().unwrap() = None;
     }
-
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-    }
-
-    pub fn reset_cancel(&self) {
-        self.cancelled.store(false, Ordering::Relaxed);
-    }
 }
 
 /// Return the persisted EHentai cookie so the frontend can restore its login UI.
@@ -135,22 +121,6 @@ pub async fn ehentai_clear_login(
         crate::commands::cookies::clear_section_cookies(&["e-hentai.org", "exhentai.org"])
     })
     .await;
-    Ok(())
-}
-
-/// Manually set the EHentai session cookie (e.g. pasted by the user).
-#[tauri::command]
-pub fn ehentai_set_login(
-    cookie: String,
-    session: State<'_, Arc<EhentaiSession>>,
-) -> Result<(), String> {
-    if cookie.trim().is_empty() {
-        return Err("cookie is required".into());
-    }
-    if !crate::commands::cookies::has_ehentai_session(&cookie) {
-        return Err("cookie does not appear to be a valid EHentai session (missing ipb_member_id/ipb_pass_hash)".into());
-    }
-    session.set_cookie(cookie.trim().to_string());
     Ok(())
 }
 
@@ -270,91 +240,6 @@ pub async fn ehentai_open_login_window(
 
     Ok(())
 }
-
-#[allow(dead_code)]
-fn ehentai_try_capture(app: &AppHandle, session: &EhentaiSession) -> Option<String> {
-    let cookie = capture_all_cookies(app)?;
-    if !has_ehentai_session(&cookie) {
-        return None;
-    }
-    session.set_cookie(cookie.clone());
-    Some(cookie)
-}
-
-/// Download a single gallery by URL into the local library, emitting progress
-/// over the `ehentai://progress` event (same shape as the Pixiv downloader's
-/// `pixiv://progress`).
-#[tauri::command]
-pub async fn ehentai_download_gallery(
-    gallery_url: String,
-    state: State<'_, LibState>,
-    session: State<'_, Arc<EhentaiSession>>,
-    app_handle: AppHandle,
-) -> Result<(), String> {
-    let cookie = session.get_cookie().ok_or("not logged in to e-hentai")?;
-    let (gid, tok) = EhentaiClient::parse_gallery_url(&gallery_url).map_err(|e| e.to_string())?;
-
-    session.reset_cancel();
-    let downloader = EhentaiDownloader::new(&cookie).map_err(|e| e.to_string())?;
-
-    // Fetch the page list up front so we know the total and surface auth issues
-    // before spawning the long task.
-    let pages = EhentaiClient::new(&cookie, false)
-        .map_err(|e| e.to_string())?
-        .fetch_gallery_pages(&gid, &tok)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let (tx, rx) = mpsc::channel::<PixivProgress>();
-    let sink: Arc<Mutex<dyn PixivProgressSink>> = Arc::new(Mutex::new(
-        crate::commands::pixiv::ChannelProgressSink { tx },
-    ));
-
-    let app_for_relay = app_handle.clone();
-    let relay_handle = tokio::spawn(async move {
-        while let Ok(event) = rx.recv() {
-            let _ = app_for_relay.emit("ehentai://progress", event);
-        }
-    });
-
-    let library = state.library_service.clone();
-    let db = state.db.clone();
-    let storage = state.storage.clone();
-    let cancel_session = session.inner().clone();
-    let url = gallery_url.clone();
-    tokio::spawn(async move {
-        let gallery_title = url;
-        let res = downloader
-            .download_gallery(
-                &gallery_title,
-                "e-hentai gallery",
-                &[],
-                pages,
-                sink,
-                &cancel_session.cancelled,
-                &library,
-                db,
-                storage,
-            )
-            .await;
-        if let Err(e) = res {
-            tracing::warn!(target: "erolib::ehentai", %e, "gallery download finished with errors");
-        }
-        relay_handle.abort();
-    });
-
-    Ok(())
-}
-
-/// Cancel any in-flight gallery download. Takes effect after the current page.
-#[tauri::command]
-pub async fn ehentai_cancel_download(
-    session: State<'_, Arc<EhentaiSession>>,
-) -> Result<(), String> {
-    session.cancel();
-    Ok(())
-}
-
 /// Search the e-hentai/exhentai gallery index. `ex` selects the site
 /// (exhentai.org vs e-hentai.org); `category` is the path segment (e.g.
 /// "doujinshi", "manga") or None for all; `next` is the pagination cursor

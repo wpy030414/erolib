@@ -21,6 +21,8 @@ export const useLibraryStore = defineStore('library', () => {
   const query = ref('');
   /** Tags currently selected in the chip row — union (OR) filter: any match. */
   const selectedTags = ref<string[]>([]);
+  /** Active collection name for filtering (null = "All" = no filter). */
+  const collectionFilter = ref<string | null>(null);
   /** Tag usage counts that drive the chip row. When a text query is active
    *  these are tallied only over the text-filtered book set (text dominates
    *  the chips); otherwise over the full library. Top 30 by count. */
@@ -36,11 +38,12 @@ export const useLibraryStore = defineStore('library', () => {
   const hasMore = computed(() => books.value.length < total.value);
 
   /** Re-tally tag usage counts. `text` restricts the count to books matching
-   *  that text (text dominates the chips). Capped to 30 by the backend.
-   *  Silent on failure. */
+   *  that text (text dominates the chips); `collection` further scopes to a
+   *  collection. Capped to 30 by the backend. Silent on failure. */
   async function loadTags(text?: string) {
     try {
-      allTags.value = await api.getAllTags(text);
+      const col = collectionFilter.value || undefined;
+      allTags.value = await api.getAllTags(text, col);
     } catch {
       // keep the previous list on error
     }
@@ -54,6 +57,7 @@ export const useLibraryStore = defineStore('library', () => {
     const q: SearchQuery = {
       text: text || undefined,
       tags_any: tagsAny,
+      collections: collectionFilter.value ? [collectionFilter.value] : undefined,
       sort_by: 'date',
       sort_order: 'desc',
       page: p,
@@ -151,6 +155,7 @@ export const useLibraryStore = defineStore('library', () => {
     error,
     query,
     selectedTags,
+    collectionFilter,
     allTags,
     total,
     hasMore,
