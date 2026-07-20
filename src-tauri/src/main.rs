@@ -157,6 +157,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::book::import_book,
             commands::book::delete_book,
@@ -175,6 +176,7 @@ fn main() {
             commands::reset::reset_app_data,
             commands::search::search_books,
             commands::search::get_all_tags,
+            commands::settings::set_locale,
             commands::server::start_opds_server_cmd,
             commands::server::stop_opds_server_cmd,
             commands::server::start_rss_server_cmd,
@@ -221,6 +223,10 @@ fn main() {
             commands::collection::add_book_to_collection,
             commands::collection::remove_book_from_collection,
             commands::collection::get_book_collections,
+            commands::update::check_update,
+            commands::update::download_update,
+            commands::update::install_update,
+            commands::update::quit_and_install,
         ])
         .run(tauri::generate_context!())
         .unwrap();

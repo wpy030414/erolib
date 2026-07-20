@@ -9,5 +9,7 @@ pub mod pixiv_login;
 pub mod reset;
 pub mod search;
 pub mod server;
+pub mod settings;
 pub mod sync;
 pub mod tasks;
+pub mod update;

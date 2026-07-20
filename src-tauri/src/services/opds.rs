@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::Book;
+use crate::services::locale;
 
 use super::feed::xml_escape;
 
@@ -28,9 +29,22 @@ impl OpdsService {
     }
 
     pub async fn root_feed(&self) -> Result<String, AppError> {
-        let books = sqlx::query_as::<_, Book>(
-            "SELECT * FROM books ORDER BY created_at DESC",
-        )
+        // Join tags + the translation lookup so the blurb's 标签 line renders in
+        // the current locale. (Previously `SELECT *` left book.tags = None, so
+        // feeds showed no tags at all.)
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
+             GROUP BY books.id \
+             ORDER BY books.created_at DESC"
+        );
+        let books = sqlx::query_as::<_, Book>(&sql)
         .fetch_all(&self.db.pool)
         .await
         .map_err(AppError::Db)?;
@@ -41,9 +55,20 @@ impl OpdsService {
 
     pub async fn search_feed(&self, query: &str) -> Result<String, AppError> {
         let pattern = format!("%{}%", query);
-        let books = sqlx::query_as::<_, Book>(
-            "SELECT * FROM books WHERE title LIKE ? OR original_filename LIKE ? ORDER BY created_at DESC",
-        )
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
+             WHERE books.title LIKE ? OR books.original_filename LIKE ? \
+             GROUP BY books.id \
+             ORDER BY books.created_at DESC"
+        );
+        let books = sqlx::query_as::<_, Book>(&sql)
         .bind(&pattern)
         .bind(&pattern)
         .fetch_all(&self.db.pool)

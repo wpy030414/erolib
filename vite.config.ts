@@ -33,7 +33,9 @@ export default defineConfig({
   },
   build: {
     target: process.env.TAURI_PLATFORM == 'windows' ? 'chrome105' : 'safari13',
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    // Vite 8 (rolldown) minifies with OXC; 'esbuild' is deprecated and would
+    // require esbuild installed separately.
+    minify: !process.env.TAURI_DEBUG ? 'oxc' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
   },
 });

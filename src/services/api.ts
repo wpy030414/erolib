@@ -95,6 +95,10 @@ export const api = {
   getAllTags: (text?: string, collection?: string) =>
     invoke<TagCount[]>('get_all_tags', { text, collection }),
 
+  // Persist the app locale so SQL renders tags in the current language.
+  setLocale: (locale: string) =>
+    invoke<void>('set_locale', { localeStr: locale }),
+
   // OPDS Server (kept; lives under Settings Sharing tab).
   startOpdsServer: (port: number) =>
     invoke<string>('start_opds_server_cmd', { port }),
@@ -247,4 +251,37 @@ export const api = {
 
   getBookCollections: (bookId: string) =>
     invoke<string[]>('get_book_collections', { bookId }),
+
+  // App self-update
+  checkUpdate: () => invoke<UpdateInfo>('check_update'),
+
+  downloadUpdate: (url: string, name: string) =>
+    invoke<string>('download_update', { url, name }),
+
+  installUpdate: (path: string) =>
+    invoke<void>('install_update', { path }),
+
+  quitAndInstall: (path: string) =>
+    invoke<void>('quit_and_install', { path }),
 };
+
+export interface UpdateAsset {
+  name: string;
+  url: string;
+  size: number;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  hasUpdate: boolean;
+  notes: string;
+  asset: UpdateAsset | null;
+}
+
+export interface UpdateProgress {
+  percent: number;
+  speed: number;
+  completed: number;
+  total: number;
+}
