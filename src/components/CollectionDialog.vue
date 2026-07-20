@@ -249,6 +249,7 @@ async function confirmDelete() {
 function cancelDelete() {
   deleteTargetId.value = null;
   deleteTargetName.value = '';
+  dialogRef.value?.close();
 }
 
 /* ---- Create ---- */

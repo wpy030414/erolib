@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::{Book, BookSource};
+use crate::services::locale;
 use crate::services::StorageService;
 
 pub struct LibraryService {
@@ -147,14 +148,21 @@ impl LibraryService {
 
 
     pub async fn get_book(&self, id: &str) -> Result<Book, AppError> {
-        sqlx::query_as::<_, Book>(
-            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+        // Tags rendered in the current locale (translated); DISTINCT folds raw
+        // synonyms into one label, unmapped tags keep their raw name.
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
              FROM books \
              LEFT JOIN book_tags ON book_tags.book_id = books.id \
              LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
              WHERE books.id = ? \
-             GROUP BY books.id",
-        )
+             GROUP BY books.id"
+        );
+        sqlx::query_as::<_, Book>(&sql)
         .bind(id)
         .fetch_optional(&self.db.pool)
         .await
@@ -194,15 +202,20 @@ impl LibraryService {
     }
 
     pub async fn list_books(&self, limit: i64, offset: i64) -> Result<Vec<Book>, AppError> {
-        sqlx::query_as::<_, Book>(
-            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
              FROM books \
              LEFT JOIN book_tags ON book_tags.book_id = books.id \
              LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
              GROUP BY books.id \
              ORDER BY books.created_at DESC \
-             LIMIT ? OFFSET ?",
-        )
+             LIMIT ? OFFSET ?"
+        );
+        sqlx::query_as::<_, Book>(&sql)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.db.pool)
@@ -422,16 +435,21 @@ impl LibraryService {
     /// home "recently read" shelf. Reuses the same `books.* + tags` projection
     /// the rest of the library uses so the `Book` FromRow mapping lines up.
     pub async fn list_recent_books(&self, limit: i64) -> Result<Vec<Book>, AppError> {
-        sqlx::query_as::<_, Book>(
-            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
              FROM books \
              LEFT JOIN book_tags ON book_tags.book_id = books.id \
              LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
              WHERE books.last_read_at IS NOT NULL \
              GROUP BY books.id \
              ORDER BY books.last_read_at DESC \
-             LIMIT ?",
-        )
+             LIMIT ?"
+        );
+        sqlx::query_as::<_, Book>(&sql)
         .bind(limit)
         .fetch_all(&self.db.pool)
         .await
@@ -544,5 +562,13 @@ async fn upsert_tag_and_link(
     .execute(pool)
     .await
     .map_err(AppError::Db)?;
+
+    // Resolve this tag into the exact+fuzzy translation map so read queries can
+    // render it in the current locale. Idempotent + single-row (no-op if the tag
+    // already resolved); best-effort so a resolution hiccup never blocks a book
+    // registration.
+    if let Err(e) = crate::services::locale::resolve_one_tag(pool, tag_name).await {
+        tracing::warn!(target: "erolib::library", %tag_name, %e, "resolve tag failed");
+    }
     Ok(())
 }

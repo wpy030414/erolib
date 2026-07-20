@@ -23,10 +23,14 @@ export interface Book {
   delays?: string;
 }
 
-/** A tag with the number of books linked to it, for the tag-chip filter row. */
+/** A tag with the number of books linked to it, for the tag-chip filter row.
+ *  `name` is the display label in the current app locale (translated in SQL);
+ *  `raw_names` are the original stored spellings folded into this label — sent
+ *  back in `tags_any` so selecting a translated chip filters by every raw form. */
 export interface TagCount {
   name: string;
   count: number;
+  raw_names: string[];
 }
 
 export interface SearchQuery {

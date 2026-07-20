@@ -2,35 +2,54 @@
   <div class="pa-6">
     <!-- Project + author cards (split one row 50/50) -->
     <div class="about-row mb-6">
-      <a
-        href="https://github.com/wpy030414/erolib"
-        target="_blank"
-        rel="noreferrer"
-        class="md3-card md3-card--outlined about-card"
-      >
+      <div class="md3-card md3-card--outlined about-card">
         <div class="md3-card__header-titles">
           <span class="md3-card__title">{{ t('settings.projectName') }}</span>
-          <span class="md3-card__subtitle">v{{ version }}</span>
+          <span class="md3-card__subtitle version-line">
+            v{{ version }}
+            <span
+              v-if="updateStore.info?.hasUpdate"
+              class="update-badge"
+              :title="t('settings.update.hasUpdate', { version: updateStore.info.latest })"
+              @click.prevent="openUpdateDialog"
+            >
+              <span class="update-dot" />
+              {{ t('settings.update.hasUpdate', { version: updateStore.info.latest }) }}
+            </span>
+            <span
+              v-else-if="updateStore.info && !updateStore.info.hasUpdate"
+              class="update-badge update-badge--up-to-date"
+              :title="t('settings.update.upToDate')"
+            >
+              <span class="update-dot update-dot--success" />
+              {{ t('settings.update.upToDate') }}
+            </span>
+          </span>
         </div>
-        <span class="md3-card__header-action">
+        <a
+          href="https://github.com/wpy030414/erolib"
+          target="_blank"
+          rel="noreferrer"
+          class="md3-card__header-action"
+        >
           <MdiIcon :path="mdiGithub" :size="22" />
-        </span>
-      </a>
+        </a>
+      </div>
 
-      <a
-        href="https://space.bilibili.com/92465406"
-        target="_blank"
-        rel="noreferrer"
-        class="md3-card md3-card--outlined about-card"
-      >
+      <div class="md3-card md3-card--outlined about-card">
         <div class="md3-card__header-titles">
           <span class="md3-card__title">{{ t('settings.authorName') }}</span>
           <span class="md3-card__subtitle">&ldquo;Do one thing, and do it well.&rdquo;</span>
         </div>
-        <span class="md3-card__header-action">
+        <a
+          href="https://space.bilibili.com/92465406"
+          target="_blank"
+          rel="noreferrer"
+          class="md3-card__header-action"
+        >
           <BrandIcon :path="BILIBILI_PATH" fill-rule="evenodd" :size="22" brand />
-        </span>
-      </a>
+        </a>
+      </div>
     </div>
 
     <!-- Tabs -->
@@ -275,8 +294,7 @@
         <p v-if="settingsStore.rssError" class="mt-3 text-body-2 text-error">{{ settingsStore.rssError }}</p>
       </section>
     </div>
-    <md-dialog ref="clearAllDialogRef" @close="onDialogClose">
-      <div slot="headline">{{ t('settings.reset.clearAll') }}</div>
+    <md-dialog ref="clearAllDialogRef" @close="onDialogClose">      <div slot="headline">{{ t('settings.reset.clearAll') }}</div>
       <form id="clear-all-form" slot="content" method="dialog" class="clear-all-dialog__content">
         <p class="text-body-2 text-error">{{ t('settings.reset.confirmWarn') }}</p>
         <md-outlined-text-field
@@ -294,6 +312,8 @@
         </md-filled-button>
       </div>
     </md-dialog>
+
+    <UpdateDialog ref="updateDialogRef" />
   </div>
 </template>
 
@@ -312,6 +332,7 @@ import {
   mdiRss,
   mdiStop,
   mdiTranslate,
+  mdiUpdate,
   mdiWeb,
 } from '@mdi/js';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -320,14 +341,17 @@ import { useI18n, LOCALES, LOCALE_LABELS, type Locale } from '@/i18n';
 import { useSettingsStore } from '@/stores/settings';
 import { useThemeStore } from '@/stores/theme';
 import { useToastStore } from '@/stores/toast';
+import { useUpdateStore } from '@/stores/update';
 import { getVersion } from '@tauri-apps/api/app';
 import MdiIcon from '@/components/MdiIcon.vue';
 import BrandIcon from '@/components/BrandIcon.vue';
+import UpdateDialog from '@/components/UpdateDialog.vue';
 import { clearThumbs } from '@/services/thumb-cache';
 
 const { t, locale, setLocale } = useI18n();
 const settingsStore = useSettingsStore();
 const themeStore = useThemeStore();
+const updateStore = useUpdateStore();
 
 /** Custom themes from the reader "Set as Theme" context menu. */
 const customThemeList = computed(() =>
@@ -343,6 +367,20 @@ const syncDirName = computed(() => {
 const toastStore = useToastStore();
 
 const version = ref('0.1.0');
+
+// ── App update ───────────────────────────────────────────────────────
+const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
+
+function openUpdateDialog() {
+  updateDialogRef.value?.open();
+}
+
+/** Manual "check for updates": refresh, then surface the dialog — the user
+ *  explicitly asked, so show the result whether or not an update exists. */
+async function onCheckUpdate() {
+  await updateStore.check();
+  openUpdateDialog();
+}
 
 /** B站 brand mark (single 24×24 path, evenodd for the eye holes). Rendered
  *  via BrandIcon with currentColor so it matches the GitHub mdi icon's colour. */
@@ -372,6 +410,9 @@ onMounted(async () => {
   } catch {
     // fallback
   }
+  // Silent startup update check — populates the badge on the version card
+  // without opening anything. Errors are swallowed (offline, rate-limited).
+  updateStore.check().catch(() => {});
 });
 
 async function onClearCache() {
@@ -589,11 +630,62 @@ onBeforeUnmount(() => {
   color: var(--md-sys-color-on-surface-variant);
 }
 
+/* Update badge on the version card — a small "new version" pill with a dot.
+ * The line height is pinned to the subtitle's body-medium line so the badge
+ * never inflates the card row. */
+.version-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--md-sys-typescale-body-medium-line-height);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+}
+
+.update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+  font-size: 0.78em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--md-sys-color-error);
+  flex-shrink: 0;
+}
+
+/* "Up to date" badge — same pill shape, success-tinted. */
+.update-badge--up-to-date {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  cursor: default;
+}
+
+.update-dot--success {
+  background: var(--md-sys-color-tertiary);
+}
+
 .about-card .md3-card__header-action {
   display: inline-flex;
   flex-shrink: 0;
   margin-left: auto;
   color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  border-radius: var(--md-sys-shape-corner-full);
+  padding: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.about-card .md3-card__header-action:hover {
+  background: var(--md-sys-color-surface-container-highest);
 }
 
 .clear-all-dialog__content {
