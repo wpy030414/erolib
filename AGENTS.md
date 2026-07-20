@@ -57,13 +57,14 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 登录时从 WebView 捕获 cookie 双写；登出时 JSON 文件 `remove_file` + WKWebView 精确 `deleteCookie`（按域名 match，不禁用 `clear_all_browsing_data` 以免误伤他站）；`reset_app_data` 全部删除。
 
-### localStorage — 14 个键模式（前端 UI 偏好）
+### localStorage — 15 个键模式（前端 UI 偏好）
 
 | 键 | 来源 | 数据 |
 |---|---|---|
 | `erolib.scroll.*` | `App.vue` | 按 `route.path` 的滚动位置 scrollTop |
 | `erolib.seed` | `stores/theme.ts` | MD3 种子色（`pink\|violet\|blue\|teal`） |
 | `erolib.theme` | `stores/theme.ts` | 明暗模式（`light\|dark`） |
+| `erolib.customThemes` | `stores/theme.ts` | 用户自定义主题（JSON 序列化 `Record<string, CustomTheme>`，阅读器「设置为主题」右键菜单创建） |
 | `erolib.locale` | `i18n/index.ts` | 界面语言（`zh\|en\|ja`） |
 | `erolib.opdsPort` | `stores/settings.ts` | OPDS 服务器端口（默认 `5269`） |
 | `erolib.rssPort` | `stores/settings.ts` | RSS 服务器端口（默认 `1269`） |
@@ -105,8 +106,8 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 ## 下载与任务系统
 
-- **所有下载统一经 TaskManager**（`src-tauri/src/services/task_manager.rs`），无进程内回退。任务 payload 是枚举 `TaskPayload`：`PixivBookmarks` / `PixivUserWorks` / `PixivSingleWork{cookie,work_id}` / `EhentaiGallery` / `AhentaiGallery` / `NicecatGallery`。`TaskSource` 对应为 `Pixiv` / `Ehentai` / `Ahentai` / `Nicecat`。
-- **下载后端**：四个 source 统一走 **分批并发下载**（`download_pages_concurrent`，8 并发/批，批间检查取消/暂停，图片落临时目录供断点续传），Pixiv / EHentai 走 aria2，ASMHentai / NiceCat 走 reqwest 直连（`JoinSet` + `Semaphore(8)`，`add_bytes` + `set_speed` 实时追踪）。进同一个 `TaskManager`，共享暂停 / 取消 / 进度语义。
+- **所有下载统一经 TaskManager**（`src-tauri/src/services/task_manager.rs`），无进程内回退。任务 payload 是枚举 `TaskPayload`：`PixivSingleWork{cookie,work_id}` / `EhentaiGallery` / `AhentaiGallery` / `NicecatGallery`。`TaskSource` 对应为 `Pixiv` / `Ehentai` / `Ahentai` / `Nicecat`。
+- **下载后端**：四个 source 统一走 **分批并发下载**（`download_pages_concurrent`，8 并发/批，批间检查取消/暂停，图片落临时目录供断点续传），**全部来源的图片下载统一走 aria2**（`download_one_image` → `Aria2Client::add_uri`）。各来源的 `reqwest::Client` 仅用于**元数据抓取**（页面列表、标签、标题等 API/HTML 解析），不参与图片二进制下载。
 - **aria2 自动 HTTP 代理**：`services/proxy.rs` `detect_http_proxy()` 取 env（`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` + 小写）+ macOS `scutil --proxy`（Clash / V2Ray「设为系统代理」后写入系统配置），结果 60s 缓存（避免一本几十张图每张都 spawn scutil）；跳过 aria2 不支持的 SOCKS。`Aria2Client::add_uri` 检测到则注入 `all-proxy` option，Pixiv / EHentai 等翻墙下载零配置。
 - **任务模型**（`services/task.rs` `TaskSnapshot`）含 `speed`（实时下行速度 B/s）、`logs`（步骤日志 JSON 数组，上限 ~200 行）、`book_id`（完成后回填，前端一键跳阅读器）。`enqueue` 保留最新 **100 条**（先 `DELETE … NOT IN (SELECT … ORDER BY created_at DESC LIMIT 99)` 再插入）。
 - aria2 进度：`wait_for_gid_with_progress` 轮询 `tell_status`，回调里 `set_progress(.., speed)` + `append_log`；成功后 `register_stored_book` → `set_book_id`。
@@ -124,7 +125,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 - 浏览式（`stores/ehentai-browse.ts`）：关键词搜索 + 10 大分类 chip 多选并集（`cats` = OR of selected bits），EXHentai 开关（`store.ex`）切换 `e-hentai.org` / `exhentai.org` 域名；scraper 解析 HTML（`glthumb` data-src、`glink`）。`browse_status` 用 gid+token 归一化匹配本地书。
 - 未登录时隐藏搜索框（`v-if="loggedIn"`）与 EXHentai switch（`v-show="loggedIn"`）。
-- 卡片三态同 Pixiv（`components/EHentaiCard.vue`）；封面走 `ehentai_proxy_thumb`（防盗链）。
+- 卡片三态同 Pixiv（`components/SourceCard.vue`）；封面走 `ehentai_proxy_thumb`（防盗链）。
 
 ## 共享服务器（OPDS / RSS）
 
@@ -140,7 +141,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - listing 页仅提取 id / title / thumb_url / category；`page_count` 始终 0、`uploader` 始终 None（节省带宽简化设计）。下载时才通过 `fetch_gallery_meta` 抓详情页补全标签 / 作者 / 页数，并用 `strip_tag_count()` 清洗 tag 名末尾的 ` (12,345)` 计数后缀。
 - 卡片两态（无页码 badge、无作者副标题）：本地有 → 阅读器；未下载 → 入队下载；下载中走 `task://progress` 监听。
 - 图片 CDN：`images.asmhentai.com/{load_dir}/{id}/{page}.jpg`；封面走 `ahentai_proxy_thumb` 代理 + IndexedDB 缓存。
-- 任务标题统一 `ASMHentai: {title}`；`process_ahentai` 走 JoinSet + Semaphore(8) 并发下载，含 `add_bytes` + `set_speed` 实时追踪。
+- 任务标题统一 `ASMHentai: {title}`；`process_ahentai` 走统一 aria2 下载管线（`download_pages_concurrent`），含速度追踪。
 
 ## NiceCat 浏览
 
@@ -148,7 +149,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - 浏览式（`stores/nicecat-browse.ts`）：首页话题板块（`HomeFeed/randomFeed`，横向滚动）+ 关键词搜索。搜索走两阶段——`ComicSearch/search` 解析关键词到多个标签，取 `comic_number` 最大的单一最优标签，再 `ComicSearch/searchTag` 取结果页 + `searchId` 游标；前端回传 `cursor` 字段翻页（空 = 页 1，非空 = 推进游标），页粒度 60，游标耗尽或短页即 end。
 - 卡片三态同 Pixiv / EHentai（`components/SourceCard` + `useBrowseFeed` 复用）：本地有 → 阅读器；下载中 → 遮罩 + 环形进度；未下载 → 红点。`nicecat_browse_status` 按 `source_plugin='nicecat'` + `source_post_id` 归一化匹配本地书与在途任务。
 - 封面走 `nicecat_proxy_thumb` 代理绕过 `vurm.fun` CDN 防盗链（需 `Referer` + `Origin`）。
-- **下载**（`process_nicecat`，`task_manager.rs`）：纯 HTTP——并发拉 `ComicInfo/info`（元信息：标题 / 作者 / 标签）+ `ComicOrder/getComicOrder`（翻页图 URL，需当日 `dateKey` = Base64(SHA-256(本地午夜毫秒))），解析出页图 URL 后 8 路并发 reqwest 直连 `vurm.fun` 下载，打包 cb7。**无 WebView**。
+- **下载**（`process_nicecat`，`task_manager.rs`）：纯 HTTP 元数据抓取——并发拉 `ComicInfo/info`（元信息：标题 / 作者 / 标签）+ `ComicOrder/getComicOrder`（翻页图 URL，需当日 `dateKey` = Base64(SHA-256(本地午夜毫秒))），解析出页图 URL 后进统一 aria2 下载管线打包 cb7。**无 WebView**。
 - 任务标题 `NiceCat: {title}`；payload `NicecatGallery { comic_id, title }`，`TaskSource::Nicecat`。
 - **RC4 令牌**：每请求新随机 token（一次性，复用 403）。`generate_token` = Base64(RC4(key, JSON({uid, auth})))，key `Zo1Eq4V2mr269K4doL9U4093U25acjMQ`，auth `ec8be430bc634535b258b3591a414a67`（`nicecat.rs`）。
 
@@ -196,8 +197,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 ```bash
 pnpm install            # 装依赖
 pnpm tauri dev          # 开发（热重载）
-npm run build           # 前端构建（vue-tsc 2.x 类型检查 + vite；TS 5.x 兼容已修）
 pnpm tauri build        # 生产包（.app / .dmg / .exe / .msi）
 ```
 
-> ⚠️ macOS 27 + rustc ≤1.96：release 下偶发 `can't find crate for <proc-macro>` 多为 feature-config 缓存损坏（**非** malformed Mach-O），`cargo clean` 即可；`Cargo.toml` 的 `[profile.release] debug = 2` 是历史防御，详见注释。
+> ⚠️ macOS 27 + rustc ≤1.96：release 下偶发 `can't find crate for <proc-macro>` 多为 feature-config 缓存损坏（**非** malformed Mach-O），`cargo clean` 即可；不要设 `[profile.release] debug = 2`，macOS 27 dyld 会因此拒绝加载含重对齐 LINKEDIT string pool 的 proc-macro dylib。

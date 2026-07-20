@@ -1,5 +1,6 @@
 <template>
   <div id="erolib-app" class="erolib-app d-flex fill-height">
+    <div v-if="themeBgImage && !isReader" class="theme-bg-overlay" />
     <AppShell v-if="!isReader" />
     <main ref="appMainRef" class="app-main flex-grow-1">
       <router-view />
@@ -14,12 +15,15 @@ import { useRoute } from 'vue-router';
 import AppShell from './components/AppShell.vue';
 import AppToast from './components/AppToast.vue';
 import { useSettingsStore } from './stores/settings';
+import { useThemeStore } from './stores/theme';
 import { usePixivBrowseStore } from './stores/pixiv-browse';
 import { useEhentaiBrowseStore } from './stores/ehentai-browse';
 import { useNicecatBrowseStore } from './stores/nicecat-browse';
 
 const route = useRoute();
 const isReader = computed(() => route.path.startsWith('/reader'));
+const themeStore = useThemeStore();
+const themeBgImage = computed(() => themeStore.themeBgImage);
 const settingsStore = useSettingsStore();
 
 // Scroll container — every secondary view scrolls inside this <main>.
@@ -144,5 +148,21 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: auto;
+}
+
+/* Custom-theme background overlay — bottom-right image fading toward top-left.
+   Only shown on non-reader pages; the reader already forces its own dark theme
+   and would clash with a semi-transparent overlay. */
+.theme-bg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--theme-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.02) 80%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.02) 80%);
 }
 </style>

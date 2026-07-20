@@ -127,15 +127,15 @@ fn parse_scutil_proxy(text: &str) -> Option<String> {
             Some((k.trim(), v.trim()))
         })
         .collect();
-    // HTTPS first (our downloads are mostly https), then plain HTTP.
-    for (enable_key, host_key, port_key) in [
+    // Clash Verge only sets Enable=1 when "set as system proxy" is ON, but the
+    // proxy daemon always listens — and most users keep that toggle off (the GUI
+    // app uses TUN mode on macOS). Ignore the Enable flag entirely and just pick
+    // the first non-empty host:port so the whole app (including aria2) routes
+    // through the proxy automatically. HTTPS proxy preferred, then HTTP.
+    for (_enable_key, host_key, port_key) in [
         ("HTTPSEnable", "HTTPSProxy", "HTTPSPort"),
         ("HTTPEnable", "HTTPProxy", "HTTPPort"),
     ] {
-        let enabled = fields.get(enable_key).map(|v| *v == "1").unwrap_or(false);
-        if !enabled {
-            continue;
-        }
         if let (Some(host), Some(port)) = (fields.get(host_key), fields.get(port_key)) {
             if !host.is_empty() {
                 return Some(format!("http://{host}:{port}"));
@@ -182,15 +182,24 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn parses_scutil_disabled() {
+    fn parses_scutil_disabled_still_returns_proxy() {
+        // Even when the system-proxy toggle is off, Clash's daemon still
+        // listens on the port — the host:port is what matters.
         let out = "\
 <dictionary> {
   HTTPEnable : 0
+  HTTPProxy : 127.0.0.1
+  HTTPPort : 7897
   HTTPSEnable : 0
+  HTTPSProxy : 127.0.0.1
+  HTTPSPort : 7897
   SOCKSEnable : 0
 }
 ";
-        assert!(parse_scutil_proxy(out).is_none());
+        assert_eq!(
+            parse_scutil_proxy(out).as_deref(),
+            Some("http://127.0.0.1:7897")
+        );
     }
 
     #[test]
