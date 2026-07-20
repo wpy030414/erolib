@@ -51,6 +51,10 @@ export const api = {
   saveBook: (id: string, dest: string) =>
     invoke<void>('save_book', { id, dest }),
 
+  // Export a single page image to a user-chosen location (reader right-click).
+  saveBookPage: (id: string, page: number, dest: string) =>
+    invoke<void>('save_book_page', { id, page, dest }),
+
   listBooks: (limit?: number, offset?: number) =>
     invoke<Book[]>('list_books', { limit, offset }),
 
@@ -130,7 +134,7 @@ export const api = {
   ahentaiBrowseStatus: (galleryIds: string[]) =>
     invoke<AhentaiBrowseStatus[]>('ahentai_browse_status', { galleryIds }),
 
-  // NiceCat browse — API calls go through hidden WebView to bypass Cloudflare.
+  // NiceCat browse — pure HTTP via RC4 token auth (no WebView needed).
   nicecatFetchApi: (path: string, formFields: Record<string, string>) =>
     invoke<any>('nicecat_fetch_api', { path, formFields }),
 
@@ -195,6 +199,9 @@ export const api = {
 
   tasksClearCompleted: () =>
     invoke<number>('tasks_clear_completed'),
+
+  tasksRetryAll: () =>
+    invoke<[number, number]>('tasks_retry_all'),
 
   taskEnqueueEhentaiGallery: (cookie: string, galleryUrl: string, title: string) =>
     invoke<string>('task_enqueue_ehentai_gallery', { cookie, galleryUrl, title }),

@@ -18,6 +18,7 @@
     "@material/web": "^2.4.1",
     "@mdi/js": "^7.4.47",
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "idb": "^8.0.0",
     "pinia": "^2.1.7",

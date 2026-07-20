@@ -40,6 +40,7 @@
     <div
       class="reader-viewport"
       @click="onViewportClick"
+      @contextmenu.prevent="onContextMenu"
     >
       <template v-if="isAnimated">
         <canvas v-show="!animLoading" ref="animCanvas" class="reader-image reader-image--anim" />
@@ -85,6 +86,33 @@
 
       <span class="reader-page-label text-body-2">{{ pageCount ?? '?' }}</span>
     </div>
+
+    <!-- Right-click context menu on the displayed image.
+         A hidden 1×1 anchor dot is moved to the click position so the menu
+         appears exactly where the cursor is, rather than at the viewport edge. -->
+    <div
+      id="reader-menu-anchor"
+      ref="menuAnchorEl"
+      class="reader-menu-anchor"
+      :style="menuAnchorStyle"
+    />
+    <md-menu
+      id="reader-image-menu"
+      ref="readerMenuRef"
+      anchor="reader-menu-anchor"
+      :open="menuOpen"
+      positioning="fixed"
+      @closed="menuOpen = false"
+    >
+      <md-menu-item @click="onSetAsTheme">
+        <MdiIcon slot="start" :path="mdiPalette" :size="18" />
+        <div slot="headline">{{ t('reader.menu.setAsTheme') }}</div>
+      </md-menu-item>
+      <md-menu-item v-if="!isAnimated" @click="onSaveImage">
+        <MdiIcon slot="start" :path="mdiContentSave" :size="18" />
+        <div slot="headline">{{ t('reader.menu.saveImage') }}</div>
+      </md-menu-item>
+    </md-menu>
   </div>
 </template>
 
@@ -93,14 +121,28 @@ import {
   mdiArrowLeft,
   mdiImageSizeSelectLarge,
   mdiImageSizeSelectActual,
+  mdiPalette,
+  mdiContentSave,
 } from '@mdi/js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { save as dialogSave } from '@tauri-apps/plugin-dialog';
+import { sourceColorFromImage, hexFromArgb } from '@material/material-color-utilities';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
-import { applyMd3Theme } from '@/services/md3-theme';
 import { useThemeStore } from '@/stores/theme';
 import type { Seed } from '@/services/md3-theme';
+import type { Book } from '@/types';
+import MdiIcon from '@/components/MdiIcon.vue';
+import { useToastStore } from '@/stores/toast';
+
+/** Material Web menu element — uses the same pattern as Library.vue to call
+ *  .show() on right-click so the menu opens at the cursor position. */
+type MdMenuElement = HTMLElement & {
+  show: () => void;
+  close: () => void;
+  open: boolean;
+};
 
 type ZoomMode = 'fill' | 'contain';
 
@@ -124,6 +166,15 @@ const blobs = ref<Record<number, string>>({});
 const current = ref(0);
 const zoomMode = ref<ZoomMode>(readZoomMode());
 const uiHidden = ref(false);
+
+// Context-menu state
+const menuOpen = ref(false);
+const readerMenuRef = ref<MdMenuElement | null>(null);
+const menuAnchorEl = ref<HTMLElement | null>(null);
+const menuAnchorStyle = ref('');
+const bookMeta = ref<Book | null>(null);
+/** Per-page file extension inferred from magic bytes, e.g. "jpg" / "png" / "webp". */
+const pageExtensions = ref<Record<number, string>>({});
 
 // Backend reading-session id for this Reader mount (one session per mount).
 // `null` until `api.openBook` resolves — if the call fails we still track time
@@ -543,6 +594,7 @@ async function loadMetadata() {
       api.getBook(props.id),
       api.getBookPageCount(props.id),
     ]);
+    bookMeta.value = book;
     title.value = book.title;
     pageCount.value = count;
     try {
@@ -561,6 +613,128 @@ async function loadMetadata() {
  *  than the old span=2 so back/forward jumps within a few pages are instant,
  *  while the out-of-window eviction below keeps memory bounded for huge books. */
 const PREFETCH_SPAN = 10;
+
+// ── Right-click context menu ────────────────────────────────────────
+
+function onContextMenu(e: MouseEvent) {
+  // Move the hidden 1×1 anchor dot to the click position so the menu opens
+  // exactly where the user right-clicked.
+  menuAnchorStyle.value = `left:${e.clientX}px;top:${e.clientY}px;`;
+  menuOpen.value = true;
+  nextTick(() => {
+    const el = readerMenuRef.value;
+    if (el && typeof el.show === 'function') {
+      el.show();
+    }
+  });
+}
+
+/** "Set as Theme": extract dominant colour from the current page image and
+ *  install it as a custom MD3 theme seed. */
+async function onSetAsTheme() {
+  menuOpen.value = false;
+  // For animated books the canvas element holds the current frame; for static
+  // pages the <img> is what we need.  sourceColorFromImage wants a fully-loaded
+  // <img>, so we always create a fresh Image from the current blob URL.
+  const srcUrl = blobs.value[current.value];
+  if (!srcUrl) return;
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  const colorPromise = new Promise<number>((resolve, reject) => {
+    img.onload = () => {
+      sourceColorFromImage(img).then(resolve).catch(reject);
+    };
+    img.onerror = () => reject(new Error('Failed to load image for colour extraction'));
+  });
+  img.src = srcUrl;
+
+  try {
+    const argb = await colorPromise;
+    const seedHex = hexFromArgb(argb);
+
+    // Full-resolution image as data URL for the background overlay (downscale to
+    // at most 1920px wide to keep the data URL manageable — ~300-500KB jpeg).
+    const fullCanvas = document.createElement('canvas');
+    const fullMaxDim = 1920;
+    const fullScale = Math.min(fullMaxDim / img.naturalWidth, fullMaxDim / img.naturalHeight, 1);
+    fullCanvas.width = Math.round(img.naturalWidth * fullScale);
+    fullCanvas.height = Math.round(img.naturalHeight * fullScale);
+    const fullCtx = fullCanvas.getContext('2d')!;
+    fullCtx.drawImage(img, 0, 0, fullCanvas.width, fullCanvas.height);
+    const imageB64 = fullCanvas.toDataURL('image/jpeg', 0.7);
+
+    // Generate a small thumbnail (100×100) for the settings page.
+    const thumbCanvas = document.createElement('canvas');
+    const maxDim = 100;
+    const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight, 1);
+    thumbCanvas.width = Math.round(img.naturalWidth * scale);
+    thumbCanvas.height = Math.round(img.naturalHeight * scale);
+    const thumbCtx = thumbCanvas.getContext('2d')!;
+    thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    const thumbnailB64 = thumbCanvas.toDataURL('image/jpeg', 0.6);
+
+    const themeStore = useThemeStore();
+    themeStore.addCustomTheme(
+      seedHex,
+      imageB64,
+      thumbnailB64,
+      current.value,
+      props.id,
+      bookMeta.value?.title ?? '',
+    );
+
+    // addCustomTheme calls setSeed which re-applies the global theme tokens
+    // via applyArgbTheme — the Reader must immediately re-force its own dark
+    // variant so the reading view stays dark regardless of the global mode.
+    // Also update the "previous" snapshots so onBeforeUnmount can restore the
+    // correct values when the user leaves the Reader.
+    // Use store methods: applyMd3Theme would try argbFromHex("custom:<uuid>") and crash.
+    themeStore.setMode('dark');
+    previousSeed.value = themeStore.seed;
+    previousMode.value = 'dark';
+
+    const toast = useToastStore();
+    toast.addToast('success', t('reader.menu.themeApplied'));
+  } catch (e) {
+    console.warn('[Reader] Failed to extract theme colour:', e);
+  }
+}
+
+/** "Save Image": export the current page as an individual file via the system
+ *  save dialog.  File name follows "${title}_p${page_leftpad}.${postfix}". */
+async function onSaveImage() {
+  menuOpen.value = false;
+  if (isAnimated.value) return;
+
+  const titleStr = (bookMeta.value?.title || 'page').replace(/[/\\?%*:|"<>]/g, '_');
+  const totalWidth = String(pageCount.value ?? 1).length;
+  const padded = String(current.value + 1).padStart(Math.max(1, totalWidth), '0');
+  const ext = pageExtensions.value[current.value] ?? 'jpg';
+
+  const defaultPath = `${titleStr}_p${padded}.${ext}`;
+  const dest = await dialogSave({
+    defaultPath,
+    filters: [
+      { name: `Image (.${ext})`, extensions: [ext] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+
+  if (dest) {
+    try {
+      await api.saveBookPage(props.id, current.value, dest);
+      const toast = useToastStore();
+      toast.addToast('success', t('reader.menu.imageSaved'));
+    } catch (e) {
+      console.warn('[Reader] Failed to save page:', e);
+      const toast = useToastStore();
+      toast.addToast('error', t('reader.menu.imageSaveFailed'));
+    }
+  }
+}
+
+// ── Prefetching ──────────────────────────────────────────────────────
 // Pages currently being fetched by an in-flight prefetchPages call. Without
 // this, two overlapping calls (rapid scrolling fires the watch repeatedly)
 // both see a not-yet-assigned page as "unloaded", both fetch it, and the second
@@ -598,7 +772,9 @@ async function prefetchPages() {
     targets.map(async (p) => {
       try {
         const buf = await api.getBookPage(props.id, p);
-        const blob = new Blob([buf], { type: mimeFromArrayBuffer(buf) });
+        const mime = mimeFromArrayBuffer(buf);
+        pageExtensions.value[p] = mime.split('/')[1] ?? 'jpg';
+        const blob = new Blob([buf], { type: mime });
         blobs.value[p] = URL.createObjectURL(blob);
       } catch (e) {
         console.warn(`Failed to load page ${p}:`, e);
@@ -643,7 +819,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeyDown);
   previousMode.value = themeStore.mode;
   previousSeed.value = themeStore.seed;
-  applyMd3Theme(themeStore.seed, 'dark');
+  themeStore.setMode('dark');
   scheduleUiHide();
   document.addEventListener('visibilitychange', onVisibilityChangeReadTime);
   ensureReadTimeTimer();
@@ -664,8 +840,12 @@ onBeforeUnmount(() => {
   resizeObserver = null;
   closeBitmaps();
   clearBlobs();
-  if (previousMode.value && previousSeed.value) {
-    applyMd3Theme(previousSeed.value, previousMode.value);
+  if (previousMode.value != null && previousSeed.value != null) {
+    // Use the store's setSeed/setMode rather than applyMd3Theme directly: when
+    // the seed is a custom:<uuid> key, applyMd3Theme would try to parse the key
+    // as a hex colour and crash.  The store's applyTheme dispatches correctly.
+    themeStore.setMode(previousMode.value);
+    themeStore.setSeed(previousSeed.value);
   }
 });
 
@@ -877,5 +1057,15 @@ onBeforeUnmount(() => {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Hidden anchor dot — moved to the right-click position so the context menu
+   opens exactly where the user clicked, not at the viewport edge. */
+.reader-menu-anchor {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  z-index: 0;
 }
 </style>

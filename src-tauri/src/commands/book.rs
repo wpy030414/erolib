@@ -135,6 +135,36 @@ pub async fn save_book(
     Ok(())
 }
 
+/// Export a single page image from a book's CB7/CBZ archive to a user-chosen
+/// path on disk. `page` is 0-based. The raw image bytes (jpg/png/webp) are
+/// read from the archive and written verbatim — no re-encoding.
+#[tauri::command]
+pub async fn save_book_page(
+    id: String,
+    page: usize,
+    dest: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let file_path = state
+        .library_service
+        .get_book_file_path(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let path = std::path::PathBuf::from(&file_path);
+    let storage = state.storage.clone();
+    let bytes = tokio::task::spawn_blocking(move || storage.read_page(&path, page))
+        .await
+        .map_err(|e| format!("page read join failed: {e}"))?
+        .ok_or_else(|| format!("page {page} not found for book {id}"))?;
+    let dest = std::path::Path::new(&dest).to_path_buf();
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+    }
+    std::fs::write(&dest, &bytes)
+        .map_err(|e| format!("write to {}: {}", dest.display(), e))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_books(
     limit: Option<i64>,
