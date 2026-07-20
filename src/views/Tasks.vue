@@ -42,6 +42,7 @@
           class="task-logs-wrap"
           :open="selectedTaskId === item.id"
           @toggle.prevent
+          @contextmenu.prevent="copyLogs(item)"
         >
           <summary class="task-logs-summary" />
           <div class="task-logs-inner">
@@ -124,6 +125,14 @@
     </div>
 
     <FabButton
+      v-if="hasRetryable"
+      :icon="mdiRestart"
+      :aria-label="t('tasks.actions.retryAll')"
+      :disabled="retrying"
+      style="bottom: 96px"
+      @click="onRetryAll"
+    />
+    <FabButton
       v-if="hasCompleted"
       :icon="mdiBroom"
       :aria-label="t('tasks.actions.clearCompleted')"
@@ -144,6 +153,7 @@ import {
   mdiRefresh,
   mdiMagnify,
   mdiBroom,
+  mdiRestart,
 } from '@mdi/js';
 import { useI18n } from '@/i18n';
 import { useTaskStore } from '@/stores/tasks';
@@ -152,6 +162,7 @@ import { useCollectionsStore } from '@/stores/collections';
 import MdiIcon from '@/components/MdiIcon.vue';
 import FabButton from '@/components/FabButton.vue';
 import { formatBytes, formatSpeed, formatDuration } from '@/utils/format';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -161,9 +172,11 @@ const collectionsStore = useCollectionsStore();
 const { tasks, selectedTaskId } = taskStore;
 
 const clearing = ref(false);
+const retrying = ref(false);
 
 const TERMINAL = ['completed', 'failed', 'cancelled'];
 const hasCompleted = computed(() => tasks.value.some((tk) => TERMINAL.includes(tk.status)));
+const hasRetryable = computed(() => tasks.value.some((tk) => tk.status === 'failed' || tk.status === 'paused'));
 
 function progressPercent(item: { progress_current: number; progress_total: number }): number {
   if (item.progress_total <= 0) return 100;
@@ -205,6 +218,30 @@ async function onClearCompleted() {
     toastStore.addToast('error', t('common.error', { message: String(e) }));
   } finally {
     clearing.value = false;
+  }
+}
+
+async function onRetryAll() {
+  retrying.value = true;
+  try {
+    await taskStore.retryAll();
+    toastStore.addToast('info', t('tasks.toast.retried'));
+  } catch (e) {
+    toastStore.addToast('error', t('common.error', { message: String(e) }));
+  } finally {
+    retrying.value = false;
+  }
+}
+
+async function copyLogs(item: import('@/services/api').TaskItem) {
+  if (!item.logs.length) return;
+  const text = item.logs.join('\n');
+  try {
+    await writeText(text);
+    toastStore.addToast('success', t('tasks.logs.copied'));
+  } catch (e) {
+    console.error('[Tasks] copyLogs failed:', e);
+    toastStore.addToast('error', t('tasks.logs.copyFailed'));
   }
 }
 

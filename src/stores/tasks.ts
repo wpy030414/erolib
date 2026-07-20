@@ -108,6 +108,11 @@ export function useTaskStore() {
     await refresh();
   }
 
+  async function retryAll() {
+    await api.tasksRetryAll();
+    await refresh();
+  }
+
   const selectedTask = computed(() =>
     tasks.value.find((t) => t.id === selectedTaskId.value) ?? null,
   );
@@ -125,5 +130,6 @@ export function useTaskStore() {
     deleteTask,
     retryTask,
     clearCompleted,
+    retryAll,
   };
 }

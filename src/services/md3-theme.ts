@@ -6,8 +6,11 @@ import {
   type TonalPalette,
 } from '@material/material-color-utilities';
 
-export type Seed = 'pink' | 'violet' | 'blue' | 'teal';
+export type Seed = 'pink' | 'violet' | 'blue' | 'teal' | (string & {});
 export type ThemeMode = 'light' | 'dark';
+
+// Re-export for convenience — theme store needs these for custom-theme workflow.
+export { argbFromHex, hexFromArgb };
 
 /** Available seed colors shown in Settings. */
 export const SEEDS: Array<{ key: Seed; color: string }> = [
@@ -26,9 +29,13 @@ const themeCache = new Map<Seed, Theme>();
 function getTheme(seed: Seed): Theme {
   const cached = themeCache.get(seed);
   if (cached) return cached;
-  const seedColor = SEEDS.find((s) => s.key === seed)?.color ?? '#ab2a72';
-  const theme = themeFromSourceColor(argbFromHex(seedColor));
-  themeCache.set(seed, theme);
+  const builtin = SEEDS.find((s) => s.key === seed)?.color;
+  // Custom seeds that aren't in the built-in list are treated as hex colours.
+  const hex = builtin ?? seed;
+  const theme = themeFromSourceColor(argbFromHex(hex));
+  // Only cache built-in seeds — custom seeds use applyArgbTheme directly and we
+  // don't want to grow the cache with ephemeral custom:<uuid> keys.
+  if (builtin) themeCache.set(seed, theme);
   return theme;
 }
 
@@ -154,4 +161,63 @@ export function applyMd3Theme(seed: Seed, mode: ThemeMode): void {
 
   root.setAttribute('data-md-mode', mode);
   root.setAttribute('data-md-seed', seed);
+}
+
+/**
+ * Apply a full MD3 colour scheme from a raw ARGB source colour (e.g. extracted
+ * from an image).  Mirrors `applyMd3Theme` but takes an ARGB int directly so
+ * custom themes don't need a named Seed key.
+ */
+export function applyArgbTheme(sourceArgb: number, dark: boolean): void {
+  if (typeof document === 'undefined') return;
+  const theme = themeFromSourceColor(sourceArgb);
+  const scheme = dark ? theme.schemes.dark : theme.schemes.light;
+  const root = document.documentElement;
+
+  const set = (token: string, value: string) =>
+    root.style.setProperty(`--md-sys-color-${token}`, value);
+
+  // Core roles from the HCT-derived scheme.
+  set('primary', hexFromArgb(scheme.primary));
+  set('on-primary', hexFromArgb(scheme.onPrimary));
+  set('primary-container', hexFromArgb(scheme.primaryContainer));
+  set('on-primary-container', hexFromArgb(scheme.onPrimaryContainer));
+  set('secondary', hexFromArgb(scheme.secondary));
+  set('on-secondary', hexFromArgb(scheme.onSecondary));
+  set('secondary-container', hexFromArgb(scheme.secondaryContainer));
+  set('on-secondary-container', hexFromArgb(scheme.onSecondaryContainer));
+  set('tertiary', hexFromArgb(scheme.tertiary));
+  set('on-tertiary', hexFromArgb(scheme.onTertiary));
+  set('tertiary-container', hexFromArgb(scheme.tertiaryContainer));
+  set('on-tertiary-container', hexFromArgb(scheme.onTertiaryContainer));
+  set('error', hexFromArgb(scheme.error));
+  set('on-error', hexFromArgb(scheme.onError));
+  set('error-container', hexFromArgb(scheme.errorContainer));
+  set('on-error-container', hexFromArgb(scheme.onErrorContainer));
+  set('background', hexFromArgb(scheme.background));
+  set('on-background', hexFromArgb(scheme.onBackground));
+  set('surface', hexFromArgb(scheme.surface));
+  set('on-surface', hexFromArgb(scheme.onSurface));
+  set('surface-variant', hexFromArgb(scheme.surfaceVariant));
+  set('on-surface-variant', hexFromArgb(scheme.onSurfaceVariant));
+  set('outline', hexFromArgb(scheme.outline));
+  set('outline-variant', hexFromArgb(scheme.outlineVariant));
+  set('inverse-surface', hexFromArgb(scheme.inverseSurface));
+  set('inverse-on-surface', hexFromArgb(scheme.inverseOnSurface));
+  set('inverse-primary', hexFromArgb(scheme.inversePrimary));
+  set('shadow', hexFromArgb(scheme.shadow));
+  set('scrim', hexFromArgb(scheme.scrim));
+
+  // Surface containers from the neutral palette.
+  for (const [token, value] of Object.entries(surfaceRoles(theme, dark))) {
+    set(token, value);
+  }
+
+  // Non-spec semantic colors.
+  for (const [token, value] of Object.entries(dark ? SEMANTIC_DARK : SEMANTIC_LIGHT)) {
+    set(token, value);
+  }
+
+  root.setAttribute('data-md-mode', dark ? 'dark' : 'light');
+  root.setAttribute('data-md-seed', 'custom');
 }

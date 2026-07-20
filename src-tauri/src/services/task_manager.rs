@@ -251,6 +251,40 @@ impl TaskManager {
         Ok(res.rows_affected())
     }
 
+    /// Retry all failed tasks + resume all paused tasks in one shot.
+    /// Returns (retried, resumed) counts.
+    pub async fn retry_and_resume_all(&self) -> Result<(u64, u64)> {
+        let failed: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM tasks WHERE status = 'failed'",
+        )
+        .fetch_all(&self.db.pool)
+        .await
+        .context("list failed tasks")?;
+
+        let paused: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM tasks WHERE status = 'paused'",
+        )
+        .fetch_all(&self.db.pool)
+        .await
+        .context("list paused tasks")?;
+
+        let retried = failed.len() as u64;
+        let resumed = paused.len() as u64;
+
+        for id in &failed {
+            if let Err(e) = self.retry_task(id).await {
+                tracing::warn!(target: "erolib::tasks", %e, task_id = %id, "retry_all: retry failed");
+            }
+        }
+        for id in &paused {
+            if let Err(e) = self.resume_task(id).await {
+                tracing::warn!(target: "erolib::tasks", %e, task_id = %id, "retry_all: resume failed");
+            }
+        }
+
+        Ok((retried, resumed))
+    }
+
     pub async fn enqueue(&self, payload: TaskPayload, title: String) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -1938,13 +1972,23 @@ async fn process_ahentai(
     let load_dir = meta.load_dir.clone();
     let gid = gallery_id.to_string();
 
+    // ASMHentai removed the `load_dir` hidden input; the CDN path is now
+    // images.asmhentai.com/{last3digits}/{gid}/{page}.jpg.
+    // Fall back to the last 3 digits when load_dir is empty.
+    let dir = if load_dir.is_empty() {
+        let last3 = if gid.len() >= 3 { &gid[gid.len() - 3..] } else { &gid };
+        last3.to_string()
+    } else {
+        load_dir.trim_matches('/').to_string()
+    };
+
     // Download all pages via aria2 through the shared concurrent helper.
     let downloads: Vec<PageDownload> = (1..=total)
         .map(|page| PageDownload {
             index: page as usize - 1,
             url: format!(
                 "https://images.asmhentai.com/{}/{}/{}.jpg",
-                load_dir, gid, page
+                dir, gid, page
             ),
             out: format!("page-{:04}", page - 1),
             referer: "https://asmhentai.com/",

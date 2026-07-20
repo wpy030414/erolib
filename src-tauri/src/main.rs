@@ -156,6 +156,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![
             commands::book::import_book,
             commands::book::delete_book,
@@ -164,6 +165,7 @@ fn main() {
             commands::book::get_book_page_count,
             commands::book::get_book_cover_thumb,
             commands::book::save_book,
+            commands::book::save_book_page,
             commands::book::list_books,
             commands::book::open_book,
             commands::book::record_reading,
@@ -206,6 +208,7 @@ fn main() {
             commands::tasks::task_delete,
             commands::tasks::task_retry,
             commands::tasks::tasks_clear_completed,
+            commands::tasks::tasks_retry_all,
             commands::tasks::task_enqueue_ehentai_gallery,
             commands::tasks::task_enqueue_pixiv_work,
             commands::tasks::task_enqueue_ahentai_gallery,

@@ -85,6 +85,38 @@
           </template>
         </div>
 
+        <!-- Custom themes from reader "Set as Theme" -->
+        <template v-if="customThemeList.length">
+          <p class="text-body-2 text-medium-emphasis mb-3">
+            {{ t('settings.theme.custom') }}
+          </p>
+          <div class="d-flex gap-3 mb-4 flex-wrap">
+            <template v-for="ct in customThemeList" :key="ct.key">
+              <div
+                class="custom-theme-item"
+                :class="{ 'custom-theme-item--selected': themeStore.seed === ct.key }"
+              >
+                <div
+                  class="custom-theme-thumb"
+                  :style="{ backgroundImage: `url(${ct.thumbnailB64})` }"
+                  :title="ct.sourceTitle"
+                  @click="themeStore.activateCustomTheme(ct.key)"
+                />
+                <button
+                  v-if="themeStore.seed !== ct.key"
+                  class="custom-theme-delete"
+                  :aria-label="t('settings.theme.removeCustom')"
+                  @click="themeStore.removeCustomTheme(ct.key)"
+                >
+                  <svg :width="12" :height="12" viewBox="0 0 24 24" fill="currentColor">
+                    <path :d="mdiClose" />
+                  </svg>
+                </button>
+              </div>
+            </template>
+          </div>
+        </template>
+
         <div class="d-flex align-center">
           <span class="text-body-2 dark-mode-label">{{ t('settings.theme.dark') }}</span>
           <md-switch
@@ -270,6 +302,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
   mdiBroom,
   mdiCheckCircle,
+  mdiClose,
   mdiDatabaseOutline,
   mdiDeleteForever,
   mdiFolderSyncOutline,
@@ -295,6 +328,11 @@ import { clearThumbs } from '@/services/thumb-cache';
 const { t, locale, setLocale } = useI18n();
 const settingsStore = useSettingsStore();
 const themeStore = useThemeStore();
+
+/** Custom themes from the reader "Set as Theme" context menu. */
+const customThemeList = computed(() =>
+  Array.from(themeStore.customThemes.values()),
+);
 
 /** Show only the target folder's name in the narrow sync field; the full path
  *  is what's stored and sent to the backend — hover (title) reveals it. */
@@ -571,5 +609,55 @@ onBeforeUnmount(() => {
 
 .clear-all-dialog__content md-outlined-text-field {
   width: 100%;
+}
+
+/* ── Custom theme items (reader "Set as Theme") ─────────────────── */
+
+.custom-theme-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
+.custom-theme-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.custom-theme-item--selected .custom-theme-thumb {
+  border-color: var(--md-sys-color-on-surface);
+  box-shadow:
+    0 0 0 2px var(--md-sys-color-surface),
+    0 0 0 4px var(--md-sys-color-on-surface);
+}
+
+.custom-theme-delete {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-error);
+  color: var(--md-sys-color-on-error);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+
+.custom-theme-item:hover .custom-theme-delete {
+  opacity: 1;
 }
 </style>

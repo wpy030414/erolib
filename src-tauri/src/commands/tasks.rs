@@ -75,6 +75,17 @@ pub async fn tasks_clear_completed(
         .map_err(|e| e.to_string())
 }
 
+/// Retry all failed tasks and resume all paused tasks.  Returns (retried, resumed).
+#[tauri::command]
+pub async fn tasks_retry_all(
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<(u64, u64), String> {
+    manager
+        .retry_and_resume_all()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn task_enqueue_pixiv_work(
     cookie: String,
