@@ -3,6 +3,7 @@
 mod collection_service;
 mod feed;
 mod library;
+pub mod locale;
 mod opds;
 mod rss;
 pub mod pixiv;
@@ -10,6 +11,7 @@ pub mod ehentai;
 pub mod ahentai;
 pub mod nicecat;
 mod search;
+pub mod similarity;
 mod storage;
 pub mod aria2;
 pub mod proxy;

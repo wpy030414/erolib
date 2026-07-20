@@ -13,6 +13,7 @@ import '@material/web/slider/slider.js';
 import '@material/web/menu/menu.js';
 import '@material/web/menu/menu-item.js';
 import '@material/web/progress/circular-progress.js';
+import '@material/web/progress/linear-progress.js';
 import '@material/web/tabs/tabs.js';
 import '@material/web/tabs/primary-tab.js';
 import '@material/web/dialog/dialog.js';

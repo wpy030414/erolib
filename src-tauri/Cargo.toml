@@ -21,6 +21,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.7", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "chrono"] }
+# Raw SQLite handle access for registering the SIMILARITY UDF (sqlx exposes the
+# handle via `as_raw_handle`; the `sqlite3` type is semver-exempt, so pin the
+# exact version sqlx-sqlite 0.7.4 links against).
+libsqlite3-sys = "=0.27.0"
 uuid = { version = "1.6", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.11", features = ["json", "multipart"] }
@@ -44,6 +48,7 @@ urlencoding = "2.1"
 base64 = "0.22"
 rand = "0.8"
 http = "1.4.2"
+tauri-plugin-opener = "2.5.4"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

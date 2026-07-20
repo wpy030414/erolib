@@ -1,5 +1,6 @@
 import { ref, computed, watch } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { api } from '@/services/api';
 import zh from './zh';
 import en from './en';
 import ja from './ja';
@@ -41,6 +42,31 @@ export function setLocale(l: Locale) {
   } catch {
     // ignore
   }
+  syncLocaleToBackend(l);
+}
+
+/** Push the locale to the backend so SQL renders tags in the current language,
+ *  then fire any registered refresh callbacks (e.g. re-pull the library so the
+ *  grid + chips + metadata re-render in the new language). Fire-and-forget:
+ *  a failed push must not break the UI language switch. */
+function syncLocaleToBackend(l: Locale) {
+  void api.setLocale(l).catch(() => {});
+  for (const cb of localeChangeCallbacks) {
+    try {
+      cb(l);
+    } catch {
+      // a misbehaving listener must not break others
+    }
+  }
+}
+
+const localeChangeCallbacks: Array<(l: Locale) => void> = [];
+
+/** Register a callback run after the locale is pushed to the backend (used by
+ *  the app shell to refresh tag-bearing views without i18n importing stores —
+ *  which would be a circular dependency). */
+export function onLocaleChange(cb: (l: Locale) => void) {
+  localeChangeCallbacks.push(cb);
 }
 
 export function applyWindowTitle() {

@@ -16,15 +16,19 @@ import AppShell from './components/AppShell.vue';
 import AppToast from './components/AppToast.vue';
 import { useSettingsStore } from './stores/settings';
 import { useThemeStore } from './stores/theme';
+import { useLibraryStore } from './stores/library';
 import { usePixivBrowseStore } from './stores/pixiv-browse';
 import { useEhentaiBrowseStore } from './stores/ehentai-browse';
 import { useNicecatBrowseStore } from './stores/nicecat-browse';
+import { api } from './services/api';
+import { onLocaleChange, useI18n } from './i18n';
 
 const route = useRoute();
 const isReader = computed(() => route.path.startsWith('/reader'));
 const themeStore = useThemeStore();
 const themeBgImage = computed(() => themeStore.themeBgImage);
 const settingsStore = useSettingsStore();
+const { locale } = useI18n();
 
 // Scroll container — every secondary view scrolls inside this <main>.
 const appMainRef = ref<HTMLElement | null>(null);
@@ -128,6 +132,16 @@ onMounted(() => {
   usePixivBrowseStore();
   useEhentaiBrowseStore();
   useNicecatBrowseStore();
+
+  // Push the current locale to the backend on startup so SQL renders tags in
+  // the right language from the first query (the backend `settings` row is
+  // empty until pushed; the frontend's localStorage value is the source of
+  // truth). Then, whenever the locale changes, refresh the library grid + tag
+  // chips + metadata so every tag-bearing view re-renders in the new language.
+  void api.setLocale(locale.value).catch(() => {});
+  onLocaleChange(() => {
+    void useLibraryStore().refresh();
+  });
 });
 
 onBeforeUnmount(() => {

@@ -101,17 +101,33 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for Tag {
 }
 
 /// A tag paired with how many books use it, for the tag-chip filter UI.
+///
+/// `name` is the DISPLAY label in the current app locale (translated via the
+/// `tag_translations` lookup; falls back to the raw stored name when unmapped).
+/// `raw_names` are the original stored spellings folded into this label — the
+/// chip row sends these back in `tags_any` so selecting a translated chip
+/// filters by every raw form of that concept.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagCount {
     pub name: String,
     pub count: i64,
+    #[serde(default)]
+    pub raw_names: Vec<String>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for TagCount {
     fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        // raw_names comes back as a comma-joined string (GROUP_CONCAT); split
+        // it for the frontend. Tolerate its absence for callers that don't
+        // need the raw forms.
+        let raw: Option<String> = row.try_get("raw_names").unwrap_or(None);
+        let raw_names = raw
+            .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default();
         Ok(Self {
             name: row.try_get("name")?,
             count: row.try_get("count")?,
+            raw_names,
         })
     }
 }

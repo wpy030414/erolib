@@ -368,6 +368,11 @@ function viewMeta(book: Book) {
   menuOpen[book.id] = false;
   metaBook.value = book;
   metaDialog.value?.showModal();
+  // Re-fetch so the tags reflect the CURRENT locale: the grid `book` is a stale
+  // copy rendered under the previous language, while get_book translates fresh.
+  void api.getBook(book.id).then((fresh) => {
+    if (metaBook.value?.id === fresh.id) metaBook.value = fresh;
+  }).catch(() => {});
 }
 
 function closeMeta() {
