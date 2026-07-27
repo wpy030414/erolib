@@ -142,7 +142,7 @@ pub async fn ehentai_open_login_window(
         .parse()
         .map_err(|e| format!("bad login url: {e}"))?;
 
-    let window = tauri::WebviewWindowBuilder::new(
+    let builder = tauri::WebviewWindowBuilder::new(
         &app_handle,
         "ehentai-login",
         WebviewUrl::External(login_url),
@@ -150,12 +150,16 @@ pub async fn ehentai_open_login_window(
     .title("Login to e-hentai")
     .inner_size(560.0, 760.0)
     .center()
-    .resizable(true)
-    // Disable spell-check/autocorrect on every input (see pixiv_login.rs) —
-    // macOS 26 WKWebView's NSCorrectionPanel crashes the window as a sheet.
-    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
-    .build()
-    .map_err(|e| format!("open login window: {e}"))?;
+    .resizable(true);
+
+    // Only apply the spellcheck script on macOS where the NSCorrectionPanel bug exists.
+    // On Windows, this can cause rendering issues or white screen.
+    #[cfg(target_os = "macos")]
+    let builder = builder.initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#);
+
+    let window = builder
+        .build()
+        .map_err(|e| format!("open login window: {e}"))?;
 
     let win_label = window.label().to_string();
     let app_for_poll = app_handle.clone();
@@ -185,8 +189,15 @@ pub async fn ehentai_open_login_window(
             let on_eh =
                 host == "e-hentai.org" || host.ends_with(".e-hentai.org") || host == "exhentai.org"
                     || host.ends_with(".exhentai.org");
-            let path = url.path();
-            if !on_eh || path.contains("act=Login") {
+            // Never attempt cookie capture while the page is on
+            // forums.e-hentai.org (the login form is served from a Cloudflare-
+            // protected domain). Even after the Cloudflare challenge clears,
+            // the page may remove act=Login from the query via replaceState,
+            // which would let us fall through to capture_all_cookies and its
+            // JS eval redirect — blowing away the login form on Windows.
+            // Wait until the user has been redirected back to e-hentai.org or
+            // exhentai.org after a successful login before trying to capture.
+            if !on_eh || host == "forums.e-hentai.org" {
                 continue;
             }
 
