@@ -14,6 +14,7 @@ use services::{
     task_manager::TaskManager, CollectionService, LibraryService, OpdsService,
     RssService, SearchService, StorageService,
 };
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 use tauri::Manager;
@@ -125,30 +126,38 @@ fn main() {
             // the 2–5s cold-start delay shows as a white screen. We hide a 1×1
             // webview to absorb that cost early while the user is still browsing
             // the library.
-            let warmup_handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                // Give the main window a head start before we steal the
-                // networking process launch.
-                tokio::time::sleep(Duration::from_millis(800)).await;
-                let warmup = tauri::WebviewWindowBuilder::new(
-                    &warmup_handle,
-                    "wkwebview-warmup",
-                    tauri::WebviewUrl::External(
-                        "https://www.apple.com".parse().unwrap(),
-                    ),
-                )
-                .title("warmup")
-                .inner_size(1.0, 1.0)
-                .visible(false)
-                .build();
-                if let Ok(w) = warmup {
-                    // Wait long enough for the networking process to launch and
-                    // the page to begin loading (typically 1–2s on a cold start).
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    w.close().ok();
-                }
-                tracing::info!(target: "erolib::setup", "WKWebView networking warmup complete");
-            });
+            //
+            // macOS-only: On Windows, creating a 1×1 WebView2 from a background
+            // task can corrupt the WebView2 environment, causing ALL subsequent
+            // windows that load external URLs (login windows, etc.) to show a
+            // white screen instead of content.
+            #[cfg(target_os = "macos")]
+            {
+                let warmup_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Give the main window a head start before we steal the
+                    // networking process launch.
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    let warmup = tauri::WebviewWindowBuilder::new(
+                        &warmup_handle,
+                        "wkwebview-warmup",
+                        tauri::WebviewUrl::External(
+                            "https://www.apple.com".parse().unwrap(),
+                        ),
+                    )
+                    .title("warmup")
+                    .inner_size(1.0, 1.0)
+                    .visible(false)
+                    .build();
+                    if let Ok(w) = warmup {
+                        // Wait long enough for the networking process to launch and
+                        // the page to begin loading (typically 1–2s on a cold start).
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        w.close().ok();
+                    }
+                    tracing::info!(target: "erolib::setup", "WKWebView networking warmup complete");
+                });
+            }
 
             Ok(())
         })

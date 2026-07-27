@@ -1,6 +1,6 @@
 {
   "productName": "EroLib",
-  "version": "26.7.20+2050",
+  "version": "26.7.28+0110",
   "identifier": "im.xrl.erolib",
   "build": {
     "beforeDevCommand": "npm run dev",

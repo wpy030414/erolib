@@ -201,6 +201,13 @@ impl Aria2Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // On Windows, hide the console window to prevent a black window from popping up.
+        #[cfg(target_os = "windows")]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let mut child = cmd.spawn().context(
             "failed to spawn the bundled aria2c binary; the app may be damaged, \
              or start an aria2 daemon on localhost:6800 manually",

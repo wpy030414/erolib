@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for EroLib",
-  "windows": ["main", "pixiv-login", "nicecat-api-*"],
+  "windows": ["main", "pixiv-login", "ehentai-login", "nicecat-api-*"],
   "permissions": [
     "core:default",
     "core:window:default",

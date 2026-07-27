@@ -37,7 +37,7 @@ pub async fn pixiv_open_login_window(
         .parse()
         .map_err(|e| format!("bad login url: {e}"))?;
 
-    let window = tauri::WebviewWindowBuilder::new(
+    let builder = tauri::WebviewWindowBuilder::new(
         &app_handle,
         "pixiv-login",
         WebviewUrl::External(login_url),
@@ -45,15 +45,16 @@ pub async fn pixiv_open_login_window(
     .title("Login to Pixiv")
     .inner_size(520.0, 760.0)
     .center()
-    .resizable(true)
-    // Disable spell-check/autocorrect on every input. On macOS 26 WKWebView's
-    // auto-correction panel (NSCorrectionPanel) is shown as a sheet child
-    // window and hits an NSRemoteView assertion → crash the moment the user
-    // types in a field. With spellcheck off WebCore never calls
-    // showCorrectionPanel, sidestepping the bug.
-    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
-    .build()
-    .map_err(|e| format!("open login window: {e}"))?;
+    .resizable(true);
+
+    // Only apply the spellcheck script on macOS where the NSCorrectionPanel bug exists.
+    // On Windows, this can cause rendering issues or white screen.
+    #[cfg(target_os = "macos")]
+    let builder = builder.initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#);
+
+    let window = builder
+        .build()
+        .map_err(|e| format!("open login window: {e}"))?;
 
     let app_for_poll = app_handle.clone();
     let session_for_poll = session.inner().clone();
@@ -187,7 +188,25 @@ async fn try_capture_fallback(
         tauri::async_runtime::spawn_blocking(move || capture_all_cookies(&app_clone))
             .await
             .ok()??;
+
+    tracing::info!(
+        target: "erolib::pixiv_login",
+        len = cookie.len(),
+        has_session = has_pixiv_session(&cookie),
+        platform = if cfg!(target_os = "windows") { "windows" } else { "other" },
+        "fallback cookie capture result"
+    );
+
     if !has_pixiv_session(&cookie) {
+        // On Windows, JS eval may not capture HttpOnly cookies. Try to extract
+        // any available cookies and see if the API can still work with them.
+        #[cfg(target_os = "windows")]
+        {
+            tracing::warn!(
+                target: "erolib::pixiv_login",
+                "Windows cannot capture HttpOnly PHPSESSID via JS. User may need to provide cookie manually."
+            );
+        }
         return None;
     }
     let user_id = PixivClient::fetch_current_user_id(&cookie)

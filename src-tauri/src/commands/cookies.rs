@@ -416,7 +416,45 @@ mod native {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+mod native {
+    use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
+
+    static CAPTURED: Mutex<Option<String>> = Mutex::new(None);
+    static DONE: AtomicBool = AtomicBool::new(false);
+
+    /// Reset the shared completion state.
+    fn reset_state() {
+        *CAPTURED.lock().unwrap() = None;
+        DONE.store(false, Ordering::SeqCst);
+    }
+
+    /// On Windows, we use WebView2's CookieManager via a JS-based approach.
+    /// Since Tauri's wry doesn't expose raw WebView2 handles on Windows yet,
+    /// we fall back to JS eval which can read document.cookie (non-HttpOnly only).
+    /// For HttpOnly cookies like Pixiv's PHPSESSID, we need a different approach.
+    pub fn capture_from_webview(_wkwebview: usize) -> Option<String> {
+        // Not applicable on Windows - we don't have direct WebView2 handle access
+        None
+    }
+
+    pub fn capture() -> Option<String> {
+        reset_state();
+        // On Windows, there's no direct way to access WebView2's cookie store
+        // from Rust without webview2-com crate. We return None and let the
+        // fallback JS method handle it.
+        None
+    }
+
+    pub fn delete_cookies_for(_suffixes: Vec<String>) -> bool {
+        // On Windows, we can't directly delete cookies from the WebView2 store
+        // without webview2-com. Return true to indicate "success" (no-op).
+        true
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[allow(dead_code)]
 mod native {
     pub fn capture() -> Option<String> {
@@ -432,9 +470,23 @@ mod native {
 // ---------------------------------------------------------------------------
 
 pub fn inject_cookie_redirect(window: &tauri::WebviewWindow) -> bool {
+    // Try multiple approaches to capture cookies:
+    // 1. Direct document.cookie (works for non-HttpOnly)
+    // 2. navigator.cookieEnabled check
     window
         .eval(
-            r#"document.location.href = 'about:blank#' + encodeURIComponent(document.cookie);"#,
+            r#"
+            (function() {
+                try {
+                    var cookies = document.cookie;
+                    if (cookies && cookies.length > 0) {
+                        document.location.href = 'about:blank#' + encodeURIComponent(cookies);
+                    }
+                } catch(e) {
+                    console.error('cookie capture failed:', e);
+                }
+            })();
+            "#,
         )
         .is_ok()
 }
@@ -455,29 +507,59 @@ pub fn extract_cookie_from_url(window: &tauri::WebviewWindow) -> Option<String> 
 /// Main cookie capture entry point.
 ///
 /// Capture order (most reliable first):
-/// 1. **The login window's own WKWebView data store** — guaranteed to be the
-///    store the login actually wrote cookies into.  Uses `with_webview` to get
-///    the native WKWebView handle, then walks
-///    `wkWebView → configuration → websiteDataStore → httpCookieStore`.
-/// 2. **defaultDataStore** — fallback for any cookies that landed outside the
-///    login window's own webview data store.
-/// 3. **JS eval redirect** — non-HttpOnly cookies only (EHentai).
+/// 1. **Tauri's `cookies()` API** — works on all platforms, returns ALL cookies
+///    including HttpOnly (PHPSESSID for Pixiv). The underlying WebView2/WKWebView
+///    native cookie store is queried via the runtime dispatcher, which sends a
+///    request to the main thread and blocks this background thread until the
+///    result arrives. Safe to call from a background tokio task (not the main
+///    thread) — the main thread stays free to pump messages.
+/// 2. **WKWebView data store** (macOS only) — fallback in case `cookies()`
+///    returns an empty result or errors out.
+/// 3. **JS eval redirect** — non-HttpOnly cookies only (EHentai); kept as a
+///    last-resort fallback for edge cases.
 ///
 /// IMPORTANT: this is meant to be called from a **background tokio task**, NOT
 /// the main thread.  The blocking happens in a spawned thread so the main
 /// thread's run loop stays free to process any GCD completion callbacks.
 pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
-    // Method 1: each known login window's own WKWebView data store.
+    // Method 1: Tauri's native cookies() API (includes HttpOnly cookies).
+    // Works on all platforms; dispatches to the main thread under the hood.
     for label in &["pixiv-login", "ehentai-login"] {
         if let Some(window) = app.get_webview_window(label) {
-            // Fetch the WKWebView pointer on the main thread (with_webview),
-            // then run the blocking capture in a background thread so the
-            // main run loop can service the completion callback.
+            match window.cookies() {
+                Ok(cookies) if !cookies.is_empty() => {
+                    let cookie_str = cookies
+                        .iter()
+                        .map(|c| format!("{}={}", c.name(), c.value()))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    if !cookie_str.is_empty() {
+                        tracing::info!(
+                            target: "erolib::cookies",
+                            len = cookie_str.len(),
+                            "captured cookies via native cookies() API"
+                        );
+                        return Some(cookie_str);
+                    }
+                }
+                Ok(_) => {
+                    tracing::debug!(target: "erolib::cookies", "native cookies() returned empty");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "erolib::cookies",
+                        %e,
+                        "native cookies() API failed; falling back"
+                    );
+                }
+            }
+        }
+    }
+
+    // Method 2: each known login window's own WKWebView/WebView2 data store.
+    for label in &["pixiv-login", "ehentai-login"] {
+        if let Some(window) = app.get_webview_window(label) {
             if let Some(wkptr) = get_wkwebview_ptr(&window) {
-                // Raw pointers aren't Send; wrap the address as a usize so we
-                // can move it into a background thread.  The blocking capture
-                // runs there so the main run loop stays free to service the
-                // WKHTTPCookieStore completion callback.
                 let addr = wkptr as usize;
                 #[cfg(target_os = "macos")]
                 {
@@ -503,19 +585,26 @@ pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
         }
     }
 
-    // Method 2: shared data stores (background thread).
+    // Method 3: shared data stores (background thread).
     #[cfg(target_os = "macos")]
     if let Some(c) = native::capture() {
         return Some(c);
     }
 
-    // Method 3: JS eval fallback (non-HttpOnly cookies — EHentai).
+    // Method 4: JS eval fallback (non-HttpOnly cookies — EHentai, and on
+    // Windows also Pixiv when the native API isn't available).
     for label in &["pixiv-login", "ehentai-login"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = inject_cookie_redirect(&window);
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::thread::sleep(std::time::Duration::from_millis(500));
             if let Some(c) = extract_cookie_from_url(&window) {
                 if !c.is_empty() {
+                    tracing::info!(
+                        target: "erolib::cookies",
+                        len = c.len(),
+                        platform = if cfg!(target_os = "windows") { "windows" } else { "other" },
+                        "captured cookies via JS eval"
+                    );
                     return Some(c);
                 }
             }
