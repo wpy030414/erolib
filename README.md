@@ -35,66 +35,15 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 
 ## ✨ 核心特性
 
-### 📖 本地书库
-- 导入 **CB7 / CBZ / CBR / PDF**，封面网格直观浏览
-- 全文搜索匹配 **标题 / 作者 / 标签**；标签 chip 行 **并集 (OR)** 筛选（上限 30，满则折叠）
-- **阅读列表**：右键列表名直接内联重命名，重命名期间底部显示删除按钮，创建自动去重命名，上限 100 个
-- 低清缩略图缓存到 **IndexedDB**，二次打开秒级加载
-- 保留书源元信息（**作者 · 发布日期 · 来源 URL**），支持 **ComicInfo.xml** 无损导出 / 导入往返
+- 📖 **本地书库**：导入 CB7 / CBZ / CBR / PDF，封面网格浏览，全文搜索 + 标签筛选，阅读列表管理
+- 🖼️ **沉浸式阅读器**：全窗口沉浸，键盘 / 点击翻页，动图 (ugoira) 原生支持，进度记忆，自定义主题
+- 🎨 **四大下载源**：Pixiv / EHentai / EXHentai / ASMHentai / NiceCat，统一任务管线，断点续传
+- 🌐 **OPDS / RSS 共享**：内置 HTTP 服务器，局域网内设备开箱即达，直出单页图 + HTML 图廊
+- 🎨 **MD3 动态主题**：4 个内置种子色 + 自定义主题（从书页提取主色），三语界面（中文 / English / 日本語）
+- 🔄 **软件自动更新**：启动时静默检查 GitHub releases，下载走 aria2，支持进度显示
+- 🏷️ **标签翻译系统**：1014 条种子词条，精确 + 模糊匹配（Levenshtein ≥ 0.8）
 
-### 🏠 首页
-- 沉浸式 Hero：**本周阅读时长**（按周一计）+ 库封面旋转展示墙（`WallCover` 21 本随机旋转）
-- 「最近阅读」书架，点卡片直达阅读器；首次加载随机旋转展示库内封面
-
-### 🖼️ 沉浸式阅读器
-- 一级页面、全窗口沉浸阅读，进出强制暗黑模式（退出自动恢复）
-- **贴合屏幕 / 贴合内容** 双缩放模式，进度滑块 + 键盘翻页
-- 自动记忆每本书的阅读进度
-- **动图 (ugoira) 原生支持**：保留原始帧序列 + 逐帧延时，按原始节奏无缝循环——**不二次编码**，转换瞬时、加载快、无损且保留原分辨率；兼容历史 GIF / APNG 旧书
-
-### 🎨 Pixiv 浏览式下载
-- 登录后浏览式下载：**推荐 / 关注 / 收藏** 三大 feed + 关键词搜索
-- IntersectionObserver 懒加载，无限滚动
-- 卡片 **三态**：本地已有 → 点进阅读；下载中 → 遮罩 + 手搓 SVG 环形进度；未下载 → 红点提示
-- 封面走后端代理，绕过 `i.pximg.net` 防盗链
-- 动图 (ugoira) 完整下载与回放
-
-### 🔞 EHentai / EXHentai 浏览式下载
-- 登录后 **关键词搜索 + 10 大分类**（同人志 / 漫画 / 画家CG / 游戏CG / 欧美 / 非H / 画像集 / Cosplay / 亚洲 / 杂项）多选并集筛选
-- **EXHentai 一键切换**（需 exhentai 资格）；未登录时自动隐藏搜索框与 EXHentai 开关
-- 同样三态卡片 + 懒加载无限滚动
-
-### 🔞 ASMHentai 浏览式下载
-- 无需登录，直接浏览 `asmhentai.com` 首页与关键词搜索
-- 卡片两态（已下载 → 阅读器；未下载 → 一键入队），无页码 badge
-- 下载时自动抓取详情页补充标签 / 作者 / 页数元信息
-
-### 🔞 NiceCat 浏览式下载
-- 无需登录，直接通过本地 HTTP 客户端浏览 `ncmm.cc` 漫画站（首页板块推荐 + 关键词搜索），**无需内嵌浏览器**——通过 RC4 动态令牌直连 `gxxa.fun` API
-- 首页以横向滚动的「话题板块」呈现；搜索走两阶段解析（关键词 → 最优标签 → 结果页），游标翻页
-- 卡片三态同 Pixiv / EHentai：本地已有 → 阅读器；下载中 → 遮罩 + 环形进度；未下载 → 红点
-- 翻页数据走纯 HTTP 客户端解析，图片下载走统一 aria2 管线
-- 下载时通过 `ComicInfo/info` + `ComicOrder/getComicOrder` 并发抓取元信息（标题 / 作者 / 标签 / 页数），图片统一进 aria2 8 并发下载
-
-### ⚙️ 任务系统（aria2 / reqwest 后端）
-- 所有下载统一经 **TaskManager**，无进程内回退；全部来源统一走 aria2 下载管线（`download_pages_concurrent` 8 并发调度），来源客户端仅用 reqwest 抓取元数据
-- 任务页是 **左右分栏工作区**：左侧任务卡片（运行中右下角实时显示下行速度），右侧详情 pane（步骤日志、进度、创建 / 完成时间、操作区）
-- 任务上限 **100 条**，完成后记录 `book_id`，详情区一键跳转阅读器
-- 支持 **暂停 / 继续 / 取消 / 重试**，非侵入式 toast 通知
-
-### 🌐 OPDS / RSS 共享服务器
-- 内置 **OPDS**（端口 5269）与 **RSS**（1269）服务器
-- 监听 `0.0.0.0`，把书库开放给同一 Wi-Fi / 局域网的阅读器（Panels、Chunky、 energilse 等）与 RSS 订阅器
-- **直接出图**：`/pages/:id/:n` 发单页图、`/article/:id` 发整本 HTML 画廊，RSS 阅读器可**直接翻看整本图片序列**；`/download/:id` 仍发整本 CB7
-- **富摘要**：每条均带完整元信息（作者｜页数·格式·大小｜标签｜来源｜发布日期｜阅读记录），RSS `<content:encoded>` 内嵌全页图、OPDS `<summary>` 为 HTML；feed 标题 `EroLib`
-- feed 内链接使用 **本机局域网 IP**，其它设备开箱即达
-- 设置页单按钮 toggle，运行时端口锁定并标注实时地址
-- ⚠️ 默认**无鉴权**，公共网络下建议手动关闭
-
-### 🎨 主题与多语言
-- **Material Design 3** 动态主题：种子色 + 亮 / 暗模式，全应用 token 实时切换
-- **中文 / English / 日本語** 三语界面，跟随系统或手动切换
-- 五个主页面各自记忆当前 tab 与滚动位置
+> 📚 详细功能说明请参阅 [PRD.md](docs/PRD.md)。
 
 ---
 
@@ -137,72 +86,31 @@ pnpm tauri build      # 构建生产包（.app / .dmg / .exe / .msi）
 ## 🧱 技术栈
 
 **前端**
-- [Vue 3.5](https://vuejs.org) `<script setup>` + TypeScript + Vite
-- [Pinia](https://pinia.vuejs.org) + Vue Router
-- [@material/web](https://github.com/material-components/material-web)（Google Material Design 3 Web Components）
-- [@material/material-color-utilities](https://github.com/material-foundation/material-color-utilities) 动态主题色生成
+- [Vue 3.6](https://vuejs.org) `<script setup>` + TypeScript 5 + Vite 8（rolldown + OXC minify）
+- [Pinia](https://pinia.vuejs.org) + Vue Router（hash mode）
+- [@material/web](https://github.com/material-components/material-web) 2.4.1（Google Material Design 3 Web Components）
+- [@material/material-color-utilities](https://github.com/material-foundation/material-color-utilities) HCT 动态主题色生成
 - [@mdi/js](https://materialdesignicons.com) 图标 · [idb](https://github.com/jakearchibald/idb) IndexedDB 封装
 
 **后端（Rust）**
-- [Tauri 2](https://tauri.app) 桌面框架
-- [axum](https://github.com/tokio-rs/axum) OPDS / RSS HTTP 服务器
-- [sqlx](https://github.com/launchbadge/sqlx) + SQLite 元数据
-- [aria2](https://aria2.github.io) 下载引擎（内置二进制）
-- [reqwest](https://github.com/seanmonstar/reqwest) · [scraper](https://github.com/causal-agent/scraper) 网络与解析（NiceCat 纯 HTTP 客户端直连 `gxxa.fun`）
-- [image](https://github.com/image-rs/image) · [zip](https://github.com/zip-rs/zip) · [quick-xml](https://github.com/tafia/quick-xml)
-- [sha2](https://github.com/RustCrypto/hashes) · [base64](https://github.com/marshallpierce/rust-base64) · [rand](https://github.com/rust-random/rand)（NiceCat RC4 动态令牌与 `dateKey`）
+- [Tauri 2](https://tauri.app) 桌面框架（插件：http / shell / dialog / fs / clipboard-manager / opener）
+- [axum](https://github.com/tokio-rs/axum) 0.7 + tower-http · OPDS / RSS HTTP 服务器
+- [sqlx](https://github.com/launchbadge/sqlx) 0.7 + SQLite（WAL / 8 连接池 / `busy_timeout=5000` / `foreign_keys=ON`）
+- [aria2](https://aria2.github.io) 下载引擎（内置二进制，JSON-RPC on `localhost:6800`）
+- [reqwest](https://github.com/seanmonstar/reqwest) 0.11 · [scraper](https://github.com/causal-agent/scraper) 0.18 · 网络与解析
+- [image](https://github.com/image-rs/image) 0.25 · [zip](https://github.com/zip-rs/zip) 0.6 · [quick-xml](https://github.com/tafia/quick-xml) 0.31
 
 ---
 
-## 📁 项目结构
+## 📚 文档
 
-```
-erolib/
-├── src/                      # 前端 Vue 源码
-│   ├── components/           # 共享组件（卡片、图标、Shell、Toast…）
-│   ├── composables/          # Vue composables（无限滚动、浏览源、防抖输入）
-│   ├── i18n/                 # 三语字典 (zh / en / ja)
-│   ├── router/               # Vue Router 路由定义
-│   ├── services/             # API 封装、MD3 主题引擎、IndexedDB 缩略图缓存
-│   ├── stores/               # Pinia stores（书库 / 浏览 / 任务 / 设置 / 主题）
-│   ├── styles/               # MD3 token 与工具类
-│   ├── types/                # TypeScript 类型定义
-│   ├── utils/                # 工具函数（格式化等）
-│   └── views/                # 页面（Home / Library / Reader / Pixiv / EHentai / AHentai / NiceCat / Tasks / Settings）
-├── src-tauri/                # Rust 后端
-│   ├── src/
-│   │   ├── commands/         # Tauri 命令（book / pixiv / ehentai / ahentai / nicecat / server / tasks …）
-│   │   ├── services/         # 业务（task_manager / aria2 / pixiv / ehentai / ahentai / nicecat / opds / rss …）
-│   │   ├── db/  models/      # SQLite 与数据模型
-│   │   └── main.rs           # 命令注册入口
-│   ├── binaries/aria2c-bin/  # 内置 aria2 二进制（macOS / Windows）
-│   └── tauri.conf.json       # 应用与打包配置
-└── docs/assets/              # 截图
-```
-
----
-
-## 🏗️ 架构亮点
-
-- **统一任务管线**：所有下载（Pixiv 收藏 / 关注 / 单稿件 / 用户作品、EHentai 画廊、ASMHentai 画廊、NiceCat 漫画）都进同一个 `TaskManager` 队列，带步骤日志、实时下行速度、`book_id` 回填与 100 条上限。来源客户端用 reqwest 抓取元数据（页面列表 / 标签 / 标题），图片统一走 aria2 `download_pages_concurrent` 8 并发下载。
-- **ugoira 无损处理**：动图保留原始 jpg 帧序列与逐帧延时（DB JSON），阅读器按时长定时播放——不二次编码，转换瞬时、加载快、无损、原分辨率。
-- **封面缩略图双层缓存**：后端降采样最长边 256px JPEG，前端落 IndexedDB，避免重复解码大图。
-- **原生 cookie 采取**：macOS 上通过 `WKHTTPCookieStore` 原始 FFI 精确捕获 / 删除登录 cookie；登出按版块（pixiv.net / e-hentai.org）选择性清理，不误伤主窗口数据。
-- **NiceCat 纯 HTTP 客户端**：通过 RC4 动态令牌直连 `gxxa.fun` API（首页 / 搜索 / 详情 / 翻页图），全程无需内嵌 WebView。
-- **局域网书库共享**：OPDS / RSS 监听 `0.0.0.0` 并以本机 LAN IP 作为 feed base，外部阅读器开箱即达。
-- **aria2 自动 HTTP 代理**：`detect_http_proxy()` 读环境变量 + macOS `scutil --proxy`（Clash / V2Ray 系统代理），60s 缓存、跳过 SOCKS，`add_uri` 注入 `all-proxy`，翻墙下载零配置。
-- **阅读时长统计**：`reading_sessions` 记录每次阅读会话，`open_book` 用 `INSERT … RETURNING id` 取 session id（连接池下 `last_insert_rowid` 不可靠），前端按会话增量上报，首页聚合「本周已阅读」。
-- **ComicInfo.xml 往返**：cb7 导出 / 导入元信息无损，`ero:` 命名空间携带来源与动图延时。
-
----
-
-## 🗺️ 路线图
-
-- [ ] Linux 平台支持（补 aria2 二进制）
-- [ ] 阅读器书签与章节目录
-- [ ] 更精细的标签管理
-- [ ] 更多下载源接入
-- [ ] 跨设备书库同步
+| 文档 | 内容 |
+|---|---|
+| [AGENTS.md](./AGENTS.md) | 项目边界与 Agent 协作规范 |
+| [docs/PRD.md](docs/PRD.md) | 产品需求文档：功能存在的意义 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构地图：稳定的结构关系 |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | 设计抉择：历史原因与权衡 |
+| [docs/specs/](docs/specs/) | 模块契约：`module-*.md` 格式，可独立实现的任务单元 |
 
 ---
 
@@ -223,18 +131,6 @@ erolib/
 **Q：数据存在哪里？**
 - macOS：`~/Library/Application Support/im.xrl.erolib/`
 - Windows：`%LOCALAPPDATA%\im.xrl.erolib\`
-
-**Q：macOS 提示「无法验证开发者」怎么办？**
-应用未做代码签名。前往「系统设置 → 隐私与安全性」，点击「仍要打开」即可。
-
----
-
-## 💎 致谢
-
-- [Tauri](https://tauri.app) — 构建轻量跨平台桌面应用的框架
-- [Material Web Components](https://github.com/material-components/material-web) — MD3 组件库
-- [aria2](https://aria2.github.io) — 强大的命令行下载引擎
-- [Pixiv](https://www.pixiv.net) 与 [e-hentai.org](https://e-hentai.org) — 数据来源
 
 ---
 

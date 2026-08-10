@@ -4,11 +4,47 @@
 
 EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下载源支持 Pixiv、EHentai / EXHentai、ASMHentai 与 NiceCat。UI 用 Google Material Design 3 Web Components（@material/web）手搓。应用标识符 `im.xrl.erolib`。
 
+## Non Goals（项目边界 · 最高优先级）
+
+> **Agent 倾向于扩展功能，以下行为必须严格禁止。**
+
+### ❌ 绝对不做
+
+- **云端同步 / 多设备数据同步**：EroLib 是纯本地应用，所有数据不离开用户机器
+- **移动端（iOS / Android）原生应用**：只做桌面端（macOS + Windows）
+- **在线流式阅读**：所有阅读都基于本地 CB7 文件，不做网络流
+- **内容社区 / 评论 / 评分 / 分享**：不做社交功能
+- **付费内容 / 广告 / 内购**：不做商业化功能
+- **非成人向漫画管理**：功能兼容但不作为设计目标
+- **Linux 平台原生支持**：当前仅 macOS + Windows（缺 aria2 二进制）
+- **多用户 / 权限系统**：单用户桌面应用
+- **Web 版 / PWA**：纯 Tauri 桌面应用
+- **自定义插件系统**：不开放扩展接口
+- **RSS 聚合 / 订阅管理**：只做 RSS 发布端，不做消费端
+- **图片编辑 / 裁剪 / 滤镜**：只做阅读，不做编辑
+- **书签 / 章节目录**：阅读器不做书签功能
+- **批量编辑元数据**：不做高级元数据管理
+- **云存储集成（S3 / Google Drive / Dropbox）**：不做云同步
+
+### ✅ 当前边界
+
+| 维度 | 边界 |
+|---|---|
+| 平台 | macOS (Apple Silicon) + Windows (x64) |
+| 下载源 | Pixiv / EHentai / EXHentai / ASMHentai / NiceCat（共 4 个，不增加） |
+| 文件格式 | 导入 CB7/CBZ/CBR/PDF，输出 CB7 |
+| 语言 | 中文 / English / 日本語（3 语，不增加） |
+| 主题 | 4 内置种子色 + 3 自定义主题 |
+| 任务上限 | 100 条 |
+| 阅读列表 | 100 个 |
+
+---
+
 ## 架构分层
 
 - **前端** `src/`：Vue 3 `<script setup>` + TS + Pinia + Vue Router。MWC 组件统一在 `src/material-web.ts` 注册（别直接引 `.js`）。
 - **后端** `src-tauri/`（Rust）：命令在 `src-tauri/src/commands/`，业务在 `src-tauri/src/services/`，命令注册于 `main.rs` 的 `invoke_handler`。**新增命令必须同步 `src/services/api.ts`**。
-- **serde 约定**：后端 struct 透传前端时务必 `#[serde(rename_all = "camelCase")]`，否则前端读不到字段（snake_case → undefined，是高频 bug 源）。
+- **serde 约定**：不统一——`TaskSource`/`TaskStatus` 用 `rename_all = "snake_case"`，`TaskPayload` 用 `tag = "kind", rename_all = "camelCase"`，`Book`/`Tag`/`Collection` 等 models **无 `rename_all`**（snake_case 字段直接透传前端，前端 types 也用 snake_case）。**新增 struct 时检查前端类型定义是否匹配**。
 
 ## 状态与持久化
 
@@ -20,9 +56,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 
 **位置**：`<app_local_data_dir>/erolib.db`（bundle id `im.xrl.erolib`，macOS 上为 `~/Library/Application Support/im.xrl.erolib/erolib.db`）。
 
-**引擎**：sqlx 0.7 + rusqlite，WAL 模式，8 连接池，`busy_timeout=5000`，`foreign_keys=ON`。启动时 `schema/schema.sql` 全量执行，所有 DDL 均为 `CREATE IF NOT EXISTS`，幂等。
-
-启动时若旧 `manga-manager.db` 存在则连同 `-wal`/`-shm` 原子重命名迁移，绝不覆盖已存在的 `erolib.db`。
+**引擎**：sqlx 0.7，WAL 模式，`synchronous=NORMAL`，8 连接池，`busy_timeout=5000`，`foreign_keys=ON`。启动时 `schema/schema.sql` + `tag_translations.sql` 全量执行，所有 DDL 均为 `CREATE IF NOT EXISTS`，幂等。不使用 `sqlx::migrate!`（release 工具链限制），不做 `PRAGMA user_version` 版本跟踪。
 
 | 表 | 主键 | 行数级 | 用途 |
 |---|---|---|---|
@@ -32,7 +66,11 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 | `collections` / `collection_books` | UUID | 0-100 | 阅读列表（name, position, description）+ 多对多书-列表关联，`position` 决定了排序 |
 | `tasks` | `id TEXT` (UUID) | ~0-50 | 下载任务队列（status, progress, logs JSON, payload JSON, retry_count） |
 | `reading_sessions` | `id INTEGER AUTOINCREMENT` | 增长中 | 阅读时长追踪（book_id, started_at, ended_at, duration_ms） |
-| `books_fts` | FTS5 虚拟表 | 与 books 同步 | 全文索引（title, original_filename, tags），`porter unicode61` 分词，三触发器自动同步 |
+| `books_fts` | FTS5 虚拟表 | 与 books 同步 | 全文索引（title, original_filename, tags），`porter unicode61` 分词，三触发器自动同步（当前未启用，SearchService 用 LIKE） |
+| `settings` | `key TEXT` PK | 2 | KV 存储（`locale`、`tag_seed_fp`） |
+| `tag_translations` | `id INTEGER` PK | 1014 | 标签翻译种子（zh / en / ja_hira / ja_kata / romaji 五列） |
+| `tag_form_map` | `form TEXT` PK COLLATE NOCASE | ~5000 | 精确匹配物化表（form → tid） |
+| `tag_resolved` | `name TEXT` PK COLLATE NOCASE | ~1000 | 精确+模糊总解析表（name → tid） |
 
 ### 文件系统 — CB7 书档 + 封面
 
@@ -55,14 +93,14 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 | 应用级 JSON | `pixiv_session.json` / `ehentai_session.json` | `serde_json` 读写，含 `{cookie, saved_at}` |
 | 系统级 Cookie | WKWebView `WKHTTPCookieStore` | ObjC FFI `getAllCookies:` / `deleteCookie:completionHandler:` |
 
-登录时从 WebView 捕获 cookie 双写；登出时 JSON 文件 `remove_file` + WKWebView 精确 `deleteCookie`（按域名 match，不禁用 `clear_all_browsing_data` 以免误伤他站）；`reset_app_data` 全部删除。
+登录时从 WebView 捕获 cookie 双写；登出时 JSON 文件 `remove_file` + WKWebView 精确 `deleteCookie`（按版块（pixiv.net / e-hentai.org / exhentai.org）选择性清理，不误伤主窗口数据。
 
 ### localStorage — 15 个键模式（前端 UI 偏好）
 
 | 键 | 来源 | 数据 |
 |---|---|---|
 | `erolib.scroll.*` | `App.vue` | 按 `route.path` 的滚动位置 scrollTop |
-| `erolib.seed` | `stores/theme.ts` | MD3 种子色（`pink\|violet\|blue\|teal`） |
+| `erolib.seed` | `stores/theme.ts` | MD3 种子色（`pink\|violet\|blue\|teal\|custom:<uuid>`） |
 | `erolib.theme` | `stores/theme.ts` | 明暗模式（`light\|dark`） |
 | `erolib.customThemes` | `stores/theme.ts` | 用户自定义主题（JSON 序列化 `Record<string, CustomTheme>`，阅读器「设置为主题」右键菜单创建） |
 | `erolib.locale` | `i18n/index.ts` | 界面语言（`zh\|en\|ja`） |
@@ -70,7 +108,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 | `erolib.rssPort` | `stores/settings.ts` | RSS 服务器端口（默认 `1269`） |
 | `erolib.localSyncEnabled` | `stores/settings.ts` | 本地同步开关（`'1'`/`'0'`） |
 | `erolib.localSyncDir` | `stores/settings.ts` | 本地同步目标目录路径 |
-| `erolib.ehentai.ex` | `stores/ehentai-browse.ts` | EXHentai 模式开关 |
+| `erolib.ehentai.ex` | `stores/ehentai-browse.ts` | EXHentai 模式开关（`'1'`/`'0'`） |
 | `erolib.reader.zoomMode` | `views/Reader.vue` | 缩放模式（`fill\|contain`） |
 | `erolib.reader.progress.*` | `views/Reader.vue` | 按 `bookId` 的阅读页码 |
 | `erolib.reader.readtime.*` | `views/Reader.vue` | 按 `bookId` 的累计阅读秒数 |
@@ -99,6 +137,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 | `collections` | SQLite `collections` / `collection_books` 表（后端持久化） | 阅读列表（创建/重命名/删除/重排/加书/移书），activeCollectionId 不跨重启持久化 |
 | `tasks` | 无客户端持久化（后端事件流驱动） | 任务列表、选中任务、进度 |
 | `toast` | 无持久化 | 4 秒自动消失的提示消息 |
+| `update` | 无持久化 | 自动更新状态 |
 
 ### 代理检测（不持久化）
 
@@ -117,13 +156,13 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 ## Pixiv 浏览
 
-- 浏览式：推荐 feed（`/ajax/top/illust?mode=all`，一次性拉取，**不分页**）+ 关注 feed（`/ajax/follow_latest/illust?p=&mode=all`，**不带 user_id**，session 识别用户）+ 收藏（`/ajax/user/{id}/illusts/bookmarks?tag=&offset=&limit=&rest=show`）+ 关键词搜索（`/ajax/search/artworks/{keyword}?word=&mode=all&s_mode=s_tag&type=all&order=date_d&p=`，`p` 分页）。四个 feed 共用 `body.thumbnails.illust` 结构。
+- 浏览式：推荐 feed（`/ajax/top/illust?mode=all`，一次性拉取，**不分页**）+ 关注 feed（`/ajax/follow_latest/illust?p=&mode=all`，**不带 user_id**，session 识别用户）+ 收藏（`/ajax/user/{id}/illusts/bookmarks?tag=&offset=&limit=&rest=show`）+ 关键词搜索（`/ajax/search/artworks/{keyword}?word=&mode=all&s_mode=s_tag&type=all&order=date_d&p=`，`p` 分页）。推荐/关注/收藏共用 `body.thumbnails.illust` 结构；**搜索走 `body.illustManga.data[]`**（不是 thumbnails.illust）。
 - 封面防盗链：`i.pximg.net` 需 `Referer: https://www.pixiv.net/`，走后端代理 `pixiv_proxy_image`（前端 `<img>` 不能设 Referer）。
 - 卡片三态：本地有→点进阅读器；下载中→遮罩 + SVG 环形进度（**别用 md-circular-progress determinate**，会卡）；未下载→标题左上红点。`task://progress` 在 **store 层**监听（跨视图存活，下载完成自动翻转卡片）。
 
 ## EHentai 浏览
 
-- 浏览式（`stores/ehentai-browse.ts`）：关键词搜索 + 10 大分类 chip 多选并集（`cats` = OR of selected bits），EXHentai 开关（`store.ex`）切换 `e-hentai.org` / `exhentai.org` 域名；scraper 解析 HTML（`glthumb` data-src、`glink`）。`browse_status` 用 gid+token 归一化匹配本地书。
+- 浏览式（`stores/ehentai-browse.ts`）：关键词搜索 + 10 大分类 chip **单选**（`selectCategory(path | null)`，再点取消；e-hentai 的 `f_cats` 位掩码实际不生效，改用路径段如 `doujinshi`/`manga`），EXHentai 开关（`store.ex`）切换 `e-hentai.org` / `exhentai.org` 域名；scraper 解析 HTML（`.glthumb img` data-src、`#gn` 标题）。`browse_status` 用 gid+token 归一化匹配本地书。gid 游标分页（`?next={gid}`），25 条/页。
 - 未登录时隐藏搜索框（`v-if="loggedIn"`）与 EXHentai switch（`v-show="loggedIn"`）。
 - 卡片三态同 Pixiv（`components/SourceCard.vue`）；封面走 `ehentai_proxy_thumb`（防盗链）。
 
@@ -145,7 +184,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 ## NiceCat 浏览
 
-- 无需登录，公开站点 `ncmm.cc`；**全程纯 HTTP，无需内嵌 WebView**——通过 RC4 动态令牌直连 `gxxa.fun` API（`services/nicecat.rs` `NicecatApiClient`）。
+- 无需登录，公开站点 `ncmm.cc`；**全程纯 HTTP，无需内嵌 WebView**——通过 RC4 动态令牌直连 `gxxa.fun` API（`services/nicecat.rs` `NicecatApiClient` + `NicecatClient` 双层结构）。
 - 浏览式（`stores/nicecat-browse.ts`）：首页话题板块（`HomeFeed/randomFeed`，横向滚动）+ 关键词搜索。搜索走两阶段——`ComicSearch/search` 解析关键词到多个标签，取 `comic_number` 最大的单一最优标签，再 `ComicSearch/searchTag` 取结果页 + `searchId` 游标；前端回传 `cursor` 字段翻页（空 = 页 1，非空 = 推进游标），页粒度 60，游标耗尽或短页即 end。
 - 卡片三态同 Pixiv / EHentai（`components/SourceCard` + `useBrowseFeed` 复用）：本地有 → 阅读器；下载中 → 遮罩 + 环形进度；未下载 → 红点。`nicecat_browse_status` 按 `source_plugin='nicecat'` + `source_post_id` 归一化匹配本地书与在途任务。
 - 封面走 `nicecat_proxy_thumb` 代理绕过 `vurm.fun` CDN 防盗链（需 `Referer` + `Origin`）。
@@ -172,13 +211,18 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - 删除最近阅读书籍后重新拉取 12 本补位，新书籍立刻载入缩略图，删除成功/失败均有 toast。
 - `reading_sessions` 表追踪每次阅读会话（id / book_id / started_at / ended_at / duration_ms）。`open_book` 开会话（同时 bump `last_read_at` + `read_count`）并返回 session id；`record_reading(session_id)` 收尾，写 `ended_at` + 本次 `duration_ms`。
 - **前端 `Reader.vue` 增量上报**：每 tick 上报**本次会话增量**——`readTimeSessionBaseline` 在会话开启时快照 `readTimeAccumulated`（该书历史累计），delta = 累计 − baseline；仅前台（`document.hidden === false`）累计，后台不计时。`close_stale_sessions` 在启动收尾遗留的 `ended_at IS NULL` 行（duration=0）。
-- **`open_book` 取 id 必须用 `INSERT … RETURNING id`**：`last_insert_rowid()` 是连接级，sqlx 连接池（max_connections=8）两条语句跨连接会返回别的连接上一次插入的 rowid（或 0）→ `record_reading` 的 `WHERE id = ?` 永远命不中真正那行 → 每会话 `duration_ms` 恒 0、首页统计恒 0（已踩坑，见 memory `sqlx-pool-last-insert-rowid`）。
-- 历史污染修复：`user_version=1` 一次性清零被污染的历史 `duration_ms`（旧前端每秒推累计而非增量）。
+- **`open_book` 取 id 必须用 `INSERT … RETURNING id`**：`last_insert_rowid()` 是连接级，sqlx 连接池（max_connections=8）两条语句跨连接会返回别的连接上一次插入的 rowid（或 0）→ `record_reading` 的 `WHERE id = ?` 永远命不中真正那行 → 每会话 `duration_ms` 恒 0、首页统计恒 0（已踩坑）。
+- 历史污染（旧前端每秒推累计而非增量导致 `duration_ms` 偏大）已通过 `close_stale_sessions` + 前端增量上报彻底解决。
 
 ## 阅读器
 
 - 一级页面，无侧栏；进出强制暗黑模式（保存原模式退出恢复）。
-- 缩放模式 `contain`/`fill` 用 **CSS class**（`.reader-image--fill` = absolute + cover；`--contain` = 100% + contain），**不要用 inline `:style` 绑定 object-fit**（低分辨率图会因元素=intrinsic 而留白）。gif（动图）单页，`<img>` 原生循环播放。
+- 缩放模式 `contain`/`fill` 用 **CSS class**（`.reader-image--fill` = absolute + cover；`--contain` = 100% + contain），**不要用 inline `:style` 绑定 object-fit**（低分辨率图会因元素=intrinsic 而留白）。
+- **动图（ugoira）播放**：`book.delays` JSON 解析为 `frameDelays`，每帧并发 `getBookPage` → `createImageBitmap` → canvas `drawImage`；`scheduleNextFrame` 用 `Math.max(16, delay)`；全帧失败回退静态。`isAnimated = frameDelays.length > 1`。
+- **预取**：`PREFETCH_SPAN = 10`，窗口外 revoke objectURL；`prefetchInFlight` Set 防重复。
+- **快捷键**：ArrowRight / PageDown / 空格 → 下一页；ArrowLeft / PageUp → 上一页。
+- **点击翻页**：viewport 左 1/3 上一页、右 1/3 下一页、中间 ~34% 无动作（动画书点击无效）。
+- **自动隐藏 UI**：bar zone（顶部 64px / 底部 56px）内停住无计时器，移出 zone 启动 2s 计时隐藏。
 
 ## 主题
 
