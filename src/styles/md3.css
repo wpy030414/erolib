@@ -64,28 +64,12 @@ img {
 }
 
 /* ---- MD3 typography utility classes ---- */
-.md3-display-large { font: 400 var(--md-sys-typescale-display-large-size)/var(--md-sys-typescale-display-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-display-large-tracking); }
-.md3-display-medium { font: 400 var(--md-sys-typescale-display-medium-size)/var(--md-sys-typescale-display-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-display-medium-tracking); }
-.md3-display-small { font: 400 var(--md-sys-typescale-display-small-size)/var(--md-sys-typescale-display-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-display-small-tracking); }
-.md3-headline-large { font: 400 var(--md-sys-typescale-headline-large-size)/var(--md-sys-typescale-headline-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-headline-large-tracking); }
-.md3-headline-medium { font: 400 var(--md-sys-typescale-headline-medium-size)/var(--md-sys-typescale-headline-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-headline-medium-tracking); }
-.md3-headline-small { font: 400 var(--md-sys-typescale-headline-small-size)/var(--md-sys-typescale-headline-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-headline-small-tracking); }
-.md3-title-large { font: 400 var(--md-sys-typescale-title-large-size)/var(--md-sys-typescale-title-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-title-large-tracking); }
-.md3-title-medium { font: 500 var(--md-sys-typescale-title-medium-size)/var(--md-sys-typescale-title-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-title-medium-tracking); }
-.md3-title-small { font: 500 var(--md-sys-typescale-title-small-size)/var(--md-sys-typescale-title-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-title-small-tracking); }
-.md3-body-large { font: 400 var(--md-sys-typescale-body-large-size)/var(--md-sys-typescale-body-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-body-large-tracking); }
-.md3-body-medium { font: 400 var(--md-sys-typescale-body-medium-size)/var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-body-medium-tracking); }
-.md3-body-small { font: 400 var(--md-sys-typescale-body-small-size)/var(--md-sys-typescale-body-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-body-small-tracking); }
-.md3-label-large { font: 500 var(--md-sys-typescale-label-large-size)/var(--md-sys-typescale-label-large-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-large-tracking); }
-.md3-label-medium { font: 500 var(--md-sys-typescale-label-medium-size)/var(--md-sys-typescale-label-medium-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-medium-tracking); }
-.md3-label-small { font: 500 var(--md-sys-typescale-label-small-size)/var(--md-sys-typescale-label-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-small-tracking); }
+/* (md3-display/headline/title/body/label classes removed — views use text-* aliases below) */
 
 /* ---- Text color utilities ---- */
-.text-primary { color: var(--md-sys-color-primary) !important; }
 .text-on-surface { color: var(--md-sys-color-on-surface) !important; }
 .text-on-surface-variant,
 .text-medium-emphasis { color: var(--md-sys-color-on-surface-variant) !important; }
-.text-disabled { color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent) !important; }
 .text-error { color: var(--md-sys-color-error) !important; }
 .text-success { color: var(--md-sys-color-success) !important; }
 .text-warning { color: var(--md-sys-color-warning) !important; }
@@ -106,33 +90,19 @@ img {
 .text-overline { font: 500 var(--md-sys-typescale-label-small-size)/var(--md-sys-typescale-label-small-line-height) var(--md-sys-typescale-font); letter-spacing: var(--md-sys-typescale-label-small-tracking); }
 
 /* ---- Display utilities ---- */
-.d-none { display: none !important; }
-.d-block { display: block !important; }
 .d-flex { display: flex !important; }
-.d-inline-flex { display: inline-flex !important; }
-.d-grid { display: grid !important; }
 
 /* ---- Flex utilities ---- */
-.flex-row { flex-direction: row !important; }
 .flex-column { flex-direction: column !important; }
 .flex-wrap { flex-wrap: wrap !important; }
-.flex-nowrap { flex-wrap: nowrap !important; }
 .flex-grow-1 { flex-grow: 1 !important; }
-.flex-shrink-0 { flex-shrink: 0 !important; }
 .spacer { flex: 1 1 auto !important; }
 .align-center { align-items: center !important; }
 .align-start { align-items: flex-start !important; }
-.align-end { align-items: flex-end !important; }
-.align-self-center { align-self: center !important; }
 .justify-center { justify-content: center !important; }
-.justify-start { justify-content: flex-start !important; }
-.justify-end { justify-content: flex-end !important; }
-.justify-space-between { justify-content: space-between !important; }
 
 /* ---- Text alignment ---- */
-.text-left { text-align: left !important; }
 .text-center { text-align: center !important; }
-.text-right { text-align: right !important; }
 
 /* ---- Truncate / nowrap ---- */
 .text-truncate {
@@ -140,21 +110,12 @@ img {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.text-no-wrap { white-space: nowrap !important; }
-.font-monospace { font-family: ui-monospace, 'SFMono-Regular', Menlo, 'Roboto Mono', monospace !important; }
-.font-weight-medium { font-weight: 500 !important; }
 
 /* ---- Surface backgrounds ---- */
-.bg-surface { background: var(--md-sys-color-surface) !important; }
-.bg-surface-container { background: var(--md-sys-color-surface-container) !important; }
-.bg-surface-container-high { background: var(--md-sys-color-surface-container-high) !important; }
-.bg-surface-variant { background: var(--md-sys-color-surface-container-high) !important; }
-.bg-primary-container { background: var(--md-sys-color-primary-container) !important; color: var(--md-sys-color-on-primary-container); }
+/* (bg-surface/container/primary-container removed — not referenced in templates) */
 
 /* ---- Rounded ---- */
 .rounded { border-radius: var(--md-sys-shape-corner-medium) !important; }
-.rounded-lg { border-radius: var(--md-sys-shape-corner-large) !important; }
-.rounded-full { border-radius: var(--md-sys-shape-corner-full) !important; }
 
 .fill-height { height: 100% !important; }
 .fill-width { width: 100% !important; }
@@ -344,12 +305,7 @@ img {
 *::-webkit-scrollbar-thumb:hover { background: var(--md-sys-color-outline); background-clip: padding-box; }
 
 /* ---- Vue <transition> helpers ---- */
-.md3-fade-enter-active,
-.md3-fade-leave-active {
-  transition: opacity var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
-}
-.md3-fade-enter-from,
-.md3-fade-leave-to { opacity: 0; }
+/* (md3-fade transition removed — no <Transition name="md3-fade"> in templates) */
 
 /* Lightweight SVG spinner. Pure CSS `transform: rotate` animation → composited
    on the GPU, so it stays smooth even when the main thread is busy decoding

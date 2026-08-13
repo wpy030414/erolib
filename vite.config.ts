@@ -33,9 +33,21 @@ export default defineConfig({
   },
   build: {
     target: process.env.TAURI_PLATFORM == 'windows' ? 'chrome105' : 'safari13',
-    // Vite 8 (rolldown) minifies with OXC; 'esbuild' is deprecated and would
-    // require esbuild installed separately.
     minify: !process.env.TAURI_DEBUG ? 'oxc' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('node_modules')) {
+            if (id.includes('@material/web')) return 'vendor-material';
+            if (id.includes('@mdi/js')) return 'vendor-mdi';
+            if (id.includes('@material/material-color-utilities')) return 'vendor-color';
+            if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router')) return 'vendor-vue';
+            if (id.includes('idb')) return 'vendor-idb';
+            if (id.includes('@tauri-apps')) return 'vendor-tauri';
+          }
+        },
+      },
+    },
   },
 });

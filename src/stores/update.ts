@@ -1,4 +1,4 @@
-import { ref, reactive } from 'vue';
+import { ref } from 'vue';
 import { defineStore } from 'pinia';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '@/services/api';

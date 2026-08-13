@@ -176,17 +176,5 @@
   --md-sys-motion-easing-standard-decelerate: cubic-bezier(0, 0, 0, 1);
   --md-sys-motion-easing-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
 
-  --md-sys-motion-duration-short2: 100ms;
-  --md-sys-motion-duration-short3: 150ms;
   --md-sys-motion-duration-short4: 200ms;
-  --md-sys-motion-duration-medium2: 250ms;
-  --md-sys-motion-duration-medium4: 300ms;
-  --md-sys-motion-duration-long2: 400ms;
-  --md-sys-motion-duration-long4: 500ms;
-
-  /* ---- State layer opacities ---- */
-  --md-sys-state-hover-opacity: 0.08;
-  --md-sys-state-focus-opacity: 0.12;
-  --md-sys-state-pressed-opacity: 0.12;
-  --md-sys-state-dragged-opacity: 0.16;
 }

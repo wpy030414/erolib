@@ -145,6 +145,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import '@material/web/button/outlined-button.js';
+import '@material/web/button/filled-tonal-button.js';
 import {
   mdiPause,
   mdiPlay,
@@ -175,8 +177,8 @@ const clearing = ref(false);
 const retrying = ref(false);
 
 const TERMINAL = ['completed', 'failed', 'cancelled'];
-const hasCompleted = computed(() => tasks.value.some((tk) => TERMINAL.includes(tk.status)));
-const hasRetryable = computed(() => tasks.value.some((tk) => tk.status === 'failed' || tk.status === 'paused'));
+const hasCompleted = computed(() => tasks.some((tk) => TERMINAL.includes(tk.status)));
+const hasRetryable = computed(() => tasks.some((tk) => tk.status === 'failed' || tk.status === 'paused'));
 
 function progressPercent(item: { progress_current: number; progress_total: number }): number {
   if (item.progress_total <= 0) return 100;
@@ -186,7 +188,7 @@ function progressPercent(item: { progress_current: number; progress_total: numbe
 function selectTask(id: string) {
   // Clicking the already-open card is a no-op; clicking a different card
   // collapses the previous one and expands the new one.
-  if (selectedTaskId.value === id) return;
+  if (selectedTaskId === id) return;
   taskStore.selectTask(id);
 }
 
@@ -211,7 +213,7 @@ function viewInLibrary(taskTitle: string) {
 async function onClearCompleted() {
   clearing.value = true;
   try {
-    const before = tasks.value.filter((tk) => TERMINAL.includes(tk.status)).length;
+    const before = tasks.filter((tk) => TERMINAL.includes(tk.status)).length;
     await taskStore.clearCompleted();
     toastStore.addToast('info', t('tasks.toast.cleared', { count: before }));
   } catch (e) {

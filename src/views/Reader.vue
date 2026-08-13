@@ -128,6 +128,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import { sourceColorFromImage, hexFromArgb } from '@material/material-color-utilities';
+import '@material/web/menu/menu.js';
+import '@material/web/menu/menu-item.js';
+import '@material/web/slider/slider.js';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useThemeStore } from '@/stores/theme';
@@ -654,20 +657,20 @@ async function onSetAsTheme() {
     const seedHex = hexFromArgb(argb);
 
     // Full-resolution image as data URL for the background overlay (downscale to
-    // at most 1920px wide to keep the data URL manageable — ~300-500KB jpeg).
+    // at most MAX_BG_DIM px wide to keep the data URL manageable — ~300-500KB jpeg).
+    const MAX_BG_DIM = 1920;
     const fullCanvas = document.createElement('canvas');
-    const fullMaxDim = 1920;
-    const fullScale = Math.min(fullMaxDim / img.naturalWidth, fullMaxDim / img.naturalHeight, 1);
+    const fullScale = Math.min(MAX_BG_DIM / img.naturalWidth, MAX_BG_DIM / img.naturalHeight, 1);
     fullCanvas.width = Math.round(img.naturalWidth * fullScale);
     fullCanvas.height = Math.round(img.naturalHeight * fullScale);
     const fullCtx = fullCanvas.getContext('2d')!;
     fullCtx.drawImage(img, 0, 0, fullCanvas.width, fullCanvas.height);
     const imageB64 = fullCanvas.toDataURL('image/jpeg', 0.7);
 
-    // Generate a small thumbnail (100×100) for the settings page.
+    // Generate a small thumbnail (THUMB_DIM×THUMB_DIM) for the settings page.
+    const THUMB_DIM = 100;
     const thumbCanvas = document.createElement('canvas');
-    const maxDim = 100;
-    const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight, 1);
+    const scale = Math.min(THUMB_DIM / img.naturalWidth, THUMB_DIM / img.naturalHeight, 1);
     thumbCanvas.width = Math.round(img.naturalWidth * scale);
     thumbCanvas.height = Math.round(img.naturalHeight * scale);
     const thumbCtx = thumbCanvas.getContext('2d')!;

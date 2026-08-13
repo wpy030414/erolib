@@ -102,6 +102,8 @@
 </template>
 
 <script setup lang="ts">
+import '@material/web/button/text-button.js';
+import '@material/web/dialog/dialog.js';
 import { ref, reactive, nextTick, onMounted, watch } from 'vue';
 import {
   mdiPlus,

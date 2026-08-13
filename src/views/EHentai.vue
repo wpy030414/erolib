@@ -81,6 +81,8 @@ import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToastStore } from '@/stores/toast';
 import { useEhentaiBrowseStore } from '@/stores/ehentai-browse';
+import '@material/web/button/filled-tonal-button.js';
+import '@material/web/switch/switch.js';
 import MdiIcon from '@/components/MdiIcon.vue';
 import SourceCard from '@/components/SourceCard.vue';
 import FeedList from '@/components/FeedList.vue';

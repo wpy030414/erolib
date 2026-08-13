@@ -33,6 +33,7 @@
 </template>
 
 <script setup lang="ts">
+import '@material/web/dialog/dialog.js';
 import { ref, onMounted } from 'vue';
 import { useCollectionsStore } from '@/stores/collections';
 import { useI18n } from '@/i18n';

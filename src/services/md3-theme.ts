@@ -9,7 +9,7 @@ import {
 export type Seed = 'pink' | 'violet' | 'blue' | 'teal' | (string & {});
 export type ThemeMode = 'light' | 'dark';
 
-// Re-export for convenience — theme store needs these for custom-theme workflow.
+// Re-export for theme store custom-theme workflow.
 export { argbFromHex, hexFromArgb };
 
 /** Available seed colors shown in Settings. */

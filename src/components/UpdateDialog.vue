@@ -1,5 +1,5 @@
 <template>
-  <md-dialog ref="dialogRef" @close="onClose">
+  <md-dialog ref="dialogRef">
     <div slot="headline">{{ t('settings.update.title') }}</div>
 
     <div slot="content" class="update-dialog__content">
@@ -39,7 +39,7 @@
           <div v-if="store.downloading" class="mt-4">
             <md-linear-progress :value="store.progress.percent / 100" />
             <p class="text-body-2 text-medium-emphasis mt-1">
-              {{ store.progress.percent }}% · {{ formatSpeed(store.progress.speed) }}
+              {{ store.progress.percent }}% · {{ formatSpeed(store.progress.speed, t) }}
             </p>
           </div>
 
@@ -86,8 +86,13 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { mdiCheckCircle } from '@mdi/js';
+import '@material/web/button/outlined-button.js';
+import '@material/web/button/text-button.js';
+import '@material/web/progress/linear-progress.js';
+import '@material/web/dialog/dialog.js';
 import { useI18n } from '@/i18n';
 import { useUpdateStore } from '@/stores/update';
+import { formatSpeed } from '@/utils/format';
 import MdiIcon from '@/components/MdiIcon.vue';
 
 const { t } = useI18n();
@@ -102,17 +107,6 @@ function open() {
 
 function closeDialog() {
   dialogRef.value?.close();
-}
-
-function onClose() {
-  // If a download finished but the user just closed the dialog, keep the file
-  // path so reopening shows "install" again; only reset transient progress.
-}
-
-function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec >= 1024 * 1024) return `${(bytesPerSec / 1024 / 1024).toFixed(1)} MB/s`;
-  if (bytesPerSec >= 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${bytesPerSec} B/s`;
 }
 
 defineExpose({ open });

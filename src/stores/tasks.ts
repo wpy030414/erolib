@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue';
+import { defineStore } from 'pinia';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '@/services/api';
 import type { TaskItem } from '@/services/api';
@@ -9,13 +10,12 @@ import { useI18n } from '@/i18n';
 
 export type { TaskItem };
 
-const tasks = ref<TaskItem[]>([]);
-const selectedTaskId = ref<string | null>(null);
-let initialized = false;
-
-export function useTaskStore() {
+export const useTaskStore = defineStore('tasks', () => {
+  const tasks = ref<TaskItem[]>([]);
+  const selectedTaskId = ref<string | null>(null);
   const toastStore = useToastStore();
   const { t } = useI18n();
+  let initialized = false;
 
   async function init() {
     if (initialized) return;
@@ -132,4 +132,4 @@ export function useTaskStore() {
     clearCompleted,
     retryAll,
   };
-}
+});

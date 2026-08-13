@@ -27,7 +27,7 @@
           </span>
         </div>
         <a
-          href="https://github.com/wpy030414/erolib"
+          :href="GITHUB_URL"
           target="_blank"
           rel="noreferrer"
           class="md3-card__header-action"
@@ -42,7 +42,7 @@
           <span class="md3-card__subtitle">&ldquo;Do one thing, and do it well.&rdquo;</span>
         </div>
         <a
-          href="https://space.bilibili.com/92465406"
+          :href="BILIBILI_URL"
           target="_blank"
           rel="noreferrer"
           class="md3-card__header-action"
@@ -332,7 +332,6 @@ import {
   mdiRss,
   mdiStop,
   mdiTranslate,
-  mdiUpdate,
   mdiWeb,
 } from '@mdi/js';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -343,10 +342,23 @@ import { useThemeStore } from '@/stores/theme';
 import { useToastStore } from '@/stores/toast';
 import { useUpdateStore } from '@/stores/update';
 import { getVersion } from '@tauri-apps/api/app';
+import '@material/web/button/outlined-button.js';
+import '@material/web/button/text-button.js';
+import '@material/web/textfield/outlined-text-field.js';
+import '@material/web/select/outlined-select.js';
+import '@material/web/select/select-option.js';
+import '@material/web/switch/switch.js';
+import '@material/web/tabs/tabs.js';
+import '@material/web/tabs/primary-tab.js';
+import '@material/web/dialog/dialog.js';
 import MdiIcon from '@/components/MdiIcon.vue';
 import BrandIcon from '@/components/BrandIcon.vue';
 import UpdateDialog from '@/components/UpdateDialog.vue';
 import { clearThumbs } from '@/services/thumb-cache';
+
+/** External links shown in the About section. */
+const GITHUB_URL = 'https://github.com/wpy030414/erolib';
+const BILIBILI_URL = 'https://space.bilibili.com/92465406';
 
 const { t, locale, setLocale } = useI18n();
 const settingsStore = useSettingsStore();

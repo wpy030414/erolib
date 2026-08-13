@@ -104,56 +104,8 @@
       {{ t('lib.empty') }}
     </div>
 
-    <dialog ref="metaDialog" class="meta-dialog" @click="onDialogBackdrop">
-      <div v-if="metaBook" class="meta-dialog__panel">
-        <div class="meta-dialog__header">
-          <span class="meta-dialog__title">{{ t('lib.viewMeta') }}</span>
-          <button
-            class="icon-btn"
-            :aria-label="t('common.dismiss')"
-            @click="closeMeta"
-          >
-            <MdiIcon :path="mdiClose" :size="20" />
-          </button>
-        </div>
-        <dl class="meta-list">
-          <template v-for="row in metaRows(metaBook)" :key="row.label">
-            <dt>{{ row.label }}</dt>
-            <dd>{{ row.value }}</dd>
-          </template>
-          <dt>{{ t('lib.meta.tags') }}</dt>
-          <dd>
-            <div v-if="metaTags.length" class="tag-chips">
-              <span
-                v-for="tag in metaTags"
-                :key="tag"
-                class="tag-chip tag-chip--readonly"
-              >{{ tag }}</span>
-            </div>
-            <span v-else>—</span>
-          </dd>
-          <template v-for="row in metaRowsMid(metaBook)" :key="row.label">
-            <dt>{{ row.label }}</dt>
-            <dd>{{ row.value }}</dd>
-          </template>
-          <dt>{{ t('lib.meta.sourceUrl') }}</dt>
-          <dd>
-            <a
-              v-if="metaBook?.source_url"
-              class="meta-link"
-              :href="metaBook!.source_url"
-              target="_blank"
-              rel="noreferrer"
-            >{{ metaBook!.source_url }}</a>
-            <span v-else>—</span>
-          </dd>
-          <template v-for="row in metaRowsAfter(metaBook)" :key="row.label">
-            <dt>{{ row.label }}</dt>
-            <dd>{{ row.value }}</dd>
-          </template>
-        </dl>
-      </div>
-    </dialog>
+    <!-- Shared meta dialog -->
+    <BookMetaDialog ref="metaDialog" />
 
     <!-- Collection management FAB + dialogs -->
     <FabButton
@@ -177,15 +129,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
+import { ref, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { save as dialogSave } from '@tauri-apps/plugin-dialog';
+import '@material/web/menu/menu.js';
+import '@material/web/menu/menu-item.js';
 import {
   mdiFolderOpen,
   mdiContentSave,
   mdiDelete,
   mdiInformationOutline,
-  mdiClose,
   mdiPlaylistPlay,
   mdiPlaylistPlus,
 } from '@mdi/js';
@@ -201,15 +154,10 @@ import SearchBox from '@/components/SearchBox.vue';
 import FabButton from '@/components/FabButton.vue';
 import CollectionDialog from '@/components/CollectionDialog.vue';
 import BookCollectionPicker from '@/components/BookCollectionPicker.vue';
+import BookMetaDialog from '@/components/BookMetaDialog.vue';
 import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
-import { formatSize } from '@/utils/format';
+import { useBookMenu, type MdMenuElement } from '@/composables/useBookMenu';
 import type { Book } from '@/types';
-
-type MdMenuElement = HTMLElement & {
-  show: () => void;
-  close: () => void;
-  open: boolean;
-};
 
 const router = useRouter();
 const route = useRoute();
@@ -218,43 +166,22 @@ const collectionsStore = useCollectionsStore();
 const toast = useToastStore();
 const { t } = useI18n();
 
+const { menuOpen, menuRefs, pickerBookId, setMenuRef, openMenu, openCollectionPicker, cleanupBook, clearAll } = useBookMenu();
+const metaDialog = ref<InstanceType<typeof BookMetaDialog> | null>(null);
+
 /** Infinite-scroll sentinel — IntersectionObserver calls loadMore() when the
  *  grid bottom scrolls near (the store no-ops while busy or exhausted). */
 const sentinelEl = ref<HTMLElement | null>(null);
 useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore());
 
 const coverMap = reactive<Record<string, string | null>>({});
-const menuOpen = reactive<Record<string, boolean>>({});
-const menuRefs = new Map<string, MdMenuElement | null>();
 const showCollectionDialog = ref(false);
-const pickerBookId = ref<string | null>(null);
 
 /** Chip-row display cap (backend `get_all_tags` returns the top 30). When the
  *  cap is reached we append a non-interactive "…" chip to signal more exist. */
 const TAG_DISPLAY_LIMIT = 30;
 
 let prevIds = new Set<string>();
-
-function setMenuRef(bookId: string, el: MdMenuElement | null) {
-  if (el) {
-    menuRefs.set(bookId, el);
-  } else {
-    menuRefs.delete(bookId);
-  }
-}
-
-function openMenu(bookId: string) {
-  menuOpen[bookId] = true;
-  const menuEl = menuRefs.get(bookId);
-  if (menuEl && typeof menuEl.show === 'function') {
-    menuEl.show();
-  }
-}
-
-function openCollectionPicker(bookId: string) {
-  menuOpen[bookId] = false;
-  pickerBookId.value = bookId;
-}
 
 async function loadCover(book: Book) {
   if (book.id in coverMap) return;
@@ -295,8 +222,7 @@ const stopCoverWatch = watch(
         const url = coverMap[id];
         if (url) URL.revokeObjectURL(url);
         delete coverMap[id];
-        delete menuOpen[id];
-        menuRefs.delete(id);
+        cleanupBook(id);
       }
     }
     prevIds = currentIds;
@@ -350,18 +276,8 @@ onBeforeUnmount(() => {
   for (const url of Object.values(coverMap)) {
     if (url) URL.revokeObjectURL(url);
   }
-  menuRefs.clear();
+  clearAll();
 });
-
-/** Format a website publish time (ISO/RFC or site-local) into a local date;
- *  tolerates partial formats like EHentai's "2024-01-15 12:00". */
-function formatDate(iso?: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (!Number.isNaN(d.getTime())) return d.toLocaleDateString();
-  const m = iso.match(/^\d{4}-\d{2}-\d{2}/);
-  return m ? m[0] : iso;
-}
 
 async function onImport() {
   const file = await api.openFile([
@@ -409,62 +325,9 @@ async function saveToLocal(book: Book) {
   }
 }
 
-const metaDialog = ref<HTMLDialogElement | null>(null);
-const metaBook = ref<Book | null>(null);
-
 function viewMeta(book: Book) {
   menuOpen[book.id] = false;
-  metaBook.value = book;
-  metaDialog.value?.showModal();
-  // Re-fetch so the tags reflect the CURRENT locale: the grid `book` is a stale
-  // copy rendered under the previous language, while get_book translates fresh.
-  void api.getBook(book.id).then((fresh) => {
-    if (metaBook.value?.id === fresh.id) metaBook.value = fresh;
-  }).catch(() => {});
-}
-
-function closeMeta() {
-  metaDialog.value?.close();
-}
-
-function onDialogBackdrop(e: MouseEvent) {
-  if (e.target === e.currentTarget) closeMeta();
-}
-
-/** Tags from the comma-joined DB string, split for chip display. */
-const metaTags = computed<string[]>(() =>
-  (metaBook.value?.tags ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0),
-);
-
-/** Meta rows before tags (title, author). */
-function metaRows(book: Book): { label: string; value: string }[] {
-  return [
-    { label: t('lib.meta.title'), value: book.title || '—' },
-    { label: t('lib.meta.author'), value: book.author || '—' },
-  ];
-}
-
-/** Meta rows between tags and sourceUrl (published, source, postId). */
-function metaRowsMid(book: Book): { label: string; value: string }[] {
-  return [
-    { label: t('lib.meta.published'), value: formatDate(book.published_at) || '—' },
-    { label: t('lib.meta.source'), value: book.source_plugin || '—' },
-    { label: t('lib.meta.postId'), value: book.source_post_id || '—' },
-  ];
-}
-
-/** Meta rows after sourceUrl (format, pages, size, imported, scraped). */
-function metaRowsAfter(book: Book): { label: string; value: string }[] {
-  return [
-    { label: t('lib.meta.format'), value: (book.format || '').toUpperCase() || '—' },
-    { label: t('lib.meta.pages'), value: String(book.page_count ?? 0) },
-    { label: t('lib.meta.size'), value: formatSize(book.file_size) },
-    { label: t('lib.meta.imported'), value: formatDate(book.created_at) },
-    { label: t('lib.meta.scraped'), value: formatDate(book.scraped_at) || '—' },
-  ];
+  metaDialog.value?.open(book);
 }
 </script>
 
@@ -472,100 +335,6 @@ function metaRowsAfter(book: Book): { label: string; value: string }[] {
 .library-header__title {
   margin: 0;
   white-space: nowrap;
-}
-
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.icon-btn:hover {
-  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
-}
-
-.meta-dialog {
-  width: min(480px, calc(100vw - 48px));
-  max-height: calc(100vh - 96px);
-  padding: 0;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-large);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  box-shadow: var(--md-sys-elevation-level3);
-  overflow: hidden;
-}
-.meta-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
-}
-
-.meta-dialog__panel {
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 96px);
-}
-
-.meta-dialog__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.meta-dialog__title {
-  font: var(--md-sys-typescale-title-large-weight)
-    var(--md-sys-typescale-title-large-size) /
-    var(--md-sys-typescale-title-large-line-height)
-    var(--md-sys-typescale-font);
-}
-
-.meta-list {
-  margin: 0;
-  padding: 8px 20px 20px;
-  overflow-y: auto;
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: 24px;
-  row-gap: 8px;
-}
-
-.meta-list dt {
-  color: var(--md-sys-color-on-surface-variant);
-  font: var(--md-sys-typescale-body-medium-weight)
-    var(--md-sys-typescale-body-medium-size) /
-    var(--md-sys-typescale-body-medium-line-height)
-    var(--md-sys-typescale-font);
-  white-space: nowrap;
-}
-
-.meta-list dd {
-  margin: 0;
-  font: var(--md-sys-typescale-body-medium-weight)
-    var(--md-sys-typescale-body-medium-size) /
-    var(--md-sys-typescale-body-medium-line-height)
-    var(--md-sys-typescale-font);
-  word-break: break-all;
-}
-
-.meta-link {
-  color: var(--md-sys-color-primary);
-  text-decoration: none;
-  word-break: break-all;
-}
-
-.meta-link:hover {
-  text-decoration: underline;
 }
 
 .tag-chips {
@@ -616,13 +385,6 @@ function metaRowsAfter(book: Book): { label: string; value: string }[] {
   opacity: 0.75;
 }
 
-/* Read-only chips in the metadata dialog — same look, no interaction. */
-.tag-chip--readonly {
-  cursor: default;
-  pointer-events: none;
-}
-
-/* Non-interactive ellipsis chip shown when the chip row hits its cap. */
 .tag-chip--ellipsis {
   border: none;
   background: transparent;
@@ -631,8 +393,6 @@ function metaRowsAfter(book: Book): { label: string; value: string }[] {
   opacity: 0.6;
 }
 
-/* Infinite-scroll sentinel: a 1px observer target at the grid bottom; the
- * IntersectionObserver in useInfiniteSentinel watches it. */
 .feed-sentinel {
   height: 1px;
   width: 100%;
