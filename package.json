@@ -5,13 +5,8 @@
   "description": "A desktop manga library and downloader app with Tauri, Vue 3, and Material Design 3",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
-    "preview": "vite preview",
-    "test": "vitest"
+    "dev": "tauri dev",
+    "build": "tauri build"
   },
   "dependencies": {
     "@material/material-color-utilities": "^0.3.0",

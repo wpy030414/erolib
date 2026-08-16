@@ -1,10 +1,10 @@
 {
   "productName": "EroLib",
-  "version": "26.8.14+0015",
+  "version": "26.8.16+1900",
   "identifier": "im.xrl.erolib",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "pnpm exec vite",
+    "beforeBuildCommand": "pnpm exec vite build",
     "devUrl": "http://localhost:13269",
     "frontendDist": "../dist"
   },
