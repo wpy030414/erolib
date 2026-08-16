@@ -240,10 +240,10 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Delete every terminal task (completed/failed/cancelled) in one shot.
+    /// Delete every completed task in one shot.
     pub async fn clear_completed_tasks(&self) -> Result<u64> {
         let res = sqlx::query(
-            "DELETE FROM tasks WHERE status IN ('completed','failed','cancelled')",
+            "DELETE FROM tasks WHERE status = 'completed'",
         )
         .execute(&self.db.pool)
         .await
@@ -902,13 +902,15 @@ async fn process_pixiv_single(
     Ok(book_id)
 }
 
-/// Spawn a background ticker that sums per-slot byte progress (~2.5×/sec) and
-/// pushes a smooth progress+speed update for the task. This lets the bar glide
-/// during 8-way concurrent downloads instead of jumping only when a whole
-/// image finishes (and it aggregates speed across gids, fixing the
-/// under-reporting from per-gid `set_speed`). Returns a `TickerGuard` whose
-/// Drop aborts the ticker. No-op (dummy guard) when `task_id` is None — batch
-/// tasks track progress at the work-index level, not per-page.
+/// Spawn a background ticker that aggregates per-slot speed (~2.5×/sec) and
+/// pushes a smooth speed readout for the task. The progress bar itself is
+/// driven solely by image-count updates from `download_pages_concurrent`
+/// (one tick per completed page) — the ticker never overwrites it with
+/// byte-level aria2 progress, so the bar always shows "pages done / total
+/// pages" regardless of whether the content is an image gallery or a
+/// ugoira/animated zip. Returns a `TickerGuard` whose Drop aborts the
+/// ticker. No-op (dummy guard) when `task_id` is None — batch tasks don't
+/// have their own task_id.
 fn spawn_progress_ticker(
     manager: &Arc<TaskManager>,
     runtime: Arc<TaskRuntime>,
@@ -929,23 +931,15 @@ fn spawn_progress_ticker(
             if runtime.cancelled.load(Ordering::Relaxed) {
                 break;
             }
-            let agg = progress
+            // Sum only the speed component across all in-flight gids so the
+            // speed readout reflects aggregate throughput. The byte totals
+            // (agg.0/agg.1) are intentionally ignored — the progress bar
+            // tracks completed images, not partial byte downloads.
+            let agg_speed = progress
                 .lock()
-                .map(|g| {
-                    g.values()
-                        .fold((0i64, 0i64, 0i64), |(d, t, s), v| (d + v.0, t + v.1, s + v.2))
-                })
-                .unwrap_or((0, 0, 0));
-            // Skip until some gid reports a total length (aria2 hasn't received
-            // Content-Length yet) — avoids a 0/0 blip and a divide-by-zero on
-            // the frontend's progress ratio.
-            if agg.1 == 0 {
-                continue;
-            }
-            let _ = manager
-                .set_progress_with_speed(&tid, agg.0, agg.1, "downloading", agg.2)
-                .await;
-            let _ = manager.emit_progress(&tid).await;
+                .map(|g| g.values().fold(0i64, |s, v| s + v.2))
+                .unwrap_or(0);
+            let _ = manager.set_speed(&tid, agg_speed).await;
         }
     }))
 }

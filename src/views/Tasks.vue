@@ -4,16 +4,20 @@
       <h2 class="text-h5 tasks-header__title">{{ t('tasks.title') }}</h2>
     </div>
 
-    <div v-if="tasks.length === 0" class="empty-state">
+    <div v-if="taskStore.loading" class="empty-state">
+      <FeedLoading />
+    </div>
+
+    <div v-else-if="taskStore.tasks.length === 0" class="empty-state">
       <p class="text-body-1 text-medium-emphasis">{{ t('tasks.empty') }}</p>
     </div>
 
     <div v-else class="task-list">
       <div
-        v-for="item in tasks"
+        v-for="item in taskStore.tasks"
         :key="item.id"
         class="md3-card md3-card--outlined task-card"
-        :class="{ 'task-card--selected': selectedTaskId === item.id }"
+        :class="{ 'task-card--selected': taskStore.selectedTaskId === item.id }"
         @click="selectTask(item.id)"
       >
         <div class="task-header">
@@ -40,7 +44,7 @@
              card collapses the old one and expands the new one. -->
         <details
           class="task-logs-wrap"
-          :open="selectedTaskId === item.id"
+          :open="taskStore.selectedTaskId === item.id"
           @toggle.prevent
           @contextmenu.prevent="copyLogs(item)"
         >
@@ -163,6 +167,7 @@ import { useToastStore } from '@/stores/toast';
 import { useCollectionsStore } from '@/stores/collections';
 import MdiIcon from '@/components/MdiIcon.vue';
 import FabButton from '@/components/FabButton.vue';
+import FeedLoading from '@/components/FeedLoading.vue';
 import { formatBytes, formatSpeed, formatDuration } from '@/utils/format';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
@@ -171,14 +176,12 @@ const router = useRouter();
 const toastStore = useToastStore();
 const taskStore = useTaskStore();
 const collectionsStore = useCollectionsStore();
-const { tasks, selectedTaskId } = taskStore;
 
 const clearing = ref(false);
 const retrying = ref(false);
 
-const TERMINAL = ['completed', 'failed', 'cancelled'];
-const hasCompleted = computed(() => tasks.some((tk) => TERMINAL.includes(tk.status)));
-const hasRetryable = computed(() => tasks.some((tk) => tk.status === 'failed' || tk.status === 'paused'));
+const hasCompleted = computed(() => taskStore.tasks.some((tk) => tk.status === 'completed'));
+const hasRetryable = computed(() => taskStore.tasks.some((tk) => tk.status === 'failed' || tk.status === 'paused'));
 
 function progressPercent(item: { progress_current: number; progress_total: number }): number {
   if (item.progress_total <= 0) return 100;
@@ -188,7 +191,7 @@ function progressPercent(item: { progress_current: number; progress_total: numbe
 function selectTask(id: string) {
   // Clicking the already-open card is a no-op; clicking a different card
   // collapses the previous one and expands the new one.
-  if (selectedTaskId === id) return;
+  if (taskStore.selectedTaskId === id) return;
   taskStore.selectTask(id);
 }
 
@@ -213,7 +216,7 @@ function viewInLibrary(taskTitle: string) {
 async function onClearCompleted() {
   clearing.value = true;
   try {
-    const before = tasks.filter((tk) => TERMINAL.includes(tk.status)).length;
+    const before = taskStore.tasks.filter((tk) => tk.status === 'completed').length;
     await taskStore.clearCompleted();
     toastStore.addToast('info', t('tasks.toast.cleared', { count: before }));
   } catch (e) {
@@ -247,8 +250,8 @@ async function copyLogs(item: import('@/services/api').TaskItem) {
   }
 }
 
-onMounted(() => {
-  taskStore.init();
+onMounted(async () => {
+  await taskStore.init();
 });
 </script>
 

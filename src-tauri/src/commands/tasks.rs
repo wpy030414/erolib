@@ -64,7 +64,7 @@ pub async fn task_retry(
         .map_err(|e| e.to_string())
 }
 
-/// Delete all terminal tasks (completed/failed/cancelled) in one shot.
+/// Delete all completed tasks in one shot.
 #[tauri::command]
 pub async fn tasks_clear_completed(
     manager: State<'_, Arc<TaskManager>>,
