@@ -585,6 +585,34 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
+// ── Trackpad two-finger horizontal swipe ────────────────────────────
+// macOS WebKit delivers two-finger horizontal swipes as `wheel` events with
+// non-zero `deltaX`. Accumulate horizontal displacement; when it exceeds the
+// threshold, turn exactly one page and reset. Vertical-dominant events are
+// ignored so normal page scrolling still works. `preventDefault()` suppresses
+// WebKit's rubber-band bounce; the listener MUST be registered with
+// `passive: false` (not `passive: true`) or the call becomes a no-op.
+const SWIPE_THRESHOLD = 50;
+let swipeAccumX = 0;
+
+function onWheel(e: WheelEvent) {
+  if (isAnimated.value) return;
+  // Vertical-dominant: reset and let the browser scroll normally.
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    swipeAccumX = 0;
+    return;
+  }
+  // Ignore tiny momentum/inertia events (naturally < 1px per event).
+  if (Math.abs(e.deltaX) < 1) return;
+  e.preventDefault();
+  swipeAccumX += e.deltaX;
+  if (Math.abs(swipeAccumX) >= SWIPE_THRESHOLD) {
+    // 向右滑 (deltaX < 0) = 下一张; 向左滑 (deltaX > 0) = 上一张
+    go(swipeAccumX > 0 ? -1 : 1);
+    swipeAccumX = 0;
+  }
+}
+
 function clearBlobs() {
   Object.values(blobs.value).forEach(URL.revokeObjectURL);
   blobs.value = {};
@@ -820,6 +848,9 @@ const themeStore = useThemeStore();
 onMounted(() => {
   loadMetadata();
   window.addEventListener('keydown', onKeyDown);
+  // passive: false is REQUIRED — onWheel calls preventDefault() to stop
+  // WebKit's rubber-band bounce. With passive: true the browser ignores it.
+  window.addEventListener('wheel', onWheel, { passive: false });
   previousMode.value = themeStore.mode;
   previousSeed.value = themeStore.seed;
   themeStore.setMode('dark');
@@ -831,6 +862,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('wheel', onWheel);
   clearUiHideTimer();
   clearPlayTimer();
   document.removeEventListener('visibilitychange', onVisibilityChangeReadTime);
