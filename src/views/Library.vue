@@ -170,9 +170,16 @@ const { menuOpen, menuRefs, pickerBookId, setMenuRef, openMenu, openCollectionPi
 const metaDialog = ref<InstanceType<typeof BookMetaDialog> | null>(null);
 
 /** Infinite-scroll sentinel — IntersectionObserver calls loadMore() when the
- *  grid bottom scrolls near (the store no-ops while busy or exhausted). */
+ *  grid bottom scrolls near (the store no-ops while busy or exhausted).
+ *  feedState lets the sentinel auto-fill: after each page load finishes, it
+ *  rechecks whether the grid has filled the viewport. */
 const sentinelEl = ref<HTMLElement | null>(null);
-useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore());
+useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore(), {
+  feedState: {
+    get loading() { return libraryStore.isLoading || libraryStore.isLoadingMore; },
+    get end() { return !libraryStore.hasMore; },
+  },
+});
 
 const coverMap = reactive<Record<string, string | null>>({});
 const showCollectionDialog = ref(false);

@@ -30,7 +30,7 @@ import FeedLoading from '@/components/FeedLoading.vue';
  * AGENTS.md); the per-feed progress ring on SourceCard stays hand-rolled SVG.
  * The sentinel arms itself on mount, so a freshly-shown feed (tab switch, post
  * login, ex toggle) auto-loads its first page. */
-defineProps<{
+const props = defineProps<{
   feed: { items: unknown[]; loading: boolean; end: boolean };
   texts: { empty: string; end: string; loadingMore: string };
 }>();
@@ -38,7 +38,9 @@ defineProps<{
 const emit = defineEmits<{ (e: 'load-more'): void }>();
 
 const sentinel = ref<HTMLElement | null>(null);
-useInfiniteSentinel(sentinel, () => emit('load-more'));
+useInfiniteSentinel(sentinel, () => emit('load-more'), {
+  feedState: props.feed,
+});
 </script>
 
 <style scoped>

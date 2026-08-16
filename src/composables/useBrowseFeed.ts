@@ -105,6 +105,11 @@ export function useBrowseFeed<
   let buffer: TItem[] = [];
   // Whether the underlying source feed has reported no more items.
   let sourceEnded = false;
+  // Tracks keys of all items already shown or buffered so duplicates (caused by
+  // server-side real-time updates shifting old content into the next page) are
+  // silently dropped during pagination. The while-loop keeps fetching until a
+  // full unified page of genuinely-new items is assembled or the source ends.
+  const seenKeys = new Set<TKey>();
 
   async function refreshStatus(keys: TKey[]) {
     if (!keys.length) return;
@@ -123,13 +128,27 @@ export function useBrowseFeed<
       // Top up the buffer across the source's own page boundaries until it
       // holds at least one unified page, or the source runs out. This flattens
       // Pixiv's ~30/~60 and EHentai's 25 into a steady 48/page.
+      //
+      // seenKeys persists across loadMore() calls — it grows monotonically and
+      // is only cleared on resetFeed(). This ensures items sitting in the
+      // buffer (left over when a fetch returns more than BROWSE_PAGE_SIZE,
+      // e.g. Pixiv bookmark pulling 100 at a time) stay tracked, so server-
+      // side real-time updates that shift old content into the next page are
+      // silently dropped. The while-loop keeps fetching until a full unified
+      // page of genuinely-new items is assembled or the source runs out.
       while (buffer.length < BROWSE_PAGE_SIZE && !sourceEnded) {
         const res = await opts.fetchPage(cursor);
         if (res.items.length === 0) {
           sourceEnded = true;
           break;
         }
-        buffer.push(...res.items);
+        for (const item of res.items) {
+          const key = opts.keyOf(item);
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            buffer.push(item);
+          }
+        }
         cursor = res.nextCursor;
         if (res.end) sourceEnded = true;
       }
@@ -226,6 +245,7 @@ export function useBrowseFeed<
   function resetFeed() {
     feed.items.splice(0, feed.items.length);
     buffer.splice(0, buffer.length);
+    seenKeys.clear();
     cursor = opts.initialCursor;
     sourceEnded = false;
     feed.end = false;
