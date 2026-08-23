@@ -110,6 +110,15 @@
             </md-filled-tonal-button>
 
             <md-outlined-button
+              v-if="item.status === 'completed'"
+              :disabled="redownloadingId === item.id"
+              @click.stop="onRedownload(item)"
+            >
+              <MdiIcon slot="icon" :path="mdiDownload" :size="18" />
+              {{ t('tasks.actions.redownload') }}
+            </md-outlined-button>
+
+            <md-outlined-button
               v-if="item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled'"
               @click.stop="taskStore.deleteTask(item.id)"
             >
@@ -160,6 +169,7 @@ import {
   mdiMagnify,
   mdiBroom,
   mdiRestart,
+  mdiDownload,
 } from '@mdi/js';
 import { useI18n } from '@/i18n';
 import { useTaskStore } from '@/stores/tasks';
@@ -235,6 +245,27 @@ async function onRetryAll() {
     toastStore.addToast('error', t('common.error', { message: String(e) }));
   } finally {
     retrying.value = false;
+  }
+}
+
+const redownloadingId = ref<string | null>(null);
+async function onRedownload(item: import('@/services/api').TaskItem) {
+  // Global debounce: only one re-download at a time (the backend has its own
+  // guards, but this also keeps the UX from firing twice on a double-click).
+  if (redownloadingId.value) return;
+  redownloadingId.value = item.id;
+  try {
+    const action = await taskStore.redownloadTask(item.id);
+    const title = extractBookTitle(item.title);
+    if (action === 'already_complete') {
+      toastStore.addToast('info', t('tasks.toast.alreadyComplete', { title }));
+    } else {
+      toastStore.addToast('success', t('tasks.toast.redownloadStarted', { title }));
+    }
+  } catch (e) {
+    toastStore.addToast('error', t('tasks.toast.redownloadFailed', { message: String(e) }));
+  } finally {
+    redownloadingId.value = null;
   }
 }
 

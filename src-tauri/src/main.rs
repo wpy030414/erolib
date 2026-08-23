@@ -219,6 +219,7 @@ fn main() {
             commands::tasks::task_cancel,
             commands::tasks::task_delete,
             commands::tasks::task_retry,
+            commands::tasks::task_redownload,
             commands::tasks::tasks_clear_completed,
             commands::tasks::tasks_retry_all,
             commands::tasks::task_enqueue_ehentai_gallery,

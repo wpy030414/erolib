@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::services::task::{TaskPayload, TaskSnapshot};
+use crate::services::task::{RedownloadAction, TaskPayload, TaskSnapshot};
 use crate::services::task_manager::TaskManager;
 
 #[tauri::command]
@@ -60,6 +60,19 @@ pub async fn task_retry(
 ) -> Result<(), String> {
     manager
         .retry_task(&task_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Re-download a completed task's book (smart: compares the local archive
+/// against the source's current page count and skips when already complete).
+#[tauri::command]
+pub async fn task_redownload(
+    task_id: String,
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<RedownloadAction, String> {
+    manager
+        .redownload_task(&task_id)
         .await
         .map_err(|e| e.to_string())
 }

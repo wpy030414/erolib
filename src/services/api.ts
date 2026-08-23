@@ -35,6 +35,9 @@ export interface TaskItem {
   completed_at: string | null;
 }
 
+/** Outcome of a completed-task re-download (mirrors the Rust enum). */
+export type RedownloadAction = 'restarted' | 'redownloaded' | 'already_complete';
+
 export const api = {
   // Book operations
   importBook: (filePath: string) =>
@@ -206,6 +209,12 @@ export const api = {
 
   taskRetry: (taskId: string) =>
     invoke<void>('task_retry', { taskId }),
+
+  // Re-download a completed task's book: skips when already complete,
+  // otherwise removes the (incomplete/missing) local book and re-fetches.
+  // Returns the outcome so the caller picks the right toast.
+  taskRedownload: (taskId: string) =>
+    invoke<RedownloadAction>('task_redownload', { taskId }),
 
   tasksClearCompleted: () =>
     invoke<number>('tasks_clear_completed'),

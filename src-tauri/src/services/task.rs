@@ -46,6 +46,20 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+/// Outcome of a completed-task re-download request, returned to the frontend
+/// so it can pick the right toast. `restarted`/`redownloaded` both kick off a
+/// download (the book is wholly re-fetched); `already_complete` is a no-op.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RedownloadAction {
+    /// No matching book was in the library — a plain retry (full download).
+    Restarted,
+    /// A book existed but was incomplete — it was removed and fully re-fetched.
+    Redownloaded,
+    /// The local archive already matched the remote page count — nothing done.
+    AlreadyComplete,
+}
+
 impl fmt::Display for TaskStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -104,6 +118,32 @@ impl TaskPayload {
             TaskPayload::EhentaiGallery { .. } => TaskSource::Ehentai,
             TaskPayload::AhentaiGallery { .. } => TaskSource::Ahentai,
             TaskPayload::NicecatGallery { .. } => TaskSource::Nicecat,
+        }
+    }
+
+    /// Canonical `books.source_url` this payload registers under — must stay
+    /// byte-identical to what each `process_*` stamps (task_manager.rs:
+    /// EHentai ~:1837, Pixiv ~:1250, AHentai ~:1933, NiceCat ~:2302), since
+    /// the re-download scan looks books up by exact string match.
+    pub fn source_url(&self) -> String {
+        match self {
+            TaskPayload::EhentaiGallery { gallery_url, gid, token, .. } => {
+                let host = if gallery_url.contains("exhentai") {
+                    "exhentai.org"
+                } else {
+                    "e-hentai.org"
+                };
+                format!("https://{host}/g/{gid}/{token}/")
+            }
+            TaskPayload::PixivSingleWork { work_id, .. } => {
+                format!("https://www.pixiv.net/artworks/{work_id}")
+            }
+            TaskPayload::AhentaiGallery { gallery_id, .. } => {
+                format!("{}/g/{}/", crate::services::ahentai::AHENTAI_BASE, gallery_id)
+            }
+            TaskPayload::NicecatGallery { comic_id, .. } => {
+                format!("https://ncmm.cc/comic/info/id.{comic_id}")
+            }
         }
     }
 }

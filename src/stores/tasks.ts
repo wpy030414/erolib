@@ -107,6 +107,12 @@ export const useTaskStore = defineStore('tasks', () => {
     await refresh();
   }
 
+  async function redownloadTask(id: string) {
+    const action = await api.taskRedownload(id);
+    await refresh();
+    return action;
+  }
+
   async function clearCompleted() {
     await api.tasksClearCompleted();
     // Drop any selected task that was just cleared.
@@ -139,6 +145,7 @@ export const useTaskStore = defineStore('tasks', () => {
     cancelTask,
     deleteTask,
     retryTask,
+    redownloadTask,
     clearCompleted,
     retryAll,
   };

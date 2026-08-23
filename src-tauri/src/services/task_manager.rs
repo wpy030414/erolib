@@ -417,6 +417,206 @@ impl TaskManager {
         self.resume_task(id).await
     }
 
+    /// Re-download a completed task's book. Decides between full restart /
+    /// incomplete-overwrite / already-complete by comparing the local archive's
+    /// real page count against the source's CURRENT remote page count — the
+    /// per-source in-library guards inside `process_*` can't do this (they skip
+    /// whenever a book row exists, so a page-deleted book would never heal).
+    ///
+    /// Order matters: remote listing happens BEFORE any local mutation, so a
+    /// network failure leaves the library untouched.
+    pub async fn redownload_task(
+        &self,
+        id: &str,
+    ) -> Result<crate::services::task::RedownloadAction> {
+        use crate::services::task::RedownloadAction;
+
+        let mut task = self
+            .load_task(id)
+            .await?
+            .context("task not found")?;
+        if task.status != TaskStatus::Completed {
+            anyhow::bail!("task is not completed");
+        }
+        {
+            let workers = self.workers.lock().await;
+            if workers.contains_key(id) {
+                anyhow::bail!("task is already running");
+            }
+            // Same-source concurrency guard: another running task downloading
+            // this very book would race the remove+re-register below. The
+            // worker map is tiny, so comparing payloads is cheap.
+            let target_url = task.payload.source_url();
+            for other_id in workers.keys() {
+                if let Some(other) = self.load_task(other_id).await? {
+                    if other.payload.source_url() == target_url {
+                        anyhow::bail!("another running task is downloading the same book");
+                    }
+                }
+            }
+        }
+
+        // Prefer the live app-managed login over the possibly-stale payload
+        // copy; the resumed worker then runs with fresh credentials.
+        self.refresh_payload_cookie(id, &mut task.payload).await?;
+
+        let source_url = task.payload.source_url();
+        let book = sqlx::query_as::<_, (String, i32, String, Option<String>)>(
+            "SELECT id, page_count, file_path, delays FROM books WHERE source_url = ? LIMIT 1",
+        )
+        .bind(&source_url)
+        .fetch_optional(&self.db.pool)
+        .await
+        .context("look up book by source_url")?;
+
+        let Some((book_id, _stored_count, file_path, delays)) = book else {
+            // Book fully gone from the library — the plain retry path re-runs
+            // the original payload and downloads everything anew. No remote
+            // pre-check here: the worker surfaces its own errors.
+            self.retry_task(id).await?;
+            return Ok(RedownloadAction::Restarted);
+        };
+
+        // Local ground truth: actual image entries in the archive on disk.
+        // None ⇒ file missing or unreadable.
+        let storage = Arc::clone(&self.storage);
+        let path = PathBuf::from(&file_path);
+        let local_pages: Option<i64> = tokio::task::spawn_blocking(move || {
+            storage.count_pages(&path).map(|n| n as i64)
+        })
+        .await
+        .context("join count_pages")?;
+
+        // Remote ground truth, per source. Ugoira compares frame counts (its
+        // DB page_count is pinned to 1 by design); everything else compares
+        // listed page counts.
+        let is_ugoira = delays.as_deref().map_or(false, |d| !d.is_empty());
+        let remote_pages: i64 = match &task.payload {
+            TaskPayload::PixivSingleWork { cookie, work_id } => {
+                let client = PixivClient::new(cookie).context("build pixiv client")?;
+                if is_ugoira {
+                    let meta = client
+                        .fetch_ugoira_meta(work_id)
+                        .await
+                        .context("fetch ugoira meta")?;
+                    meta.frames.len() as i64
+                } else {
+                    client
+                        .fetch_pages(work_id)
+                        .await
+                        .context("fetch pages")?
+                        .len() as i64
+                }
+            }
+            TaskPayload::EhentaiGallery { cookie, gallery_url, gid, token } => {
+                let ex = gallery_url.contains("exhentai");
+                let client =
+                    EhentaiClient::new(cookie, ex).context("build ehentai client")?;
+                client
+                    .fetch_gallery_pages(gid, token)
+                    .await
+                    .context("fetch gallery pages")?
+                    .len() as i64
+            }
+            TaskPayload::AhentaiGallery { gallery_id, .. } => {
+                let client = AhentaiClient::new().context("build ahentai client")?;
+                let meta = client
+                    .fetch_gallery_meta(gallery_id)
+                    .await
+                    .context("fetch gallery meta")?;
+                if meta.page_count == 0 {
+                    anyhow::bail!("gallery {gallery_id} has 0 pages (missing or deleted?)");
+                }
+                meta.page_count as i64
+            }
+            TaskPayload::NicecatGallery { comic_id, .. } => {
+                nicecat_remote_page_count(comic_id).await?
+            }
+        };
+
+        match local_pages {
+            Some(local) if local == remote_pages => {
+                let _ = self
+                    .append_log(
+                        id,
+                        &format!("📚 本地完整 ({local}/{remote_pages})，无需重新下载"),
+                    )
+                    .await;
+                Ok(RedownloadAction::AlreadyComplete)
+            }
+            // Incomplete (fewer pages than the source) or the archive file is
+            // gone entirely: remove what's left and re-download in full. The
+            // per-source in-library guards no longer hit once the row is gone,
+            // so the resumed worker performs a fresh download + registration.
+            Some(local) if local < remote_pages => {
+                let _ = self
+                    .append_log(
+                        id,
+                        &format!("📖 本地缺页 ({local}/{remote_pages})，重新下载整本"),
+                    )
+                    .await;
+                LibraryService::new(self.db.clone(), self.storage.clone())
+                    .remove_book(&book_id)
+                    .await
+                    .context("remove incomplete book")?;
+                self.retry_task(id).await?;
+                Ok(RedownloadAction::Redownloaded)
+            }
+            // The source shrank or was trimmed — overwriting would irreversibly
+            // drop local-only content, so refuse instead.
+            Some(local) => anyhow::bail!(
+                "本地页数 ({local}) 多于远端 ({remote_pages})，疑似源站删减，已拒绝覆盖"
+            ),
+            None => {
+                let _ = self.append_log(id, "📕 本地文件丢失，重新下载").await;
+                LibraryService::new(self.db.clone(), self.storage.clone())
+                    .remove_book(&book_id)
+                    .await
+                    .context("remove book with missing file")?;
+                self.retry_task(id).await?;
+                Ok(RedownloadAction::Redownloaded)
+            }
+        }
+    }
+
+    /// Prefer the live app-managed login over the possibly-stale payload
+    /// copy; persist the fresher value back into the task row so the resumed
+    /// worker doesn't run with expired credentials. No-op for cookie-less
+    /// sources (AHentai / NiceCat).
+    async fn refresh_payload_cookie(&self, id: &str, payload: &mut TaskPayload) -> Result<()> {
+        let fresh: Option<String> = match payload.source() {
+            TaskSource::Pixiv => self
+                .app
+                .try_state::<Arc<crate::commands::pixiv::PixivSession>>()
+                .and_then(|s| s.get_login().map(|l| l.cookie)),
+            TaskSource::Ehentai => self
+                .app
+                .try_state::<Arc<crate::commands::ehentai::EhentaiSession>>()
+                .and_then(|s| s.get_cookie()),
+            _ => None,
+        };
+        if let Some(cookie) = fresh {
+            match payload {
+                TaskPayload::PixivSingleWork { cookie: c, .. }
+                | TaskPayload::EhentaiGallery { cookie: c, .. } => {
+                    if *c != cookie {
+                        let _ = c.clone_from(&cookie);
+                        let json = serde_json::to_string(payload)
+                            .context("serialize refreshed payload")?;
+                        sqlx::query("UPDATE tasks SET payload = ? WHERE id = ?")
+                            .bind(&json)
+                            .bind(id)
+                            .execute(&self.db.pool)
+                            .await
+                            .context("persist refreshed payload")?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     async fn start_task(&self, id: &str) -> Result<()> {
         let mut workers = self.workers.lock().await;
         if workers.contains_key(id) {
@@ -2467,4 +2667,19 @@ async fn process_nicecat(
     let _ = manager.append_log(&task.id, "✅ 完成").await;
     let _ = manager.emit_progress(&task.id).await;
     Ok(Some(book_id))
+}
+
+/// Current page count for a NiceCat comic straight from the source — the two
+/// independent API calls run concurrently, then the order response is parsed
+/// with the same routine the download worker uses. Used by the re-download
+/// completeness check.
+async fn nicecat_remote_page_count(comic_id: &str) -> Result<i64> {
+    let (info_res, order_res) = tokio::join!(
+        crate::services::nicecat::fetch_comic_info_raw(comic_id),
+        crate::services::nicecat::fetch_comic_order_raw(comic_id),
+    );
+    info_res.map_err(|e| anyhow::anyhow!("ComicInfo/info failed: {e}"))?;
+    let order_raw = order_res.map_err(|e| anyhow::anyhow!("getComicOrder failed: {e}"))?;
+    let (page_urls, _title) = parse_nicecat_order_response(&order_raw, comic_id)?;
+    Ok(page_urls.len() as i64)
 }

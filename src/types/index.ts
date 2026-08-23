@@ -4,7 +4,7 @@ export interface Book {
   original_filename?: string;
   file_path: string;
   file_size: number;
-  format: 'cb7' | 'cbz' | 'cbr' | 'pdf';
+  format: 'cb7' | 'cbz' | 'cbr' | 'epub' | 'pdf';
   page_count: number;
   cover_path?: string;
   source_plugin?: string;
