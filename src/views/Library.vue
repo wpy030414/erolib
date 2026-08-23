@@ -107,6 +107,9 @@
     <!-- Shared meta dialog -->
     <BookMetaDialog ref="metaDialog" />
 
+    <!-- Shared export dialog (format picker → save) -->
+    <BookExportDialog ref="exportDialog" />
+
     <!-- Collection management FAB + dialogs -->
     <FabButton
       :icon="mdiPlaylistPlay"
@@ -131,7 +134,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import '@material/web/menu/menu.js';
 import '@material/web/menu/menu-item.js';
 import {
@@ -155,6 +157,7 @@ import FabButton from '@/components/FabButton.vue';
 import CollectionDialog from '@/components/CollectionDialog.vue';
 import BookCollectionPicker from '@/components/BookCollectionPicker.vue';
 import BookMetaDialog from '@/components/BookMetaDialog.vue';
+import BookExportDialog from '@/components/BookExportDialog.vue';
 import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
 import { useBookMenu, type MdMenuElement } from '@/composables/useBookMenu';
 import type { Book } from '@/types';
@@ -168,6 +171,7 @@ const { t } = useI18n();
 
 const { menuOpen, menuRefs, pickerBookId, setMenuRef, openMenu, openCollectionPicker, cleanupBook, clearAll } = useBookMenu();
 const metaDialog = ref<InstanceType<typeof BookMetaDialog> | null>(null);
+const exportDialog = ref<InstanceType<typeof BookExportDialog> | null>(null);
 
 /** Infinite-scroll sentinel — IntersectionObserver calls loadMore() when the
  *  grid bottom scrolls near (the store no-ops while busy or exhausted).
@@ -288,7 +292,7 @@ onBeforeUnmount(() => {
 
 async function onImport() {
   const file = await api.openFile([
-    { name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'pdf'] },
+    { name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'epub', 'pdf'] },
   ]);
   if (typeof file === 'string') {
     try {
@@ -314,22 +318,7 @@ async function deleteBookItem(book: Book) {
 
 async function saveToLocal(book: Book) {
   menuOpen[book.id] = false;
-  const defaultName = `${book.title || 'book'}.${book.format}`;
-  const dest = await dialogSave({
-    defaultPath: defaultName,
-    filters: [
-      { name: t('lib.save.filterName'), extensions: [book.format] },
-      { name: t('lib.save.allFiles'), extensions: ['*'] },
-    ],
-  });
-  if (dest) {
-    try {
-      await api.saveBook(book.id, dest);
-      toast.addToast('success', t('lib.saved', { title: book.title }));
-    } catch (e) {
-      toast.addToast('error', t('lib.saveFailed', { error: String(e) }));
-    }
-  }
+  exportDialog.value?.open(book);
 }
 
 function viewMeta(book: Book) {

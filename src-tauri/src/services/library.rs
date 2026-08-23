@@ -22,12 +22,17 @@ impl LibraryService {
         Self { db, storage }
     }
 
-    /// Import an existing CB7/CBZ/CBR/PDF file into the library.
+    /// Import an existing CB7/CBZ/CBR/EPUB/PDF file into the library.
     ///
-    /// For CB7/CBZ the archive's ComicInfo.xml is read back (title, tags,
-    /// source, delays) so an erolib-exported cb7 round-trips losslessly.
-    /// CBR/PDF and archives without ComicInfo fall back to the file name and
-    /// empty source.
+    /// - **CB7/CBZ**: copied into library storage verbatim, then the archive's
+    ///   `ComicInfo.xml` is read back (title, tags, source, delays) so an
+    ///   erolib-exported cb7 round-trips losslessly.
+    /// - **EPUB/PDF**: parsed back into image pages + metadata (OPF `dc:`
+    ///   fields + `ero:` refines for epub; Info dict + erolib metadata stream
+    ///   for pdf), then repackaged into a library CB7 via `create_cb7`. This
+    ///   makes the reader (zip-only) able to page through them and keeps the
+    ///   library storage uniformly cb7.
+    /// - **CBR** and archives without provenance fall back to the file name.
     pub async fn import_book(&self, file_path: String) -> Result<Book, AppError> {
         let path = Path::new(&file_path);
         let file_name = path
@@ -37,20 +42,56 @@ impl LibraryService {
             .to_string();
 
         let format = detect_format(&file_name);
-        let mut page_count = count_archive_pages(path, &format).unwrap_or(0);
-
         let book_id = Uuid::new_v4().to_string();
         let dest = self
             .storage
             .library_path
             .join(format!("{}.cb7", book_id));
 
-        // Copy into library storage.
-        std::fs::copy(path, &dest).map_err(AppError::Io)?;
+        // EPUB/PDF must be repacked into a cb7 (the reader is zip-only), and
+        // their metadata comes from the format's own carrier rather than
+        // ComicInfo. cb7/cbz/cbr keep the existing copy-then-read_comic_info
+        // path.
+        let meta = if format == "epub" || format == "pdf" {
+            let (images, parsed) = tokio::task::spawn_blocking({
+                let path = path.to_path_buf();
+                let fmt = format.clone();
+                move || -> std::result::Result<_, anyhow::Error> {
+                    if fmt == "epub" {
+                        crate::services::import::read_epub(&path)
+                    } else {
+                        crate::services::import::read_pdf(&path)
+                    }
+                }
+            })
+            .await
+            .map_err(|e| AppError::Other(format!("parse join failed: {e}")))?
+            .map_err(|e| AppError::Other(e.to_string()))?;
 
-        // Recover metadata from ComicInfo.xml (cb7/cbz only). read_comic_info
-        // returns None for non-zip formats or archives without ComicInfo.
-        let meta = self.storage.read_comic_info(&dest);
+            // Repackage into the library cb7. create_cb7 writes ComicInfo.xml
+            // from the metadata, so the imported epub/pdf now round-trips as a
+            // cb7 just like any other book.
+            self.storage
+                .create_cb7(&images, &parsed)
+                .map_err(|e| AppError::Other(e.to_string()))?;
+            Some(parsed)
+        } else {
+            // Copy the archive verbatim into library storage.
+            std::fs::copy(path, &dest).map_err(AppError::Io)?;
+            // Recover metadata from ComicInfo.xml (cb7/cbz only). read_comic_info
+            // returns None for non-zip formats or archives without ComicInfo.
+            self.storage.read_comic_info(&dest)
+        };
+
+        // Count pages from the (now-cb7) library file; fall back to a quick
+        // archive scan of the source for formats we still copy verbatim.
+        let mut page_count = count_archive_pages(&dest, "cb7").unwrap_or_else(|| {
+            if format == "cb7" || format == "cbz" {
+                count_archive_pages(path, &format).unwrap_or(0)
+            } else {
+                0
+            }
+        });
 
         let file_stem = path
             .file_stem()
@@ -493,6 +534,8 @@ fn detect_format(name: &str) -> String {
         "cbz".into()
     } else if lower.ends_with(".cbr") {
         "cbr".into()
+    } else if lower.ends_with(".epub") {
+        "epub".into()
     } else if lower.ends_with(".pdf") {
         "pdf".into()
     } else {

@@ -3,6 +3,8 @@
 mod collection_service;
 mod feed;
 mod library;
+pub mod export;
+pub mod import;
 pub mod locale;
 mod opds;
 mod rss;
