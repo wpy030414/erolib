@@ -188,6 +188,34 @@ impl LibraryService {
     }
 
 
+    /// Persist the new page count after a page deletion repack, and re-extract
+    /// the cover when the first page was the one dropped. Split from the
+    /// blocking zip work (which runs on a `spawn_blocking` thread in the
+    /// command layer, driving `storage.rewrite_without_page` directly) so this
+    /// DB + cover IO stays on the async runtime. Animated (ugoira) books are a
+    /// single logical page whose frames play as an animation; deleting a frame
+    /// would break playback, so callers must not invoke this for them.
+    pub async fn finalize_page_deletion(
+        &self,
+        id: &str,
+        new_count: u32,
+        dropped_first_page: bool,
+    ) -> Result<(), AppError> {
+        sqlx::query("UPDATE books SET page_count = ? WHERE id = ?")
+            .bind(new_count as i32)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await
+            .map_err(AppError::Db)?;
+
+        if dropped_first_page {
+            let file_path = self.get_book_file_path(id).await?;
+            let path = Path::new(&file_path);
+            let _ = self.storage.extract_cover(path, id);
+        }
+        Ok(())
+    }
+
     pub async fn get_book(&self, id: &str) -> Result<Book, AppError> {
         // Tags rendered in the current locale (translated); DISTINCT folds raw
         // synonyms into one label, unmapped tags keep their raw name.

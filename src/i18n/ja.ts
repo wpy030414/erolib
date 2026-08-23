@@ -204,6 +204,10 @@ const ja: Record<string, string> = {
   'reader.menu.imageSaved': '画像を保存しました！',
   'reader.menu.imageSaveFailed': '画像の保存に失敗しました',
 
+  'reader.menu.deletePage': 'このページを削除',
+  'reader.menu.pageDeleted': 'ページを削除しました！',
+  'reader.menu.pageDeleteFailed': 'ページの削除に失敗しました',
+
   // Tasks
   'tasks.title': 'タスク',
   'tasks.empty': 'タスクはありません',

@@ -204,6 +204,10 @@ const zh: Record<string, string> = {
   'reader.menu.imageSaved': '图片保存完毕',
   'reader.menu.imageSaveFailed': '图片保存失败',
 
+  'reader.menu.deletePage': '删除本页',
+  'reader.menu.pageDeleted': '本页已删除',
+  'reader.menu.pageDeleteFailed': '删除失败',
+
   // Tasks
   'tasks.title': '任务',
   'tasks.empty': '暂无任务',

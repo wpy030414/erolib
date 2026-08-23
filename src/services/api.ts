@@ -56,6 +56,11 @@ export const api = {
   saveBookPage: (id: string, page: number, dest: string) =>
     invoke<void>('save_book_page', { id, page, dest }),
 
+  // Physically remove one page from the book's archive (reader right-click,
+  // for ad pages). Returns the new page count.
+  deletePage: (id: string, page: number) =>
+    invoke<number>('delete_page', { id, page }),
+
   listBooks: (limit?: number, offset?: number) =>
     invoke<Book[]>('list_books', { limit, offset }),
 

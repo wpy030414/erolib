@@ -204,6 +204,10 @@ const en: Record<string, string> = {
   'reader.menu.imageSaved': 'Image saved!',
   'reader.menu.imageSaveFailed': 'Failed to save image',
 
+  'reader.menu.deletePage': 'Delete page',
+  'reader.menu.pageDeleted': 'Page deleted!',
+  'reader.menu.pageDeleteFailed': 'Failed to delete page',
+
   // Tasks
   'tasks.title': 'Tasks',
   'tasks.empty': 'No tasks yet.',

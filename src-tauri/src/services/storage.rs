@@ -213,6 +213,75 @@ impl StorageService {
         Ok(pages)
     }
 
+    /// Physically remove one page (0-based) from a CB7/CBZ archive.
+    ///
+    /// Zip has no delete, so this repacks every remaining page into a temp
+    /// file next to the original and renames it over. ComicInfo.xml is carried
+    /// over via read_comic_info so title/tags/source/delays round-trip; when
+    /// absent a bare-bones metadata keeps the archive still importable.
+    /// Returns the new page count.
+    pub fn rewrite_without_page(&self, cb7_path: &Path, drop_page: usize) -> Result<usize> {
+        // Drop any cached open handle for this path BEFORE reading — the cached
+        // File descriptor would keep pointing at the old inode after the rename
+        // below, so a later read_page() would silently serve pre-delete content.
+        // `archive_for` re-opens + re-caches on the next page access after the
+        // file is replaced, so invalidating here is safe and required.
+        let _ = self.page_cache.lock().map(|mut c| c.remove(cb7_path));
+
+        let mut pages = self.read_all_pages(cb7_path)?;
+        if drop_page >= pages.len() {
+            anyhow::bail!(
+                "page {drop_page} out of range ({} pages) in {}",
+                pages.len(),
+                cb7_path.display()
+            );
+        }
+        pages.remove(drop_page);
+        if pages.is_empty() {
+            anyhow::bail!("refusing to delete the last page of {}", cb7_path.display());
+        }
+
+        // Read ComicInfo only AFTER we've dropped the per-path cache and BEFORE
+        // the rename, so it comes from the current (to-be-replaced) file, never
+        // a stale cached handle.
+        let metadata = self.read_comic_info(cb7_path).unwrap_or_else(|| BookMetadata {
+            title: cb7_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("untitled")
+                .to_string(),
+            ..BookMetadata::default()
+        });
+
+        // Write the replacement beside the original, then rename over it —
+        // a crash mid-write leaves the original intact.
+        let tmp_path = cb7_path.with_extension("cb7.tmp");
+        {
+            let file = std::fs::File::create(&tmp_path)?;
+            let mut zip = ZipWriter::new(std::io::BufWriter::new(file));
+            let options = FileOptions::default();
+
+            zip.start_file("ComicInfo.xml", options)?;
+            zip.write_all(create_comic_info(&metadata).as_bytes())?;
+
+            for (index, image) in pages.iter().enumerate() {
+                let ext = guess_image_extension(image);
+                let filename = format!("{:04}.{}", index + 1, ext);
+                zip.start_file(&filename, options)?;
+                zip.write_all(image)?;
+            }
+
+            zip.finish()?;
+        }
+        std::fs::rename(&tmp_path, cb7_path)?;
+        // read_all_pages → archive_for re-populated the cache with a handle to
+        // the pre-rename file; that File now points at the replaced inode and
+        // its image_indices are one page too long. Evict it so the next page
+        // access re-opens the repacked archive fresh.
+        let _ = self.page_cache.lock().map(|mut c| c.remove(cb7_path));
+        Ok(pages.len())
+    }
+
     /// Extract a single page image from a CB7/CBZ archive by index.
     ///
     /// Pages are the image entries within the zip (filtered by extension), in

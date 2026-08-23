@@ -112,6 +112,10 @@
         <MdiIcon slot="start" :path="mdiContentSave" :size="18" />
         <div slot="headline">{{ t('reader.menu.saveImage') }}</div>
       </md-menu-item>
+      <md-menu-item v-if="!isAnimated" @click="onDeletePage">
+        <MdiIcon slot="start" :path="mdiDelete" :size="18" />
+        <div slot="headline">{{ t('reader.menu.deletePage') }}</div>
+      </md-menu-item>
     </md-menu>
   </div>
 </template>
@@ -123,6 +127,7 @@ import {
   mdiImageSizeSelectActual,
   mdiPalette,
   mdiContentSave,
+  mdiDelete,
 } from '@mdi/js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -138,6 +143,7 @@ import type { Seed } from '@/services/md3-theme';
 import type { Book } from '@/types';
 import MdiIcon from '@/components/MdiIcon.vue';
 import { useToastStore } from '@/stores/toast';
+import { deleteThumb } from '@/services/thumb-cache';
 
 /** Material Web menu element — uses the same pattern as Library.vue to call
  *  .show() on right-click so the menu opens at the cursor position. */
@@ -762,6 +768,71 @@ async function onSaveImage() {
       const toast = useToastStore();
       toast.addToast('error', t('reader.menu.imageSaveFailed'));
     }
+  }
+}
+
+/** "Delete Page": physically remove the current page from the book's archive —
+ *  for ad pages wedged into a book. The backend repacks the .cb7 without it
+ *  and returns the new page count, so exports no longer contain the page.
+ *  Every later page shifts down one, invalidating every prefetched blob at
+ *  once. The swap must be instant (no loading-skeleton flash), and `blobs`
+ *  is only reactive as a whole — mutating entries in place doesn't retrigger
+ *  `src` — so after the delete we REPLACE blobs with a fresh object holding
+ *  just the page that should now be on screen:
+ *   - Deleting any page with a successor (the common case): that same index
+ *     now holds the NEXT page, whose bytes are fetched BEFORE the state swap.
+ *   - Deleting the last page: the clamp moves onto the previous page; its old
+ *     blob still shows exactly that content, so it's carried over as-is. */
+async function onDeletePage() {
+  menuOpen.value = false;
+  if (isAnimated.value || pageCount.value == null) return;
+
+  const toast = useToastStore();
+  const dropped = current.value;
+  try {
+    const newCount = await api.deletePage(props.id, dropped);
+    const nextIndex = Math.min(dropped, Math.max(0, newCount - 1));
+    const carriedOver = nextIndex !== dropped;
+
+    // Fetch the replacement page before touching reactive state. Skipped when
+    // clamping moved us onto an earlier page — its existing blob is correct.
+    let replacement: string | null = null;
+    if (!carriedOver) {
+      try {
+        const buf = await api.getBookPage(props.id, nextIndex);
+        const mime = mimeFromArrayBuffer(buf);
+        pageExtensions.value[nextIndex] = mime.split('/')[1] ?? 'jpg';
+        replacement = URL.createObjectURL(new Blob([buf], { type: mime }));
+      } catch {
+        // No seamless swap possible; prefetch below will fill the window.
+      }
+    }
+
+    // Single atomic state swap. Replacing blobs.value wholesale guarantees the
+    // src computed recomputes this tick; in-place entry mutation would not.
+    pageCount.value = newCount;
+    const stale = blobs.value;
+    if (replacement) {
+      blobs.value = { [nextIndex]: replacement };
+    } else {
+      // Last-page clamp: the old blob at the clamped index already shows the
+      // right page — carry it into the fresh object so there's no skeleton
+      // flash. (Missing blob just means prefetch fills in a beat later.)
+      const kept = stale[nextIndex];
+      blobs.value = kept ? { [nextIndex]: kept } : {};
+    }
+    for (const url of Object.values(stale)) {
+      if (!Object.values(blobs.value).includes(url)) URL.revokeObjectURL(url);
+    }
+    current.value = nextIndex;
+    saveBookProgress(props.id, current.value);
+    // The cover is extracted from page 0; when it was the one deleted the old
+    // thumbnail is stale, so drop it and let the library re-fetch.
+    if (dropped === 0) void deleteThumb(props.id);
+    toast.addToast('success', t('reader.menu.pageDeleted'));
+  } catch (e) {
+    console.warn('[Reader] Failed to delete page:', e);
+    toast.addToast('error', t('reader.menu.pageDeleteFailed'));
   }
 }
 

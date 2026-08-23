@@ -223,6 +223,41 @@ pub async fn save_book_page(
     Ok(())
 }
 
+/// Physically remove one page (0-based) from the book's CB7/CBZ archive and
+/// return the new page count. The archive is repacked without the dropped page,
+/// so later exports (save_book / sync_to_dir, which copy the whole file) no
+/// longer contain it. The blocking repack runs on a spawn_blocking thread like
+/// the other zip-touching commands.
+#[tauri::command]
+pub async fn delete_page(
+    id: String,
+    page: usize,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let file_path = state
+        .library_service
+        .get_book_file_path(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let storage = state.storage.clone();
+    let new_count = tokio::task::spawn_blocking(move || {
+        storage.rewrite_without_page(std::path::PathBuf::from(&file_path).as_path(), page)
+    })
+    .await
+    .map_err(|e| format!("page delete join failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // Persist the new count and refresh the cover when page 0 was dropped —
+    // same book-level bookkeeping as the service method, kept here so the
+    // heavy repack above stays off the async runtime.
+    state
+        .library_service
+        .finalize_page_deletion(&id, new_count as u32, page == 0)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(new_count as u32)
+}
+
 #[tauri::command]
 pub async fn list_books(
     limit: Option<i64>,

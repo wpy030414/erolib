@@ -176,6 +176,7 @@ fn main() {
             commands::book::get_book_cover_thumb,
             commands::book::save_book,
             commands::book::save_book_page,
+            commands::book::delete_page,
             commands::book::list_books,
             commands::book::open_book,
             commands::book::record_reading,
