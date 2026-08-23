@@ -37,8 +37,15 @@ zip = "0.6"
 sha2 = "0.10"
 # ugoira (動画作) → GIF: decode jpg frames + encode with per-frame delays.
 # GifEncoder auto-quantizes true color → 256-color palette (color_quant).
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Image decode/encode for covers, ugoira→GIF, and PDF/EPUB export. PDF export
+# decodes webp/png/jpeg pages to get pixel dimensions (printpdf has no native
+# dimension probe), so the webp feature is required alongside jpeg/png.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 quick-xml = { version = "0.31", features = ["serialize"] }
+# PDF export/import (each page = one image, metadata in the info dict +
+# an erolib metadata stream). lopdf is also used to read PDFs back on import.
+printpdf = "0.7"
+lopdf = "0.31"
 thiserror = "1.0"
 anyhow = "1.0"
 tracing = "0.1"

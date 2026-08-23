@@ -2,6 +2,38 @@
 use tauri::{Emitter, State};
 
 use crate::AppState;
+use crate::models::{Book, BookMetadata};
+
+/// Project a stored `Book` row into the `BookMetadata` an exporter needs: tags
+/// are split from the comma-joined DB string, provenance is carried across
+/// so cb7/epub/pdf exports all round-trip.
+fn book_to_metadata(book: &Book) -> BookMetadata {
+    let tags = book
+        .tags
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    BookMetadata {
+        title: book.title.clone(),
+        author: book.author.clone(),
+        artist: None,
+        description: None,
+        tags,
+        status: None,
+        rating: None,
+        source_plugin: book.source_plugin.clone(),
+        source_url: book.source_url.clone(),
+        source_post_id: book.source_post_id.clone(),
+        published_at: book.published_at.clone(),
+        scraped_at: book.scraped_at.map(|t| t.to_rfc3339()),
+        delays: book.delays.clone(),
+    }
+}
 
 #[tauri::command]
 pub async fn import_book(
@@ -110,12 +142,16 @@ pub async fn get_book_cover_thumb(
         .map_err(|e| e.to_string())
 }
 
-/// Copy a book file to a destination chosen by the user (via the save dialog).
-/// Looks up the book by id, then duplicates its file to `dest`.
+/// Copy a book file to a destination chosen by the user (via the save dialog),
+/// optionally transpiling it into cb7 / epub / pdf. `format` defaults to "cb7"
+/// (a verbatim copy of the stored archive); the other formats repack the
+/// archive's image pages + ComicInfo metadata into the target container, so
+/// provenance (source url, tags, delays) round-trips through the chosen format.
 #[tauri::command]
 pub async fn save_book(
     id: String,
     dest: String,
+    format: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let book = state
@@ -131,7 +167,29 @@ pub async fn save_book(
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
     }
-    std::fs::copy(src, &dest).map_err(|e| format!("copy to {}: {}", dest.display(), e))?;
+
+    let format = format.unwrap_or_else(|| "cb7".to_string());
+
+    // cb7 is a straight copy of the stored archive — the library file already
+    // carries ComicInfo.xml, so no repackaging is needed.
+    if format == "cb7" {
+        std::fs::copy(src, &dest).map_err(|e| format!("copy to {}: {}", dest.display(), e))?;
+        return Ok(());
+    }
+
+    // epub/pdf: read the pages + metadata out of the stored cb7, then export.
+    // The blocking work (zip read + format write) runs off the async runtime.
+    let storage = state.storage.clone();
+    let src = src.to_path_buf();
+    let metadata = book_to_metadata(&book);
+    tokio::task::spawn_blocking(move || -> std::result::Result<(), anyhow::Error> {
+        let images = storage.read_all_pages(&src)?;
+        crate::services::export::export_book(&images, &metadata, &dest, &format)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("export join failed: {e}"))?
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 

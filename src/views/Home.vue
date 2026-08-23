@@ -95,13 +95,15 @@
 
     <!-- Shared meta dialog -->
     <BookMetaDialog ref="metaDialog" />
+
+    <!-- Shared export dialog (format picker → save) -->
+    <BookExportDialog ref="exportDialog" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
-import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import '@material/web/menu/menu.js';
 import '@material/web/menu/menu-item.js';
 import {
@@ -119,6 +121,7 @@ import SourceCard from '@/components/SourceCard.vue';
 import WallCover from '@/components/WallCover.vue';
 import BookCollectionPicker from '@/components/BookCollectionPicker.vue';
 import BookMetaDialog from '@/components/BookMetaDialog.vue';
+import BookExportDialog from '@/components/BookExportDialog.vue';
 import { useBookMenu, type MdMenuElement } from '@/composables/useBookMenu';
 import type { Book } from '@/types';
 
@@ -128,6 +131,7 @@ const toast = useToastStore();
 
 const { menuOpen, menuRefs, pickerBookId, setMenuRef, openMenu, openCollectionPicker, clearAll } = useBookMenu();
 const metaDialog = ref<InstanceType<typeof BookMetaDialog> | null>(null);
+const exportDialog = ref<InstanceType<typeof BookExportDialog> | null>(null);
 
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -270,23 +274,9 @@ async function deleteBookItem(book: Book) {
   }
 }
 
-async function saveToLocal(book: Book) {
+function saveToLocal(book: Book) {
   menuOpen[book.id] = false;
-  const defaultName = `${book.title || 'book'}.${book.format}`;
-  const dest = await dialogSave({
-    defaultPath: defaultName,
-    filters: [
-      { name: book.format.toUpperCase(), extensions: [book.format] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
-  });
-  if (dest) {
-    try {
-      await api.saveBook(book.id, dest);
-    } catch {
-      // silent
-    }
-  }
+  exportDialog.value?.open(book);
 }
 
 function viewMeta(book: Book) {

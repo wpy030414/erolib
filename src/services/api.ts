@@ -47,9 +47,10 @@ export const api = {
   getBookCoverThumb: (id: string) =>
     invoke<number[]>('get_book_cover_thumb', { id }),
 
-  // Copy a book file to a user-chosen location (right-click → 保存到本地).
-  saveBook: (id: string, dest: string) =>
-    invoke<void>('save_book', { id, dest }),
+  // Copy/convert a book file to a user-chosen location. `format` selects cb7
+  // (verbatim copy) / epub / pdf (repack with provenance). Right-click → 导出.
+  saveBook: (id: string, dest: string, format?: 'cb7' | 'epub' | 'pdf') =>
+    invoke<void>('save_book', { id, dest, format }),
 
   // Export a single page image to a user-chosen location (reader right-click).
   saveBookPage: (id: string, page: number, dest: string) =>

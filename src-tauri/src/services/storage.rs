@@ -192,6 +192,27 @@ impl StorageService {
         }
     }
 
+    /// Read every image page from a CB7/CBZ archive, in reading order.
+    /// The bulk read behind single-page deletion — callers rewrite the
+    /// archive minus the dropped page, so everything must be in memory anyway.
+    pub fn read_all_pages(&self, cb7_path: &Path) -> Result<Vec<Vec<u8>>> {
+        let cached = self
+            .archive_for(cb7_path)
+            .ok_or_else(|| anyhow::anyhow!("cannot open archive: {}", cb7_path.display()))?;
+        let entry_indices = cached.image_indices.clone();
+        let mut guard = cached.archive.lock().map_err(|_| {
+            anyhow::anyhow!("archive handle poisoned: {}", cb7_path.display())
+        })?;
+        let mut pages = Vec::with_capacity(entry_indices.len());
+        for idx in entry_indices {
+            let mut entry = guard.by_index(idx)?;
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf)?;
+            pages.push(buf);
+        }
+        Ok(pages)
+    }
+
     /// Extract a single page image from a CB7/CBZ archive by index.
     ///
     /// Pages are the image entries within the zip (filtered by extension), in
@@ -269,7 +290,7 @@ impl StorageService {
     }
 }
 
-fn create_comic_info(metadata: &BookMetadata) -> String {
+pub fn create_comic_info(metadata: &BookMetadata) -> String {
     let mut s = String::new();
     s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     s.push_str(
@@ -402,7 +423,7 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Guess the image extension from magic bytes.
-fn guess_image_extension(bytes: &[u8]) -> &'static str {
+pub fn guess_image_extension(bytes: &[u8]) -> &'static str {
     if bytes.len() >= 4 {
         if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
             return "png";
