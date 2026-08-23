@@ -16,11 +16,11 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src-tauri/src/services/task_manager.rs` | 调度主逻辑（~2476 行） |
+| `src-tauri/src/services/task_manager.rs` | 调度主逻辑（~2690 行） |
 | `src-tauri/src/services/task.rs` | 数据模型 |
 | `src-tauri/src/services/aria2.rs` | aria2 JSON-RPC 客户端 |
 | `src-tauri/src/services/proxy.rs` | 系统 HTTP 代理检测 |
-| `src-tauri/src/commands/tasks.rs` | Tauri 命令层（12 个命令） |
+| `src-tauri/src/commands/tasks.rs` | Tauri 命令层（13 个命令） |
 | `src/stores/tasks.ts` | 前端状态管理 |
 | `src/views/Tasks.vue` | 任务管理页面 |
 | `src-tauri/schema/schema.sql` → `tasks` 表 | 持久化 |
@@ -51,6 +51,8 @@ enum TaskPayload {
     AhentaiGallery { gallery_id: String, title: String },
     NicecatGallery { comic_id: String, title: String },
 }
+// payload.source_url()：各来源规范化 books.source_url（与 process_* 写库的
+// 字符串逐字节一致），重新下载按它精确匹配本地书。
 ```
 
 ### TaskSnapshot（前端可见）
@@ -100,6 +102,7 @@ struct TaskSnapshot {
 | `task_cancel` | `{ taskId }` | `void` |
 | `task_delete` | `{ taskId }` | `void` |
 | `task_retry` | `{ taskId }` | `void` |
+| `task_redownload` | `{ taskId }` | `RedownloadAction`（`restarted` \| `redownloaded` \| `already_complete`） |
 | `tasks_clear_completed` | — | `number`（清除数） |
 | `tasks_retry_all` | — | `[number, number]`（retried, resumed） |
 | `task_enqueue_pixiv_work` | `{ cookie, workId, title }` | `string`（taskId） |
@@ -132,6 +135,27 @@ Pending ──run──→ Running ──ok──→ Completed
 
 `reconcile_on_startup()`：把所有遗留 `running` 状态的任务置为 `paused`（speed=0, run_started_at=NULL），让用户可以 resume。
 
+## 8.5 完成任务重新下载（task_redownload）
+
+仅 `Completed` 任务可用。按本地档案**实际页数**（`storage.count_pages`）对比来源
+**当前远端页数**逐源判定——库内 per-source 幂等守卫只看「书行存在」，页被删的书
+永远无法自愈，此命令补上这个洞：
+
+| 判定 | 动作 | 返回 |
+|---|---|---|
+| 无匹配书行 | 直接 retry_task 全量重下 | `restarted` |
+| 本地 = 远端 | no-op，记日志「本地完整」 | `already_complete` |
+| 本地 < 远端 或文件丢失 | remove_book + retry_task 整本重下 | `redownloaded` |
+| 本地 > 远端 | **拒绝执行**（疑似源站删减，覆盖会丢本地独有内容） | 报错 |
+
+- 远端页数先行获取，任何本地变更之前完成——网络失败不动书库
+- ugoira 书比较帧数（DB page_count 恒 1），其余比较列表页数
+- 同源并发守卫：有其它 running 任务的 payload `source_url()` 相同则拒绝
+- 执行前 `refresh_payload_cookie`：用 app 内活登录刷新 payload 里可能过期的
+  cookie（Pixiv / EHentai）
+- 前端 Tasks.vue 对 completed 卡片显示「重新下载」按钮，全局单飞 debounce；
+  toast 按 action 区分（已完整 / 重下中 / 失败）
+
 ## 9. 前端 store 行为
 
 - `init()` 注册三个 Tauri 事件监听
@@ -147,6 +171,9 @@ Pending ──run──→ Running ──ok──→ Completed
 - 完成后必须 `register_stored_book`（不复制文件，直接注册已写好的 CB7）
 - `book_id` 回填后前端才能一键跳阅读器
 - 下载临时目录：`{app_local_data_dir}/downloads/{task_id}`
+- `TaskPayload::source_url()` 必须与各 `process_*` 写库的 `books.source_url`
+  逐字节一致（task.rs 注释里列了各源落点），否则重新下载匹配不到书
+- 重新下载先远端后本地：远端页数拿不到时不得动任何本地数据
 
 ## 11. 相关模块
 

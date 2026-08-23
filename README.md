@@ -35,8 +35,9 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 
 ## ✨ 核心特性
 
-- 📖 **本地书库**：导入 CB7 / CBZ / CBR / PDF，封面网格浏览，全文搜索 + 标签筛选，阅读列表管理
-- 🖼️ **沉浸式阅读器**：全窗口沉浸，键盘 / 点击翻页，动图 (ugoira) 原生支持，进度记忆，自定义主题
+- 📖 **本地书库**：导入 CB7 / CBZ / CBR / EPUB / PDF，封面网格浏览，全文搜索 + 标签筛选，阅读列表管理
+- 📤 **多格式导出**：cb7 / epub / pdf 三选一，来源元信息随行，导出再导入零丢失
+- 🖼️ **沉浸式阅读器**：全窗口沉浸，键盘 / 点击翻页，动图 (ugoira) 原生支持，进度记忆，自定义主题，单页删除
 - 🎨 **四大下载源**：Pixiv / EHentai / EXHentai / ASMHentai / NiceCat，统一任务管线，断点续传
 - 🌐 **OPDS / RSS 共享**：内置 HTTP 服务器，局域网内设备开箱即达，直出单页图 + HTML 图廊
 - 🎨 **MD3 动态主题**：4 个内置种子色 + 自定义主题（从书页提取主色），三语界面（中文 / English / 日本語）
@@ -126,7 +127,7 @@ pnpm tauri build      # 构建生产包（.app / .dmg / .exe / .msi）
 默认监听全部网卡、无鉴权，方便局域网内设备访问。在公共 / 不可信 Wi-Fi 下，请到「设置 → 共享」手动关闭服务器。
 
 **Q：支持哪些文件格式？**
-导入：CB7 / CBZ / CBR / PDF；下载产物：CB7（动图为帧序列 + 延时）。
+导入：CB7 / CBZ / CBR / EPUB / PDF；导出：CB7 / EPUB / PDF；下载产物：CB7（动图为帧序列 + 延时）。
 
 **Q：数据存在哪里？**
 - macOS：`~/Library/Application Support/im.xrl.erolib/`

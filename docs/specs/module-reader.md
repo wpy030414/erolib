@@ -17,7 +17,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/views/Reader.vue` | 沉浸式阅读器（~1074 行） |
+| `src/views/Reader.vue` | 沉浸式阅读器（~1177 行） |
 | `src/composables/useBookMenu.ts` | 右键菜单状态管理 |
 | `src-tauri/src/commands/book.rs` → `get_book_page` | 单页图片读取 |
 | `src-tauri/src/commands/book.rs` → `open_book` / `record_reading` | 阅读会话 |
@@ -34,6 +34,7 @@
 | `record_reading` | `{ id, sessionId, durationMs }` | `void` |
 | `get_weekly_reading_ms` | — | `number` |
 | `save_book_page` | `{ id, page, dest }` | `void` |
+| `delete_page` | `{ id, page }` | `number`（删除后的新页数） |
 
 ## 4. localStorage 键
 
@@ -95,6 +96,9 @@ unmount → record_reading(id, sessionId, deltaMs)
 
 - 设为主题：`sourceColorFromImage` 提取主色 → `addCustomTheme`（≤1920px 全图 + 100×100 缩略图 dataURL）
 - 保存图片：`saveBookPage` + `save(plugin-dialog)`
+- 删除本页（动画书隐藏）：`deletePage(id, current)` → 详见
+  [module-library.md](./module-library.md) 单页删除一节；成功 toast +
+  `deleteThumb`（删的是首页时）
 
 ## 9. 约束
 

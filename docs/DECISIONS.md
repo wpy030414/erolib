@@ -324,3 +324,51 @@
 - 始终滚动：短标题也滚动，视觉干扰
 - tooltip：hover 时弹 tooltip，但不如 marquee 直观
 
+---
+
+## D-019：导出 cb7 / epub / pdf 三格式 + 元信息 round-trip
+
+**背景**：用户需要把书库的书分享给不用 EroLib 的人（epub 给电纸书阅读器、pdf
+给通用设备），且导出的书重新导入时不能丢来源元信息。
+
+**选择**：`save_book { id, dest, format? }` 三选一。cb7 原样复制；epub 手写
+最小 EPUB 3（OPF `<dc:*>` + `<meta property="ero:...">` refines）；pdf 用
+printpdf 每图一页（JPEG 走 DCTDecode 流原样嵌入），再经 lopdf 把完整
+`BookMetadata` JSON 作为 Catalog `/Metadata` 流注入。
+
+**理由**：
+- 三种载体都能无损带回全部来源字段 → 导出再导入元信息零丢失（单测覆盖
+  epub/pdf round-trip）
+- JPEG 不重编码：PDF 里 DCTDecode 直接吃原始字节，体积与画质都不受损
+- printpdf 只管画页，任意流注入走 lopdf 后处理——各用其长
+- EPUB/PDF 导入后统一重打包为 CB7，reader / 封面 / 同步全链路只面对一种容器
+
+**替代方案**：
+- 仅支持原样复制 cb7：无法给非漫画阅读器使用
+- 引入 calibre / 外部转换器：额外二进制依赖，违背开箱即用
+- PDF 全页解码为像素再编码：体积爆炸且二次有损
+
+---
+
+## D-020：完成任务「智能重新下载」按实际页数对比判定
+
+**背景**：源站删页/换图后，已下载的书会缺页——而 `process_*` 的库内幂等守卫
+只要书行存在就跳过，缺页书永远无法自愈；纯 retry 又会对完整的书做无谓全量
+重下。
+
+**选择**：`task_redownload(task_id)` 对 Completed 任务取本地档案**实际页数**
+（zip 内图像条目数）对比来源**当前远端页数**：相等 no-op；缺页/文件丢失则
+remove_book + retry 整本重下；本地多于远端直接拒绝（疑似源站删减，覆盖会不可逆
+丢内容）；无书行走 plain retry。
+
+**理由**：
+- 本地真值来自磁盘档案而非 DB `page_count`（ugoira 该列恒 1，改比帧数）
+- 远端列表先取，任何本地变更之后才发生——网络失败书库纹丝不动
+- 同源并发守卫挡住「另一任务正在下同一本」的竞态
+- 返回 `RedownloadAction` 枚举让前端 toast 精确区分三种结果
+
+**替代方案**：
+- 一律整本重下：浪费带宽，还会把用户手动删广告页的成果抹掉
+- 只比对 DB page_count：ugoira 失真，且文件被手动移走时误判完整
+- 覆盖式重下不删旧档：rename 原子性破坏后可能留下混合新旧页的档案
+

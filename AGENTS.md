@@ -32,7 +32,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 |---|---|
 | 平台 | macOS (Apple Silicon) + Windows (x64) |
 | 下载源 | Pixiv / EHentai / EXHentai / ASMHentai / NiceCat（共 4 个，不增加） |
-| 文件格式 | 导入 CB7/CBZ/CBR/PDF，输出 CB7 |
+| 文件格式 | 导入 CB7/CBZ/CBR/EPUB/PDF，导出 CB7/EPUB/PDF，库内统一 CB7 |
 | 语言 | 中文 / English / 日本語（3 语，不增加） |
 | 主题 | 4 内置种子色 + 3 自定义主题 |
 | 任务上限 | 100 条 |
@@ -85,6 +85,9 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 ```
 
 **CB7**：`create_cb7` 写入 ZIP（含 `ComicInfo.xml` 元信息 + `0001.jpg` 编号图片页）。`extract_cover` 从 CB7 提取首图写入 `covers/`。`PAGE_CACHE_MAX=8` 内存缓存已打开的 CB7 以避免重复扫描 ZIP 中央目录。
+**单页删除**：`rewrite_without_page` 全量读出剩余页 → 写 `.cb7.tmp` → rename 覆盖（zip 无删除，崩溃不损原件）；驱逐归档缓存两次（读前防旧 inode、rename 后防多一页的索引），`finalize_page_deletion` 收尾 DB page_count + 删首页时重提封面。
+
+**导出 / 导入格式封装**（`services/export.rs` / `services/import.rs`）：`save_book { id, dest, format? }` 支持 cb7（原样复制）/ epub（OPF `<dc:*>` + `ero:` refines + 每图一 XHTML 页）/ pdf（printpdf 每图一页、JPEG 走 DCTDecode 原样嵌入，lopdf 注入 Catalog `/Metadata` 的 `BookMetadata` JSON 流）。导入侧 EPUB 按 spine 取 `<img src>`、PDF 遍历每页首个图像 XObject（DCTDecode 直取字节、裸像素按 Width/Height 重编码 JPEG），元信息从 ero: meta / erolib JSON 流还原，无则退回 Info 字典；EPUB/PDF 统一重打包为库内 CB7。三格式 round-trip 有单测（`services::export::tests`）。
 
 ### 登录凭证 — JSON 文件 + WKWebView Cookie Store（macOS 双层）
 
@@ -149,6 +152,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - **下载后端**：四个 source 统一走 **分批并发下载**（`download_pages_concurrent`，8 并发/批，批间检查取消/暂停，图片落临时目录供断点续传），**全部来源的图片下载统一走 aria2**（`download_one_image` → `Aria2Client::add_uri`）。各来源的 `reqwest::Client` 仅用于**元数据抓取**（页面列表、标签、标题等 API/HTML 解析），不参与图片二进制下载。
 - **aria2 自动 HTTP 代理**：`services/proxy.rs` `detect_http_proxy()` 取 env（`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` + 小写）+ macOS `scutil --proxy`（Clash / V2Ray「设为系统代理」后写入系统配置），结果 60s 缓存（避免一本几十张图每张都 spawn scutil）；跳过 aria2 不支持的 SOCKS。`Aria2Client::add_uri` 检测到则注入 `all-proxy` option，Pixiv / EHentai 等翻墙下载零配置。
 - **任务模型**（`services/task.rs` `TaskSnapshot`）含 `speed`（实时下行速度 B/s）、`logs`（步骤日志 JSON 数组，上限 ~200 行）、`book_id`（完成后回填，前端一键跳阅读器）。`enqueue` 保留最新 **100 条**（先 `DELETE … NOT IN (SELECT … ORDER BY created_at DESC LIMIT 99)` 再插入）。
+- **完成任务重新下载**（`task_redownload`）：本地档案实际页数（zip 图像条目数，ugoira 比帧数）对比来源当前远端页数——相等 no-op（`already_complete`）；缺页/文件丢失 remove_book + retry 整本重下（`redownloaded`）；本地多于远端拒绝（疑似源站删减，覆盖丢内容）；无书行走 plain retry（`restarted`）。远端列表先行获取，失败不动书库；同源并发守卫 + `refresh_payload_cookie` 刷新过期 cookie。`TaskPayload::source_url()` 必须与各 `process_*` 写库字符串逐字节一致。
 - aria2 进度：`wait_for_gid_with_progress` 轮询 `tell_status`，回调里 `set_progress(.., speed)` + `append_log`；成功后 `register_stored_book` → `set_book_id`。
 - 前端 `stores/tasks.ts` 全局监听 `task://progress`（更新列表 + 书库刷新）与 `task://toast`（终态 toast）；`views/Tasks.vue` 左右分栏——运行中卡片右下角显示速度，详情 pane 显示步骤日志 / 创建完成时间 / 操作区。
 - **分批下载**（`download_pages_concurrent`）：所有 source 统一走 8 并发 JoinSet，每页一条日志 `📥 第 i/n 页 完成`，错误日志 `❌ 第 i 页失败`；图片落临时目录供断点续传；每页完成后推送进度。
@@ -223,6 +227,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - **快捷键**：ArrowRight / PageDown / 空格 → 下一页；ArrowLeft / PageUp → 上一页。
 - **点击翻页**：viewport 左 1/3 上一页、右 1/3 下一页、中间 ~34% 无动作（动画书点击无效）。
 - **自动隐藏 UI**：bar zone（顶部 64px / 底部 56px）内停住无计时器，移出 zone 启动 2s 计时隐藏。
+- **删除本页**：右键菜单项（动画书隐藏）。后端重打包 cb7 物理移除该页并返回新页数；前端先取好下一页 blob 再整体替换 `blobs` 对象（原子换态，无骨架闪烁），删末页 clamp 时旧 blob 直接复用；删首页时 `deleteThumb` 清缩略图缓存。
 
 ## 主题
 
@@ -234,6 +239,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - `md-outlined-text-field` 用 `:value` + `@input`；`md-switch` / `md-tabs` / `md-outlined-select` / `md-slider` 用 ref + `addEventListener` 并在卸载时清理（change 非 composed）。
 - `md-slider` 别用 `:value` 单向绑定（拖动被写回覆盖）；`md-circular-progress` determinate 频繁更新会卡，环形进度改手搓 SVG。
 - 图标用 `@mdi/js` 的 path；别把 Vue 组件作为 MWC 自定义元素的 slot 内容（升级时机不识别）。
+- **PDF 图片流不能用 lopdf 的 `decompressed_content()`**（对 Subtype=Image 报错），直接读 `stream.content` 按 Filter 解码；**printpdf 禁止 `use printpdf::*`**（其 re-export 遮蔽外部 `image` crate），路径显式写。
 - **全局 `user-select: none` + `:focus-visible { outline: none }`**（`styles/md3.css` 全局默认）：拖选/MWC 焦点蓝框全部禁用。输入框/textarea/[contenteditable] 例外保持选中 + 光标。**不要在组件里单独加 `user-select` 或 `outline`**——全局规则已覆盖，组件级覆盖反而产生不一致。
 
 ## 开发命令

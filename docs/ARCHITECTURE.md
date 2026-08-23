@@ -33,7 +33,7 @@
 **分层原则**：
 - 前端只管 UI 状态和用户交互，不直接操作文件或网络
 - 后端是唯一的 I/O 层（文件读写、网络请求、数据库操作）
-- 前后端通过 68 个 Tauri `invoke` 命令 + 6 个事件通道通信
+- 前后端通过 70 个 Tauri `invoke` 命令 + 6 个事件通道通信
 
 ## 2. 前端架构
 
@@ -44,7 +44,7 @@ src/
 ├── components/     共享组件（AppShell / SourceCard / FeedList / SearchBox / WallCover / CollectionDialog / ...）
 ├── composables/    可复用逻辑（useBrowseFeed / useInfiniteSentinel / useDebouncedModel）
 ├── services/       API 封装（api.ts）+ MD3 主题引擎（md3-theme.ts）+ IndexedDB 封面缓存（thumb-cache.ts）
-├── i18n/           三语字典（zh / en / ja，240 键）
+├── i18n/           三语字典（zh / en / ja，各 250 键）
 ├── types/          TypeScript 接口（Book / TaskItem / CardStatus / PixivWork / GalleryListItem / ...）
 ├── styles/         MD3 design tokens（tokens.css）+ 全局基础样式（md3.css）
 └── router/         Vue Router 路由定义（hash mode）
@@ -129,13 +129,13 @@ Pixiv 的 4 个 feed（recommend / following / bookmark / search）共享同一�
 src-tauri/src/
 ├── main.rs           命令注册入口 + AppState 构建 + 启动迁移
 ├── commands/         Tauri 命令层（薄，参数校验 + 调 service + map_err）
-│   ├── book.rs       13 命令（CRUD + 阅读会话 + 统计）
+│   ├── book.rs       14 命令（CRUD + 单页删除 + 阅读会话 + 统计）
 │   ├── pixiv.rs      9 命令（登录读写清 + 浏览 + 代理）
 │   ├── pixiv_login.rs 1 命令（开登录窗 + 轮询 cookie）
 │   ├── ehentai.rs    6 命令（登录 + 搜索 + 代理）
 │   ├── ahentai.rs    3 命令（搜索 + 代理）
 │   ├── nicecat.rs    3 命令（代理 + API 透传）
-│   ├── tasks.rs      12 命令（CRUD + 四种源入队）
+│   ├── tasks.rs      13 命令（CRUD + 重新下载 + 四种源入队）
 │   ├── collection.rs 8 命令（阅读列表 CRUD）
 │   ├── server.rs     4 命令（OPDS/RSS 启停）
 │   ├── search.rs     2 命令（全文搜索 + 标签计数）
@@ -153,12 +153,14 @@ src-tauri/src/
 │   ├── ehentai.rs    EHentai HTML 解析客户端
 │   ├── ahentai.rs    ASMHentai HTML 解析客户端
 │   ├── nicecat.rs    NiceCat HTTP API 客户端（RC4 令牌鉴权）
-│   ├── library.rs    书库核心（导入 / 删除 / 阅读会话 / 统计）
+│   ├── library.rs    书库核心（导入 / 删除 / 单页删除收尾 / 阅读会话 / 统计）
 │   ├── collection_service.rs 阅读列表服务
 │   ├── search.rs     搜索服务（LIKE + 标签本地化合并）
 │   ├── similarity.rs SIMILARITY UDF（Levenshtein 归一化）
 │   ├── locale.rs     三语标签翻译物化
-│   ├── storage.rs    CB7 文件管理（create_cb7 / extract_cover / read_page / 缓存）
+│   ├── storage.rs    CB7 文件管理（create_cb7 / extract_cover / read_page / 整档读页 / 单页删除重打包 / 缓存）
+│   ├── export.rs     导出格式封装（cb7 原样 / epub OPF+XHTML / pdf printpdf+lopdf 元数据流）
+│   ├── import.rs     EPUB/PDF 导入解析（spine 取图 + XObject 图像流 → 统一重打包 CB7）
 │   ├── opds.rs       OPDS Atom feed 生成
 │   ├── rss.rs        RSS 2.0 feed 生成
 │   └── feed.rs       OPDS / RSS 共享的元信息渲染（book_metadata_blurb）
@@ -182,16 +184,16 @@ src-tauri/src/
    f. TaskManager::new + init_self_ref + reconcile_on_startup — running → paused
    g. 管理 PixivSession / EhentaiSession（JSON 持久化）
    h. [macOS] WKWebView networking warmup（隐藏 1×1 webview 吸冷启动）
-3. 注册 68 个 Tauri 命令
+3. 注册 70 个 Tauri 命令
 4. 加载插件（http / shell / dialog / fs / clipboard_manager / opener）
 5. 运行事件循环
 ```
 
-### 命令清单（68 个）
+### 命令清单（70 个）
 
 | 模块 | 数量 | 命令名 |
 |---|---|---|
-| book | 13 | `import_book` `delete_book` `get_book` `get_book_page` `get_book_page_count` `get_book_cover_thumb` `save_book` `save_book_page` `list_books` `open_book` `record_reading` `get_weekly_reading_ms` `list_recent_books` |
+| book | 14 | `import_book` `delete_book` `get_book` `get_book_page` `get_book_page_count` `get_book_cover_thumb` `save_book` `save_book_page` `delete_page` `list_books` `open_book` `record_reading` `get_weekly_reading_ms` `list_recent_books` |
 | sync | 1 | `sync_to_dir` |
 | reset | 1 | `reset_app_data` |
 | search | 2 | `search_books` `get_all_tags` |
@@ -201,7 +203,7 @@ src-tauri/src/
 | ehentai | 6 | `ehentai_open_login_window` `ehentai_get_login` `ehentai_clear_login` `ehentai_search` `ehentai_proxy_thumb` `ehentai_browse_status` |
 | ahentai | 3 | `ahentai_search` `ahentai_proxy_thumb` `ahentai_browse_status` |
 | nicecat | 3 | `nicecat_proxy_thumb` `nicecat_browse_status` `nicecat_fetch_api` |
-| tasks | 12 | `tasks_list` `task_pause` `task_resume` `task_cancel` `task_delete` `task_retry` `tasks_clear_completed` `tasks_retry_all` `task_enqueue_ehentai_gallery` `task_enqueue_pixiv_work` `task_enqueue_ahentai_gallery` `task_enqueue_nicecat_gallery` |
+| tasks | 13 | `tasks_list` `task_pause` `task_resume` `task_cancel` `task_delete` `task_retry` `task_redownload` `tasks_clear_completed` `tasks_retry_all` `task_enqueue_ehentai_gallery` `task_enqueue_pixiv_work` `task_enqueue_ahentai_gallery` `task_enqueue_nicecat_gallery` |
 | collection | 8 | `list_collections` `reorder_collections` `create_collection` `rename_collection` `delete_collection` `add_book_to_collection` `remove_book_from_collection` `get_book_collections` |
 | update | 4 | `check_update` `download_update` `install_update` `quit_and_install` |
 
@@ -219,6 +221,7 @@ src-tauri/src/
 | task_manager | 日志上限 | 200 行 |
 | task_manager | speed EMA | α=0.3，ticker 400ms |
 | storage | PAGE_CACHE_MAX | 8 |
+| export/import | PDF 页尺寸 | 图像像素 @96dpi（1px ≈ 1pt） |
 | OPDS 默认端口 | settings.ts | 5269 |
 | RSS 默认端口 | settings.ts | 1269 |
 | OPDS/RSS 监听 | server.rs | `0.0.0.0:{port}` |
@@ -377,7 +380,9 @@ axum Router
 | reqwest | 0.11 | HTTP 客户端（元数据抓取） |
 | scraper | 0.18 | HTML 解析 |
 | zip | 0.6 | CB7 文件读写 |
-| image | 0.25 | 封面缩略图降采样 |
+| image | 0.25（jpeg/png/webp） | 封面缩略图降采样 + PDF 导出解码 + EPUB/PDF 导入重编码 |
+| printpdf | 0.7 | PDF 导出（每图一页，JPEG 走 DCT 流原样嵌入） |
+| lopdf | 0.31 | PDF 元数据流注入（导出）+ 图像流提取（导入） |
 | quick-xml | 0.31 | ComicInfo.xml + Atom feed 解析 |
 | sha2 | 0.10 | 同步文件名哈希 + NiceCat dateKey |
 | base64 | 0.22 | NiceCat RC4 令牌编码 |

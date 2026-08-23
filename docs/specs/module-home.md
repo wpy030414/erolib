@@ -16,6 +16,7 @@
 | 文件 | 职责 |
 |---|---|
 | `src/views/Home.vue` | 首页视图 |
+| `src/components/BookExportDialog.vue` | 导出格式选择（cb7/epub/pdf） |
 | `src/components/WallCover.vue` | 封面旋转展示墙 |
 | `src/composables/useBookMenu.ts` | 右键菜单逻辑 |
 | `src/components/BookCollectionPicker.vue` | 加入列表选择器 |
@@ -57,7 +58,8 @@
 每本书右键支持：
 - **加入列表**：弹出 `BookCollectionPicker` 选择目标列表
 - **查看元信息**：弹出 `BookMetaDialog`
-- **保存到本地**：`saveBook` + `plugin-dialog` 选择目标路径
+- **导出**：弹出 `BookExportDialog`（格式 cb7/epub/pdf → save dialog），详见
+  [module-library.md](./module-library.md) 导出一节
 - **删除**：`deleteBook` → emit `book://deleted` → 重新拉取 12 本补位
 
 ## 6. 约束
