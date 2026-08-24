@@ -127,7 +127,7 @@ pnpm tauri build      # 构建生产包（.app / .dmg / .exe / .msi）
 默认监听全部网卡、无鉴权，方便局域网内设备访问。在公共 / 不可信 Wi-Fi 下，请到「设置 → 共享」手动关闭服务器。
 
 **Q：支持哪些文件格式？**
-导入：CB7 / CBZ / CBR / EPUB / PDF；导出：CB7 / EPUB / PDF；下载产物：CB7（动图为帧序列 + 延时）。
+导入：CB7 / CBZ / CBR / EPUB / PDF；导出：CB7 / EPUB / PDF；下载产物：CB7（动图为帧序列 + 延时）。库内图片页统一按有损 WebP 存储（下载/导入时自动重编码，仅在结果更小时替换，源已是 WebP 直通），跨来源格式混用不会影响导出。
 
 **Q：数据存在哪里？**
 - macOS：`~/Library/Application Support/im.xrl.erolib/`

@@ -556,6 +556,13 @@ function mimeFromArrayBuffer(buf: ArrayBuffer): string {
     b[11] === 0x50
   )
     return 'image/webp';
+  // ISO-BMFF "ftyp" box with an avif/avis brand: AVIF pages still present in
+  // pre-migration books. (macOS 12's WebKit can't render AVIF regardless, but
+  // the blob type should at least be honest rather than mislabeled jpeg.)
+  if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+    const brand = String.fromCharCode(b[8], b[9], b[10], b[11]);
+    if (brand === 'avif' || brand === 'avis') return 'image/avif';
+  }
   return 'image/jpeg';
 }
 

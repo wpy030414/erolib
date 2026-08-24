@@ -372,3 +372,35 @@ remove_book + retry 整本重下；本地多于远端直接拒绝（疑似源站
 - 只比对 DB page_count：ugoira 失真，且文件被手动移走时误判完整
 - 覆盖式重下不删旧档：rename 原子性破坏后可能留下混合新旧页的档案
 
+
+---
+
+## D-021：图片页统一按有损 WebP 收敛（下载/导入时重编码）
+
+**背景**：书库混有 jpg/png/webp/AVIF 四种格式（pixiv 开始下发 AVIF 后，
+`guess_image_extension` 不认 avif 魔数 → 误标 `.jpg` → 导出 PDF 时 image crate
+解码失败 → "decode jpeg dims" 导出中止）。PDF 导出另有 printpdf 0.7.0 的
+SMask 序列化 bug（`height: img.width` 抄错），配合 `has_alpha` 恒真判定，所有
+webp/png 书导出整本空白。根因都是「库内格式不统一 + 导出对格式做假设」。
+
+**选择**：所有下载/导入（`create_cb7` 统一入口，`reencode` 开关）把每页重编码
+为有损 WebP（libwebp 静态编译，质量 80，源已是 WebP 的直通）；存量书由一次性
+迁移脚本 `src-tauri/src/bin/migrate_webp.rs` 批量转换（ugoira 帧序列跳过）。
+导出侧修复：JPEG 只读头部拿尺寸（不完整解码）、alpha 合成白底绕开 SMask bug。
+image crate 仅加 `avif-native`（dav1d 解码存量 AVIF 页），不引入 AVIF 编码器。
+重编码是「仅在更小时替换」：pixiv 的 AVIF 源已经压得很紧，q80 会反而变大，
+这类页保留原格式（`ensure_webp` / 迁移脚本同逻辑），保证「省尺寸」目标成立。
+
+**理由**：
+- 格式统一后导出/导入/封面/缩略图只面对一种页格式，格式假设不再出错
+- lossy WebP（libwebp C 编码）比 image 自带的 lossless VP8L 编码器小一个量级，
+  且比原 jpg 源再省 20-40%；libwebp-sys 自带 C 源码、cc 编译，无 nasm/CMake 依赖
+- AVIF 被否：rav1e 纯 Rust 编码慢 10 倍以上、macOS 12 WebView 不支持 AVIF 渲染、
+  dav1d 在 Windows 的 meson 构建链脆
+- 导出不重编码 JPEG 的 DCT 直嵌仍保留；非 JPEG 页解码后 alpha 合成白底（透明
+  边缘漫画中无意义，且彻底绕开 printpdf 的 SMask bug）
+
+**替代方案**：
+- 统一 AVIF：尺寸最小，但编码速度/依赖/兼容性三项成本都高（见 D-021 理由）
+- 只修导出容错不统一格式：存量书反复踩格式假设，治标不治本
+- 用 image 的 lossless WebP 编码：jpg 源会越转越大，违背「节省尺寸」初衷

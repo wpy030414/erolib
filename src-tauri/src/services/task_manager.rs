@@ -1557,6 +1557,7 @@ async fn process_pixiv_work(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
+            true,
         )
         .context("create cb7")?;
     if let Some(tid) = task_id {
@@ -1725,6 +1726,7 @@ async fn process_pixiv_ugoira(
                 delays: Some(delays_json.clone()),
                 ..Default::default()
             },
+            false,
         )
         .context("create cb7 (ugoira)")?;
     if let Some(tid) = task_id {
@@ -1749,11 +1751,12 @@ async fn process_pixiv_ugoira(
     }
 
     // The cb7's first frame makes a poor cover (often a transition frame) —
-    // overwrite it with Pixiv's own thumbnail (cover_url from the detail API).
+    // overwrite it with Pixiv's own thumbnail (cover_url from the detail API),
+    // re-encoded to the unified webp cover format like `extract_cover`.
     if let Some(url) = work.cover_url.as_deref().filter(|u| !u.is_empty()) {
         if let Ok(bytes) = client.download_image(url).await {
-            let cover = manager.storage.cover_path.join(format!("{book_id}.jpg"));
-            let _ = std::fs::write(&cover, &bytes);
+            let cover = manager.storage.cover_path.join(format!("{book_id}.webp"));
+            let _ = std::fs::write(&cover, StorageService::ensure_webp(&bytes));
         }
     }
     Ok(Some(book_id))
@@ -2074,6 +2077,7 @@ async fn process_ehentai(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
+            true,
         )
         .context("create cb7")?;
 
@@ -2260,6 +2264,7 @@ async fn process_ahentai(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
+            true,
         )
         .context("create cb7")?;
     let _ = manager.append_log(&task.id, "📦 打包完成").await;
@@ -2638,6 +2643,7 @@ async fn process_nicecat(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
+            true,
         )
         .context("create cb7")?;
     let _ = manager.append_log(&task.id, "📦 打包完成").await;

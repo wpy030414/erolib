@@ -22,6 +22,10 @@ struct CachedArchive {
 /// bouncing between many books — beyond this the oldest entry is dropped.
 const PAGE_CACHE_MAX: usize = 8;
 
+/// Lossy WebP quality for the unified page format (`ensure_webp`). 80 keeps
+/// manga linework visually lossless while cutting size well below jpeg.
+const WEBP_QUALITY: f32 = 80.0;
+
 /// Manages on-disk storage of CB7 files, covers, and cache.
 pub struct StorageService {
     pub library_path: PathBuf,
@@ -50,11 +54,15 @@ impl StorageService {
     }
 
     /// Create a CB7 (7-zip/ZIP) archive containing a ComicInfo.xml and the
-    /// given images. Returns the path to the created file.
+    /// given images. Returns the path to the created file. With `reencode`
+    /// every page runs through `ensure_webp` (the unified page format); it is
+    /// disabled only for ugoira frame sequences, whose per-frame jpeg quality
+    /// and delay timings must survive untouched.
     pub fn create_cb7(
         &self,
         images: &[Vec<u8>],
         metadata: &BookMetadata,
+        reencode: bool,
     ) -> Result<PathBuf> {
         let book_id = Uuid::new_v4().to_string();
         let file_path = self.library_path.join(format!("{}.cb7", book_id));
@@ -70,19 +78,26 @@ impl StorageService {
 
         // Images, named sequentially.
         for (index, image) in images.iter().enumerate() {
-            let ext = guess_image_extension(image);
+            let image = if reencode {
+                Self::ensure_webp(image)
+            } else {
+                image.to_vec()
+            };
+            let ext = guess_image_extension(&image);
             let filename = format!("{:04}.{}", index + 1, ext);
             zip.start_file(&filename, options)?;
-            zip.write_all(image)?;
+            zip.write_all(&image)?;
         }
 
         zip.finish()?;
         Ok(file_path)
     }
 
-    /// Extract the first image from a CB7 archive as the cover.
+    /// Extract the first image from a CB7 archive as the cover, stored as a
+    /// lossy webp at `covers/{book_id}.webp` (the unified cover format, so
+    /// `serve_cover` and OPDS/RSS can assume one extension + mime).
     pub fn extract_cover(&self, cb7_path: &Path, book_id: &str) -> Result<PathBuf> {
-        let cover_path = self.cover_path.join(format!("{}.jpg", book_id));
+        let cover_path = self.cover_path.join(format!("{}.webp", book_id));
 
         let file = std::fs::File::open(cb7_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
@@ -94,10 +109,11 @@ impl StorageService {
                 || name.ends_with(".jpeg")
                 || name.ends_with(".png")
                 || name.ends_with(".webp")
+                || name.ends_with(".avif")
             {
                 let mut buffer = Vec::new();
                 entry.read_to_end(&mut buffer)?;
-                std::fs::write(&cover_path, &buffer)?;
+                std::fs::write(&cover_path, Self::ensure_webp(&buffer))?;
                 return Ok(cover_path);
             }
         }
@@ -114,7 +130,7 @@ impl StorageService {
         if file_path.exists() {
             std::fs::remove_file(file_path)?;
         }
-        for ext in &["jpg", "jpeg", "png", "webp"] {
+        for ext in &["jpg", "jpeg", "png", "webp", "avif"] {
             let cover = self.cover_path.join(format!("{}.{}", book_id, ext));
             if cover.exists() {
                 std::fs::remove_file(cover)?;
@@ -125,7 +141,7 @@ impl StorageService {
 
     /// Read a cover file into bytes for serving over OPDS / the frontend.
     pub fn read_cover(&self, book_id: &str) -> Option<Vec<u8>> {
-        for ext in &["jpg", "jpeg", "png", "webp"] {
+        for ext in &["webp", "jpg", "jpeg", "png", "avif"] {
             let cover = self.cover_path.join(format!("{}.{}", book_id, ext));
             if let Ok(data) = std::fs::read(&cover) {
                 return Some(data);
@@ -165,6 +181,36 @@ impl StorageService {
             return None;
         }
         parse_comic_info(&xml)
+    }
+
+    /// Re-encode page bytes into lossy WebP (quality `WEBP_QUALITY`), the
+    /// unified page format for the whole library. Sources already in WebP
+    /// pass through untouched; jpg/png/avif are decoded then encoded via
+    /// libwebp (the image crate's own webp encoder is lossless-only, which
+    /// would grow jpeg sources instead of shrinking them). The result is only
+    /// kept when it is actually smaller than the source — pixiv's AVIF pages
+    /// are already tightly compressed and would *grow* at q80. Any decode/
+    /// encode failure returns the original bytes — a page is never dropped
+    /// from a book, and the `warn!` keeps silent reingests of odd formats
+    /// visible.
+    pub(crate) fn ensure_webp(raw: &[u8]) -> Vec<u8> {
+        // WebP RIFF container: "RIFF" + size + "WEBP".
+        if raw.len() >= 12 && raw.starts_with(b"RIFF") && raw[8..12] == *b"WEBP" {
+            return raw.to_vec();
+        }
+        let Ok(img) = image::load_from_memory(raw) else {
+            tracing::warn!(len = raw.len(), "page decode failed; storing as-is");
+            return raw.to_vec();
+        };
+        let rgba = img.to_rgba8();
+        let encoder = webp::Encoder::from_rgba(rgba.as_raw(), img.width(), img.height());
+        let out = encoder.encode(WEBP_QUALITY);
+        if out.is_empty() || out.len() >= raw.len() {
+            // Empty output is an encoder failure; a non-smaller result means
+            // the source was already as compact as q80 webp — keep it.
+            return raw.to_vec();
+        }
+        out.to_vec()
     }
 
     /// Decode `raw` (jpg/png/webp) and re-encode as a JPEG whose longest edge
@@ -265,10 +311,14 @@ impl StorageService {
             zip.write_all(create_comic_info(&metadata).as_bytes())?;
 
             for (index, image) in pages.iter().enumerate() {
-                let ext = guess_image_extension(image);
+                // Pages are stored in the unified webp format, so a repacked
+                // archive stays normalized; an older non-webp page is only
+                // kept when ensure_webp finds it already at least as compact.
+                let image = Self::ensure_webp(image);
+                let ext = guess_image_extension(&image);
                 let filename = format!("{:04}.{}", index + 1, ext);
                 zip.start_file(&filename, options)?;
-                zip.write_all(image)?;
+                zip.write_all(&image)?;
             }
 
             zip.finish()?;
@@ -322,7 +372,7 @@ impl StorageService {
         // Cache miss: open + scan the central directory once.
         let file = std::fs::File::open(cb7_path).ok()?;
         let mut archive = zip::ZipArchive::new(file).ok()?;
-        let image_exts = [".jpg", ".jpeg", ".png", ".webp"];
+        let image_exts = [".jpg", ".jpeg", ".png", ".webp", ".avif"];
         let mut image_indices: Vec<usize> = Vec::with_capacity(archive.len());
         for i in 0..archive.len() {
             let is_img = archive
@@ -502,6 +552,14 @@ pub fn guess_image_extension(bytes: &[u8]) -> &'static str {
         }
         if bytes.starts_with(b"RIFF") && bytes.len() >= 12 && bytes[8..12] == *b"WEBP" {
             return "webp";
+        }
+        // ISO-BMFF "ftyp" box: AVIF (still present in pre-migration books)
+        // or AVIF sequence.
+        if bytes.len() >= 12 && bytes[4..8] == *b"ftyp" {
+            let brand = &bytes[8..12];
+            if brand == b"avif" || brand == b"avis" {
+                return "avif";
+            }
         }
     }
     "jpg"

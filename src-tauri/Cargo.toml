@@ -6,6 +6,9 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
+# `tauri dev`/`build` invoke bare `cargo run`; the one-shot bin/migrate_webp.rs
+# would otherwise make the default binary ambiguous.
+default-run = "erolib"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
@@ -35,12 +38,17 @@ tower-http = { version = "0.5", features = ["fs", "cors"] }
 zip = "0.6"
 # Metadata hash for local one-way sync filenames (sha256 of source/title/pages/size).
 sha2 = "0.10"
-# ugoira (動画作) → GIF: decode jpg frames + encode with per-frame delays.
-# GifEncoder auto-quantizes true color → 256-color palette (color_quant).
-# Image decode/encode for covers, ugoira→GIF, and PDF/EPUB export. PDF export
-# decodes webp/png/jpeg pages to get pixel dimensions (printpdf has no native
-# dimension probe), so the webp feature is required alongside jpeg/png.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Image decode for covers, library pages, and PDF/EPUB export. `avif-native`
+# (dav1d, via pkg-config on macOS) decodes the AVIF pages pixiv still delivers
+# and that linger in pre-migration books; ingest re-encodes every page to
+# lossy webp via the `webp` crate below, so this crate only ever decodes.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "avif-native"] }
+# Lossy VP8 encoding for the unified page format — image crate's own webp
+# encoder is lossless-only (VP8L), which would grow jpeg sources instead of
+# shrinking them. libwebp-sys compiles bundled C sources via `cc`; no nasm,
+# cmake, or pkg-config needed. `default-features = false` drops the `img`
+# feature so we don't drag in a second copy of the image crate.
+webp = { version = "0.3", default-features = false }
 quick-xml = { version = "0.31", features = ["serialize"] }
 # PDF export/import (each page = one image, metadata in the info dict +
 # an erolib metadata stream). lopdf is also used to read PDFs back on import.

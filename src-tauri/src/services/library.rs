@@ -48,10 +48,12 @@ impl LibraryService {
             .library_path
             .join(format!("{}.cb7", book_id));
 
-        // EPUB/PDF must be repacked into a cb7 (the reader is zip-only), and
-        // their metadata comes from the format's own carrier rather than
-        // ComicInfo. cb7/cbz/cbr keep the existing copy-then-read_comic_info
-        // path.
+        // All zip formats are repacked into a library cb7 with pages
+        // re-encoded to the unified webp format; metadata comes from the
+        // format's own carrier (OPF / PDF info / ComicInfo.xml). cbr (rar)
+        // can't be read by the zip backend and keeps the verbatim copy —
+        // which the reader can't open either, so it imports with 0 pages
+        // (pre-existing behavior, unchanged).
         let meta = if format == "epub" || format == "pdf" {
             let (images, parsed) = tokio::task::spawn_blocking({
                 let path = path.to_path_buf();
@@ -68,18 +70,34 @@ impl LibraryService {
             .map_err(|e| AppError::Other(format!("parse join failed: {e}")))?
             .map_err(|e| AppError::Other(e.to_string()))?;
 
-            // Repackage into the library cb7. create_cb7 writes ComicInfo.xml
-            // from the metadata, so the imported epub/pdf now round-trips as a
-            // cb7 just like any other book.
             self.storage
-                .create_cb7(&images, &parsed)
+                .create_cb7(&images, &parsed, true)
                 .map_err(|e| AppError::Other(e.to_string()))?;
             Some(parsed)
+        } else if format == "cb7" || format == "cbz" {
+            // Repack instead of verbatim-copying: an external cbz may hold
+            // avif pages that would otherwise bypass the webp conversion and
+            // break PDF export later. Metadata (incl. ugoira delays) is read
+            // back from the source's ComicInfo.xml.
+            let storage = self.storage.clone();
+            let path = path.to_path_buf();
+            let meta = tokio::task::spawn_blocking(move || -> std::result::Result<_, anyhow::Error> {
+                let images = storage.read_all_pages(&path)?;
+                let meta = storage.read_comic_info(&path);
+                storage.create_cb7(
+                    &images,
+                    &meta.clone().unwrap_or_default(),
+                    true,
+                )?;
+                Ok(meta)
+            })
+            .await
+            .map_err(|e| AppError::Other(format!("repack join failed: {e}")))?
+            .map_err(|e| AppError::Other(e.to_string()))?;
+            meta
         } else {
-            // Copy the archive verbatim into library storage.
+            // cbr (rar): verbatim copy, existing behavior.
             std::fs::copy(path, &dest).map_err(AppError::Io)?;
-            // Recover metadata from ComicInfo.xml (cb7/cbz only). read_comic_info
-            // returns None for non-zip formats or archives without ComicInfo.
             self.storage.read_comic_info(&dest)
         };
 
@@ -585,6 +603,7 @@ fn count_archive_pages(path: &Path, format: &str) -> Option<i32> {
                 || name.ends_with(".jpeg")
                 || name.ends_with(".png")
                 || name.ends_with(".webp")
+                || name.ends_with(".avif")
             {
                 count += 1;
             }

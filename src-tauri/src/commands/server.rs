@@ -259,12 +259,13 @@ async fn serve_cover(
     axum::extract::Path(id): axum::extract::Path<String>,
     axum::extract::State(state): axum::extract::State<ServerState>,
 ) -> axum::response::Response {
-    for ext in &["jpg", "jpeg", "png", "webp"] {
+    for ext in &["webp", "jpg", "jpeg", "png", "avif"] {
         let path = state.covers_path.join(format!("{}.{}", id, ext));
         if let Ok(data) = std::fs::read(&path) {
             let mime = match *ext {
                 "png" => "image/png",
                 "webp" => "image/webp",
+                "avif" => "image/avif",
                 _ => "image/jpeg",
             };
             return ([(axum::http::header::CONTENT_TYPE, mime)], data).into_response();
@@ -387,6 +388,12 @@ fn guess_image_mime(bytes: &[u8]) -> &'static str {
         }
         if bytes.starts_with(b"RIFF") && bytes.len() >= 12 && bytes[8..12] == *b"WEBP" {
             return "webp";
+        }
+        if bytes.len() >= 12 && bytes[4..8] == *b"ftyp" {
+            let brand = &bytes[8..12];
+            if brand == b"avif" || brand == b"avis" {
+                return "avif";
+            }
         }
     }
     "jpg"

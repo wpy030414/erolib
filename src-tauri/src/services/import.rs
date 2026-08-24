@@ -384,7 +384,8 @@ fn fill_meta_from_info(doc: &lopdf::Document, meta: &mut BookMetadata) -> Result
 /// Extract the first image XObject from a page's /Resources value. `resources`
 /// may be a Reference (resolve it) or an inline Dictionary. JPEG (DCTDecode)
 /// bytes are returned verbatim; other images decode to pixels and re-encode as
-/// JPEG so the library cb7 holds a uniform image sequence.
+/// PNG (lossless — ingest then re-encodes to webp when that shrinks the page,
+/// so a lossy intermediate would only degrade pixels twice).
 fn first_page_image_from_resources(
     doc: &lopdf::Document,
     resources: Option<lopdf::Object>,
@@ -472,8 +473,12 @@ fn first_page_image_from_resources(
                 .map(image::DynamicImage::ImageRgb8),
         };
         if let Some(img) = img {
+            // Encode as PNG (lossless): `create_cb7` re-encodes every page to
+            // lossy webp on ingest, so a lossy intermediate would double-loss
+            // the pixels. JPEG never reaches this branch (DCTDecode pages are
+            // returned verbatim above).
             let mut buf = Cursor::new(Vec::new());
-            if img.write_to(&mut buf, image::ImageFormat::Jpeg).is_ok() {
+            if img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
                 return Some(buf.into_inner());
             }
         }

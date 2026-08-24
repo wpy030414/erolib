@@ -158,8 +158,8 @@ src-tauri/src/
 │   ├── search.rs     搜索服务（LIKE + 标签本地化合并）
 │   ├── similarity.rs SIMILARITY UDF（Levenshtein 归一化）
 │   ├── locale.rs     三语标签翻译物化
-│   ├── storage.rs    CB7 文件管理（create_cb7 / extract_cover / read_page / 整档读页 / 单页删除重打包 / 缓存）
-│   ├── export.rs     导出格式封装（cb7 原样 / epub OPF+XHTML / pdf printpdf+lopdf 元数据流）
+│   ├── storage.rs    CB7 文件管理（create_cb7 / extract_cover / read_page / 整档读页 / 单页删除重打包 / 缓存 / ensure_webp 统一页格式）
+│   ├── export.rs     导出格式封装（cb7 原样 / epub OPF+XHTML / pdf printpdf+lopdf 元数据流；alpha 合成绕 printpdf SMask 序列化 bug）
 │   ├── import.rs     EPUB/PDF 导入解析（spine 取图 + XObject 图像流 → 统一重打包 CB7）
 │   ├── opds.rs       OPDS Atom feed 生成
 │   ├── rss.rs        RSS 2.0 feed 生成
@@ -221,6 +221,7 @@ src-tauri/src/
 | task_manager | 日志上限 | 200 行 |
 | task_manager | speed EMA | α=0.3，ticker 400ms |
 | storage | PAGE_CACHE_MAX | 8 |
+| storage | WEBP_QUALITY | 80（统一页格式 lossy WebP 质量） |
 | export/import | PDF 页尺寸 | 图像像素 @96dpi（1px ≈ 1pt） |
 | OPDS 默认端口 | settings.ts | 5269 |
 | RSS 默认端口 | settings.ts | 1269 |
@@ -345,7 +346,7 @@ axum Router
 ├── /opds           → OPDS Atom root feed
 ├── /opds/search/:q → OPDS search feed
 ├── /rss            → RSS 2.0 feed
-├── /covers/:id     → 封面图（jpg/jpeg/png/webp 依次尝试）
+├── /covers/:id     → 封面图（webp 优先，jpg/jpeg/png/avif 兜底）
 ├── /pages/:id/:n   → 单页图（zip 抽页 + 魔数猜 MIME）
 ├── /article/:id    → HTML 图廊（<img> 逐页）
 └── /download/:id   → 整本下载（CB7/CBZ/CBR/PDF）
@@ -380,7 +381,8 @@ axum Router
 | reqwest | 0.11 | HTTP 客户端（元数据抓取） |
 | scraper | 0.18 | HTML 解析 |
 | zip | 0.6 | CB7 文件读写 |
-| image | 0.25（jpeg/png/webp） | 封面缩略图降采样 + PDF 导出解码 + EPUB/PDF 导入重编码 |
+| image | 0.25（jpeg/png/webp/avif-native） | 封面缩略图降采样 + PDF 导出解码 + EPUB/PDF 导入重编码（avif-native 仅解码存量 AVIF 页） |
+| webp | 0.3（libwebp-sys 静态编译） | 统一页格式的有损 VP8 编码（image 自带的 webp 编码器仅 lossless） |
 | printpdf | 0.7 | PDF 导出（每图一页，JPEG 走 DCT 流原样嵌入） |
 | lopdf | 0.31 | PDF 元数据流注入（导出）+ 图像流提取（导入） |
 | quick-xml | 0.31 | ComicInfo.xml + Atom feed 解析 |

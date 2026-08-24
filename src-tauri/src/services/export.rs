@@ -13,8 +13,9 @@
 //!
 //! Pages are the image entries of the source archive; `read_all_pages` already
 //! yields them in reading order. No image is re-encoded unless the target
-//! format can't embed it verbatim (PDF can't take webp/png as a raw DCT stream,
-//! so non-JPEG images are decoded to RGBA and laid down uncompressed).
+//! format can't embed it verbatim (PDF can't take webp/png/avif as a raw DCT
+//! stream, so non-JPEG images are decoded to RGB and laid down uncompressed;
+//! alpha is composited onto white — see `build_image_xobject`).
 
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -112,10 +113,11 @@ fn export_epub(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resu
 
 /// PDF: one page per image, page sized to the image (px → pt at 96 dpi so 1px ≈
 /// 1pt is close enough for a reader to page through). JPEGs ride the DCT stream
-/// verbatim (no re-encode); PNG/WEBP decode to RGB/RGBA and lay down raw. The
-/// Info dict carries Title/Author/Subject/Keywords; an `ErolibMetadata` stream
-/// holds the full JSON record so import can recover provenance the Info dict
-/// can't represent (source url, post id, scraped_at, delays).
+/// verbatim (no re-encode); PNG/WEBP/AVIF decode to RGB and lay down raw (alpha
+/// composited onto white — see `build_image_xobject`). The Info dict carries
+/// Title/Author/Subject/Keywords; an `ErolibMetadata` stream holds the full
+/// JSON record so import can recover provenance the Info dict can't represent
+/// (source url, post id, scraped_at, delays).
 fn export_pdf(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Result<()> {
     // NOTE: do NOT `use printpdf::*` here — printpdf re-exports its own
     // `image` module (`pub mod image` + `pub use crate::image::*`), whose glob
@@ -129,18 +131,13 @@ fn export_pdf(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resul
     let doc = PdfDocument::empty(metadata.title.clone());
 
     for page_bytes in images {
-        // load_from_memory is the pub re-export that survives across image
-        // 0.25.x; the ImageReader re-export is crate-private in some point
-        // releases, so we go through DynamicImage for dimensions instead.
-        let (w, h) = image::load_from_memory(page_bytes)
-            .map(|img| (img.width(), img.height()))
-            .unwrap_or((1, 1));
-        // 1px = 1pt at 96 dpi → mm = px * 25.4 / 96.
+        // build_image_xobject also reports pixel dimensions so the page can
+        // be sized to the image (1px ≈ 1pt at 96 dpi → mm = px * 25.4 / 96).
+        let (xobj, w, h) = build_image_xobject(page_bytes)?;
         let w_mm = Mm(w as f32 * 25.4 / 96.0);
         let h_mm = Mm(h as f32 * 25.4 / 96.0);
         let (page, layer) = doc.add_page(w_mm, h_mm, "page");
 
-        let xobj = build_image_xobject(page_bytes)?;
         let img = Image::from(xobj);
         // 96 dpi makes 1px ≈ 1pt, so the image fills the page edge to edge.
         img.add_to_layer(
@@ -173,70 +170,86 @@ fn export_pdf(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resul
     Ok(())
 }
 
-/// Build an `ImageXObject` from raw page bytes. JPEG stays a DCT stream (the
-/// bytes are written verbatim under `/DCTDecode`); PNG/WEBP decode to 8-bit
-/// RGB(A) pixels laid down uncompressed. Alpha is preserved via printpdf's
-/// SMask when present.
-fn build_image_xobject(bytes: &[u8]) -> Result<printpdf::ImageXObject> {
+/// Build an `ImageXObject` from raw page bytes, plus the pixel dimensions
+/// (so the caller can size the page). JPEG stays a DCT stream (the bytes are
+/// written verbatim under `/DCTDecode`); PNG/WEBP/AVIF decode to 8-bit RGB(A)
+/// pixels laid down uncompressed. Alpha is composited onto white instead of
+/// being kept as a soft mask — see below.
+fn build_image_xobject(bytes: &[u8]) -> Result<(printpdf::ImageXObject, u32, u32)> {
     use printpdf::{ColorBits, ColorSpace, ImageFilter, ImageXObject, Px};
 
     let ext = guess_image_extension(bytes);
     if ext == "jpg" {
-        // JPEG: embed verbatim as a DCTDecode stream. We still need the pixel
-        // dimensions, decoded via load_from_memory (cheaper than full decode is
-        // possible, but load_from_memory is the path that survives image 0.25.x).
-        let img = image::load_from_memory(bytes).context("decode jpeg dims")?;
-        let dim = (img.width(), img.height());
-        return Ok(ImageXObject {
-            width: Px(dim.0 as usize),
-            height: Px(dim.1 as usize),
+        // JPEG: embed verbatim as a DCTDecode stream. Only the pixel
+        // dimensions are needed, so read the header via ImageReader (public
+        // in image 0.25.x) instead of fully decoding the pixels — a page that
+        // can't be fully decoded can still ride the DCT stream.
+        let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .context("jpeg format guess")?
+            .into_dimensions()
+            .context("decode jpeg dims")?;
+        return Ok((
+            ImageXObject {
+                width: Px(w as usize),
+                height: Px(h as usize),
+                color_space: ColorSpace::Rgb,
+                bits_per_component: ColorBits::Bit8,
+                interpolate: true,
+                image_data: bytes.to_vec(),
+                image_filter: Some(ImageFilter::DCT),
+                smask: None,
+                clipping_bbox: None,
+            },
+            w,
+            h,
+        ));
+    }
+
+    // PNG / WEBP / AVIF: decode to pixels (AVIF can't ride a DCT stream).
+    let img = image::load_from_memory(bytes).context("decode image for pdf")?;
+    let (w, h) = (img.width(), img.height());
+    let raw = img.to_rgba8().into_raw();
+
+    // Alpha: composite onto white instead of emitting an SMask — printpdf
+    // 0.7.0 serializes the SMask height as `img.width` (xobject.rs copy-paste
+    // bug), so any image carrying an SMask renders blank in viewers. The
+    // alpha check must also be the real color type: to_rgba8() is always 4
+    // channels, so a length check would mark every image alpha-bearing and
+    // hit the bug for every page.
+    let rgb: Vec<u8> = if img.color().has_alpha() {
+        raw.chunks_exact(4)
+            .flat_map(|c| {
+                let a = c[3] as f32 / 255.0;
+                let inv = 1.0 - a;
+                [
+                    (c[0] as f32 * a + 255.0 * inv) as u8,
+                    (c[1] as f32 * a + 255.0 * inv) as u8,
+                    (c[2] as f32 * a + 255.0 * inv) as u8,
+                ]
+            })
+            .collect()
+    } else {
+        raw.chunks_exact(4)
+            .flat_map(|c| [c[0], c[1], c[2]])
+            .collect()
+    };
+
+    Ok((
+        ImageXObject {
+            width: Px(w as usize),
+            height: Px(h as usize),
             color_space: ColorSpace::Rgb,
             bits_per_component: ColorBits::Bit8,
             interpolate: true,
-            image_data: bytes.to_vec(),
-            image_filter: Some(ImageFilter::DCT),
+            image_data: rgb,
+            image_filter: None,
             smask: None,
             clipping_bbox: None,
-        });
-    }
-
-    // PNG / WEBP: decode to pixels.
-    let img = image::load_from_memory(bytes).context("decode image for pdf")?;
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    let rgba = img.to_rgba8();
-    let raw = rgba.as_raw().to_vec();
-
-    // Split alpha into a soft-mask (greyscale) per printpdf's SMask approach so
-    // transparency survives in viewers; color data is RGB without alpha.
-    let has_alpha = raw.len() == w * h * 4;
-    let rgb: Vec<u8> = raw
-        .chunks_exact(4)
-        .flat_map(|c| [c[0], c[1], c[2]])
-        .collect();
-    let smask = if has_alpha {
-        let alpha: Vec<i64> = raw.chunks_exact(4).map(|c| c[3] as i64).collect();
-        Some(printpdf::SMask {
-            width: w as i64,
-            height: h as i64,
-            bits_per_component: 8,
-            matte: alpha,
-            interpolate: true,
-        })
-    } else {
-        None
-    };
-
-    Ok(ImageXObject {
-        width: Px(w),
-        height: Px(h),
-        color_space: ColorSpace::Rgb,
-        bits_per_component: ColorBits::Bit8,
-        interpolate: true,
-        image_data: rgb,
-        image_filter: None,
-        smask,
-        clipping_bbox: None,
-    })
+        },
+        w,
+        h,
+    ))
 }
 
 /// Graft an `ErolibMetadata` metadata stream onto an existing PDF so import can
@@ -348,6 +361,7 @@ fn build_opf(metadata: &BookMetadata, img_paths: &[String]) -> String {
         let mime = match ext {
             "png" => "image/png",
             "webp" => "image/webp",
+            "avif" => "image/avif",
             _ => "image/jpeg",
         };
         s.push_str(&format!(
@@ -500,5 +514,85 @@ mod tests {
         assert_eq!(recovered.source_post_id, meta.source_post_id);
         assert_eq!(recovered.published_at, meta.published_at);
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A 2×1 red webp page (lossless is fine for a fixture), no alpha — a PDF
+    /// export must NOT carry an SMask: printpdf 0.7.0 serializes the SMask
+    /// height as `img.width` (xobject.rs copy-paste bug), so any image with a
+    /// non-null SMask renders blank in viewers. Regression for the
+    /// "all-pages-blank PDF" export bug.
+    #[test]
+    fn pdf_webp_pages_have_no_smask() {
+        let mut buf = Vec::new();
+        let img = image::RgbaImage::from_pixel(2, 1, image::Rgba([255, 0, 0, 255]));
+        image::codecs::webp::WebPEncoder::new_lossless(&mut buf)
+            .encode(img.as_raw(), 2, 1, image::ColorType::Rgba8.into())
+            .expect("encode webp fixture");
+        let images = vec![buf.clone(), buf.clone()];
+        let meta = sample_meta();
+        let tmp = std::env::temp_dir().join("erolib_webp_pdf_test.pdf");
+        export_pdf(&images, &meta, &tmp).expect("export pdf");
+
+        let doc = lopdf::Document::load(&tmp).expect("reload pdf");
+        // One page per image, each painting the image via a `Do` operator.
+        let pages = doc.get_pages();
+        assert_eq!(pages.len(), 2);
+        for (_, page_id) in pages {
+            let page = doc.get_dictionary(page_id).expect("page dict");
+            // printpdf writes uncompressed content streams, so read the raw
+            // `content` field — lopdf's decompressed_content() errors on
+            // streams without a Filter entry.
+            let contents = page
+                .get(b"Contents")
+                .expect("page contents")
+                .as_reference()
+                .ok()
+                .and_then(|r| doc.get_object(r).ok())
+                .and_then(|o| o.as_stream().ok())
+                .map(|s| String::from_utf8_lossy(&s.content).to_string())
+                .expect("read page contents");
+            assert!(contents.contains(" Do"), "page content stream must paint the image");
+        }
+        // printpdf writes the SMask key even when None, so any non-null value
+        // anywhere in the doc means the bug fired.
+        let has_real_smask = doc.objects.values().any(|o| match o {
+            lopdf::Object::Dictionary(d) => d
+                .get(b"SMask")
+                .is_ok_and(|v| !matches!(v, lopdf::Object::Null)),
+            _ => false,
+        });
+        assert!(
+            !has_real_smask,
+            "no image may carry an SMask (printpdf 0.7 serializes a broken height)"
+        );
+
+        // Round-trip still works: read_pdf recovers both pages.
+        let (recovered_pages, _) = crate::services::import::read_pdf(&tmp).expect("read pdf");
+        assert_eq!(recovered_pages.len(), 2);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// ensure_webp: jpeg → webp, webp passthrough, junk fallback.
+    #[test]
+    fn ensure_webp_converts_and_passes_through() {
+        use crate::services::storage::StorageService;
+
+        let jpeg = red_jpeg();
+        let out = StorageService::ensure_webp(&jpeg);
+        assert!(
+            out.starts_with(b"RIFF") && out[8..12] == *b"WEBP",
+            "jpeg page must be re-encoded to webp"
+        );
+        // Round-trip: the webp decodes to the same 1×1 dimensions.
+        let img = image::load_from_memory(&out).expect("decode webp");
+        assert_eq!((img.width(), img.height()), (1, 1));
+
+        // Already-webp bytes pass through untouched.
+        let passthrough = StorageService::ensure_webp(&out);
+        assert_eq!(passthrough, out);
+
+        // Undecodable bytes fall back to the original (a page is never dropped).
+        let junk = vec![0u8; 64];
+        assert_eq!(StorageService::ensure_webp(&junk), junk);
     }
 }
