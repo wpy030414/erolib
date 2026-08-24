@@ -147,8 +147,12 @@ pub async fn get_book_cover_thumb(
 /// (a verbatim copy of the stored archive); the other formats repack the
 /// archive's image pages + ComicInfo metadata into the target container, so
 /// provenance (source url, tags, delays) round-trips through the chosen format.
+///
+/// Per-page progress is pushed to the frontend over `book://export-progress`
+/// (`{book_id, done, total}`) so the export dialog can render a progress bar.
 #[tauri::command]
 pub async fn save_book(
+    app: tauri::AppHandle,
     id: String,
     dest: String,
     format: Option<String>,
@@ -171,8 +175,17 @@ pub async fn save_book(
     let format = format.unwrap_or_else(|| "cb7".to_string());
 
     // cb7 is a straight copy of the stored archive — the library file already
-    // carries ComicInfo.xml, so no repackaging is needed.
+    // carries ComicInfo.xml, so no repackaging is needed. One progress event
+    // still goes out so the dialog's bar behaves like the epub/pdf path.
     if format == "cb7" {
+        let _ = app.emit(
+            "book://export-progress",
+            serde_json::json!({
+                "book_id": book.id,
+                "done": 0,
+                "total": book.page_count.max(0),
+            }),
+        );
         std::fs::copy(src, &dest).map_err(|e| format!("copy to {}: {}", dest.display(), e))?;
         return Ok(());
     }
@@ -182,9 +195,21 @@ pub async fn save_book(
     let storage = state.storage.clone();
     let src = src.to_path_buf();
     let metadata = book_to_metadata(&book);
+    let book_id = book.id.clone();
     tokio::task::spawn_blocking(move || -> std::result::Result<(), anyhow::Error> {
         let images = storage.read_all_pages(&src)?;
-        crate::services::export::export_book(&images, &metadata, &dest, &format)?;
+        let total = images.len();
+        let mut progress = |done: usize| {
+            let _ = app.emit(
+                "book://export-progress",
+                serde_json::json!({
+                    "book_id": book_id,
+                    "done": done + 1,
+                    "total": total,
+                }),
+            );
+        };
+        crate::services::export::export_book(&images, &metadata, &dest, &format, &mut progress)?;
         Ok(())
     })
     .await

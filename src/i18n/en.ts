@@ -29,6 +29,8 @@ const en: Record<string, string> = {
   'lib.save.format.cb7': 'CB7 comic',
   'lib.save.format.epub': 'EPUB ebook',
   'lib.save.format.pdf': 'PDF document',
+  'lib.save.exporting': 'Exporting',
+  'lib.save.exportingProgress': 'Page {done} of {total}',
   'lib.pages': '{count} pages',
   'lib.viewMeta': 'View info',
   'lib.meta.title': 'Title',

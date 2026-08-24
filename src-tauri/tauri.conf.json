@@ -1,6 +1,6 @@
 {
   "productName": "EroLib",
-  "version": "26.8.24+2100",
+  "version": "26.8.24+2105",
   "identifier": "im.xrl.erolib",
   "build": {
     "beforeDevCommand": "pnpm exec vite",

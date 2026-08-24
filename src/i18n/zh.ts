@@ -29,6 +29,8 @@ const zh: Record<string, string> = {
   'lib.save.format.cb7': 'CB7 漫画',
   'lib.save.format.epub': 'EPUB 电子书',
   'lib.save.format.pdf': 'PDF 文档',
+  'lib.save.exporting': '正在导出',
+  'lib.save.exportingProgress': '{done}/{total} 页',
   'lib.pages': '{count} 页',
   'lib.viewMeta': '查看元信息',
   'lib.meta.title': '标题',

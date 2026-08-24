@@ -29,6 +29,8 @@ const ja: Record<string, string> = {
   'lib.save.format.cb7': 'CB7 コミック',
   'lib.save.format.epub': 'EPUB 電子書籍',
   'lib.save.format.pdf': 'PDF ドキュメント',
+  'lib.save.exporting': 'エクスポート中',
+  'lib.save.exportingProgress': '{done}/{total} ページ',
   'lib.pages': '{count} ページ',
   'lib.viewMeta': 'メタ情報',
   'lib.meta.title': 'タイトル',

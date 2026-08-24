@@ -300,3 +300,10 @@ export interface UpdateProgress {
   completed: number;
   total: number;
 }
+
+/** Per-page progress pushed during `save_book` over `book://export-progress`. */
+export interface ExportProgress {
+  book_id: string;
+  done: number;
+  total: number;
+}

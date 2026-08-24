@@ -6,9 +6,6 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-# `tauri dev`/`build` invoke bare `cargo run`; the one-shot bin/migrate_webp.rs
-# would otherwise make the default binary ambiguous.
-default-run = "erolib"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }

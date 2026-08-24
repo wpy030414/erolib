@@ -27,24 +27,32 @@ use crate::models::BookMetadata;
 use crate::services::storage::{create_comic_info, guess_image_extension};
 
 /// Export the given image pages (in reading order) and metadata to `dest` in the
-/// requested format. `format` is lowercase (`cb7`/`epub`/`pdf`).
+/// requested format. `format` is lowercase (`cb7`/`epub`/`pdf`). `on_page`
+/// fires after each page is written with the 0-based page index — the caller
+/// uses it to drive the export progress bar.
 pub fn export_book(
     images: &[Vec<u8>],
     metadata: &BookMetadata,
     dest: &Path,
     format: &str,
+    on_page: &mut dyn FnMut(usize),
 ) -> Result<()> {
     match format {
-        "cb7" => export_cb7(images, metadata, dest),
-        "epub" => export_epub(images, metadata, dest),
-        "pdf" => export_pdf(images, metadata, dest),
+        "cb7" => export_cb7(images, metadata, dest, on_page),
+        "epub" => export_epub(images, metadata, dest, on_page),
+        "pdf" => export_pdf(images, metadata, dest, on_page),
         other => Err(anyhow!("unsupported export format: {other}")),
     }
 }
 
 /// Repack the pages into a CB7 with a fresh ComicInfo.xml. The provenance round-
 /// trips because `create_comic_info` serializes every `BookMetadata` field.
-fn export_cb7(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Result<()> {
+fn export_cb7(
+    images: &[Vec<u8>],
+    metadata: &BookMetadata,
+    dest: &Path,
+    on_page: &mut dyn FnMut(usize),
+) -> Result<()> {
     ensure_parent(dest)?;
     let file = std::fs::File::create(dest).context("create cb7")?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
@@ -57,6 +65,7 @@ fn export_cb7(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resul
         let ext = guess_image_extension(image);
         zip.start_file(format!("{:04}.{}", index + 1, ext), options)?;
         zip.write_all(image)?;
+        on_page(index);
     }
     zip.finish().context("finish cb7")?;
     Ok(())
@@ -67,7 +76,12 @@ fn export_cb7(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resul
 /// image embedded verbatim under `OEBPS/images/`. Standard `dc:` fields carry
 /// title/author/subject(tags)/description; the erolib provenance fields live as
 /// `<meta>` refines (EPUB 3) under the `ero:` property namespace.
-fn export_epub(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Result<()> {
+fn export_epub(
+    images: &[Vec<u8>],
+    metadata: &BookMetadata,
+    dest: &Path,
+    on_page: &mut dyn FnMut(usize),
+) -> Result<()> {
     ensure_parent(dest)?;
     let file = std::fs::File::create(dest).context("create epub")?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
@@ -92,6 +106,7 @@ fn export_epub(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resu
         zip.start_file(format!("OEBPS/{path}"), FileOptions::default())?;
         zip.write_all(image)?;
         img_paths.push(path);
+        on_page(index);
     }
 
     // OPF references the real image paths/extensions, so build it after the
@@ -118,7 +133,12 @@ fn export_epub(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resu
 /// Title/Author/Subject/Keywords; an `ErolibMetadata` stream holds the full
 /// JSON record so import can recover provenance the Info dict can't represent
 /// (source url, post id, scraped_at, delays).
-fn export_pdf(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Result<()> {
+fn export_pdf(
+    images: &[Vec<u8>],
+    metadata: &BookMetadata,
+    dest: &Path,
+    on_page: &mut dyn FnMut(usize),
+) -> Result<()> {
     // NOTE: do NOT `use printpdf::*` here — printpdf re-exports its own
     // `image` module (`pub mod image` + `pub use crate::image::*`), whose glob
     // would shadow the external `image` crate and break `image::load_from_memory`.
@@ -130,7 +150,7 @@ fn export_pdf(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resul
     // export with one stray empty page); `empty` starts with zero pages.
     let doc = PdfDocument::empty(metadata.title.clone());
 
-    for page_bytes in images {
+    for (index, page_bytes) in images.iter().enumerate() {
         // build_image_xobject also reports pixel dimensions so the page can
         // be sized to the image (1px ≈ 1pt at 96 dpi → mm = px * 25.4 / 96).
         let (xobj, w, h) = build_image_xobject(page_bytes)?;
@@ -147,6 +167,7 @@ fn export_pdf(images: &[Vec<u8>], metadata: &BookMetadata, dest: &Path) -> Resul
                 ..Default::default()
             },
         );
+        on_page(index);
     }
 
     // Standard Info-dict fields every PDF reader shows in document properties.
@@ -478,7 +499,7 @@ mod tests {
         let images = vec![red_jpeg(), red_jpeg()];
         let meta = sample_meta();
         let tmp = std::env::temp_dir().join("erolib_epub_test.epub");
-        export_epub(&images, &meta, &tmp).expect("export epub");
+        export_epub(&images, &meta, &tmp, &mut |_: usize| {}).expect("export epub");
 
         let (pages, recovered) = crate::services::import::read_epub(&tmp).expect("read epub");
         assert_eq!(pages.len(), 2);
@@ -497,7 +518,7 @@ mod tests {
         let images = vec![red_jpeg(), red_jpeg()];
         let meta = sample_meta();
         let tmp = std::env::temp_dir().join("erolib_pdf_test.pdf");
-        export_pdf(&images, &meta, &tmp).expect("export pdf");
+        export_pdf(&images, &meta, &tmp, &mut |_: usize| {}).expect("export pdf");
 
         let (pages, recovered) = crate::services::import::read_pdf(&tmp).expect("read pdf");
         // The document must have exactly one page per image (no blank seed
@@ -531,7 +552,7 @@ mod tests {
         let images = vec![buf.clone(), buf.clone()];
         let meta = sample_meta();
         let tmp = std::env::temp_dir().join("erolib_webp_pdf_test.pdf");
-        export_pdf(&images, &meta, &tmp).expect("export pdf");
+        export_pdf(&images, &meta, &tmp, &mut |_: usize| {}).expect("export pdf");
 
         let doc = lopdf::Document::load(&tmp).expect("reload pdf");
         // One page per image, each painting the image via a `Do` operator.
@@ -596,3 +617,4 @@ mod tests {
         assert_eq!(StorageService::ensure_webp(&junk), junk);
     }
 }
+
