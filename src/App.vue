@@ -21,6 +21,7 @@ import { usePixivBrowseStore } from './stores/pixiv-browse';
 import { useEhentaiBrowseStore } from './stores/ehentai-browse';
 import { useNicecatBrowseStore } from './stores/nicecat-browse';
 import { api } from './services/api';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { onLocaleChange, useI18n } from './i18n';
 
 const route = useRoute();
@@ -110,11 +111,27 @@ watch(
   },
 );
 
+// F11 toggles fullscreen on any page (requires window focus, which is the
+// browser's default expectation for programmatic fullscreen).
+async function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'F11') {
+    e.preventDefault();
+    const win = getCurrentWindow();
+    try {
+      const isFs = await win.isFullscreen();
+      await win.setFullscreen(!isFs);
+    } catch {
+      // ignore — e.g. permission not granted at runtime
+    }
+  }
+}
+
 onMounted(() => {
   const el = appMainRef.value;
   if (el) {
     el.addEventListener('scroll', onMainScroll, { passive: true });
   }
+  window.addEventListener('keydown', onKeyDown);
   // Restore the initial view's scroll after first layout.
   nextTick(() => {
     requestAnimationFrame(() => restoreScroll(route.path));
@@ -149,6 +166,7 @@ onBeforeUnmount(() => {
   if (el) {
     el.removeEventListener('scroll', onMainScroll);
   }
+  window.removeEventListener('keydown', onKeyDown);
 });
 </script>
 
