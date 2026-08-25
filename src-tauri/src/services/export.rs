@@ -13,7 +13,7 @@
 //!
 //! Pages are the image entries of the source archive; `read_all_pages` already
 //! yields them in reading order. No image is re-encoded unless the target
-//! format can't embed it verbatim (PDF can't take webp/png/avif as a raw DCT
+//! format can't embed it verbatim (PDF can't take webp/png as a raw DCT
 //! stream, so non-JPEG images are decoded to RGB and laid down uncompressed;
 //! alpha is composited onto white — see `build_image_xobject`).
 
@@ -128,7 +128,7 @@ fn export_epub(
 
 /// PDF: one page per image, page sized to the image (px → pt at 96 dpi so 1px ≈
 /// 1pt is close enough for a reader to page through). JPEGs ride the DCT stream
-/// verbatim (no re-encode); PNG/WEBP/AVIF decode to RGB and lay down raw (alpha
+/// verbatim (no re-encode); PNG/WEBP decode to RGB and lay down raw (alpha
 /// composited onto white — see `build_image_xobject`). The Info dict carries
 /// Title/Author/Subject/Keywords; an `ErolibMetadata` stream holds the full
 /// JSON record so import can recover provenance the Info dict can't represent
@@ -227,7 +227,12 @@ fn build_image_xobject(bytes: &[u8]) -> Result<(printpdf::ImageXObject, u32, u32
         ));
     }
 
-    // PNG / WEBP / AVIF: decode to pixels (AVIF can't ride a DCT stream).
+    // PNG / WEBP: decode to pixels. AVIF bytes are no longer decodable
+    // (dav1d was dropped); bail with a clear message so the caller can skip
+    // or report the page instead of silently producing a blank PDF page.
+    if ext == "avif" {
+        anyhow::bail!("AVIF pages are not supported in PDF export (decoder removed)");
+    }
     let img = image::load_from_memory(bytes).context("decode image for pdf")?;
     let (w, h) = (img.width(), img.height());
     let raw = img.to_rgba8().into_raw();

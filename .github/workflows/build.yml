@@ -58,20 +58,6 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      # image's avif-native feature decodes the AVIF pages pixiv delivers.
-      # macOS links a system dav1d via pkg-config; Windows has no system
-      # dav1d, so dav1d-sys git-clones dav1d and builds it with meson/ninja,
-      # which on x86_64 requires nasm.
-      - name: Install native codec dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install dav1d pkgconf
-
-      - name: Install native codec dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install nasm -y
-          pip install meson ninja
-
       - name: Build installers (tauri)
         run: pnpm tauri build --target ${{ matrix.target }}
 

@@ -185,17 +185,22 @@ impl StorageService {
 
     /// Re-encode page bytes into lossy WebP (quality `WEBP_QUALITY`), the
     /// unified page format for the whole library. Sources already in WebP
-    /// pass through untouched; jpg/png/avif are decoded then encoded via
+    /// pass through untouched; jpg/png are decoded then encoded via
     /// libwebp (the image crate's own webp encoder is lossless-only, which
     /// would grow jpeg sources instead of shrinking them). The result is only
-    /// kept when it is actually smaller than the source — pixiv's AVIF pages
-    /// are already tightly compressed and would *grow* at q80. Any decode/
-    /// encode failure returns the original bytes — a page is never dropped
-    /// from a book, and the `warn!` keeps silent reingests of odd formats
-    /// visible.
+    /// kept when it is actually smaller than the source. AVIF bytes are no
+    /// longer decodable (dav1d was dropped — every book is normalized to
+    /// webp on ingest); they pass through untouched with a warn so a stale
+    /// AVIF page is never silently dropped from a book.
     pub(crate) fn ensure_webp(raw: &[u8]) -> Vec<u8> {
         // WebP RIFF container: "RIFF" + size + "WEBP".
         if raw.len() >= 12 && raw.starts_with(b"RIFF") && raw[8..12] == *b"WEBP" {
+            return raw.to_vec();
+        }
+        // AVIF: no decoder available — warn and keep the bytes verbatim so a
+        // page is never silently dropped from a book.
+        if guess_image_extension(raw) == "avif" {
+            tracing::warn!(len = raw.len(), "AVIF page encountered but no decoder available; storing as-is");
             return raw.to_vec();
         }
         let Ok(img) = image::load_from_memory(raw) else {
@@ -215,10 +220,14 @@ impl StorageService {
 
     /// Decode `raw` (jpg/png/webp) and re-encode as a JPEG whose longest edge
     /// is ≤ `max_edge` (aspect ratio preserved). Returns the original bytes on
-    /// any decode/encode failure.
+    /// any decode/encode failure or when the format is undecodable (e.g. AVIF).
     fn shrink_to_jpeg(raw: &[u8], max_edge: u32) -> Vec<u8> {
         use image::imageops::FilterType;
         use std::io::Cursor;
+        // AVIF: no decoder available — return the original bytes.
+        if guess_image_extension(raw) == "avif" {
+            return raw.to_vec();
+        }
         let Ok(img) = image::load_from_memory(raw) else {
             return raw.to_vec();
         };

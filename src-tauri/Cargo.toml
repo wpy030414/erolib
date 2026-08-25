@@ -35,11 +35,13 @@ tower-http = { version = "0.5", features = ["fs", "cors"] }
 zip = "0.6"
 # Metadata hash for local one-way sync filenames (sha256 of source/title/pages/size).
 sha2 = "0.10"
-# Image decode for covers, library pages, and PDF/EPUB export. `avif-native`
-# (dav1d, via pkg-config on macOS) decodes the AVIF pages pixiv still delivers
-# and that linger in pre-migration books; ingest re-encodes every page to
-# lossy webp via the `webp` crate below, so this crate only ever decodes.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "avif-native"] }
+# Image decode for covers, library pages, and PDF/EPUB export. All pages are
+# normalized to lossy webp on ingest (via the `webp` crate below), so this
+# crate only decodes jpeg/png/webp. AVIF decoding (formerly `avif-native`,
+# backed by dav1d) was dropped because the native toolchain (pkg-config +
+# meson + ninja + nasm) was fragile on Windows CI and no longer needed —
+# every book is re-encoded to webp on import.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # Lossy VP8 encoding for the unified page format — image crate's own webp
 # encoder is lossless-only (VP8L), which would grow jpeg sources instead of
 # shrinking them. libwebp-sys compiles bundled C sources via `cc`; no nasm,
