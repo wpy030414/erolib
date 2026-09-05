@@ -47,6 +47,13 @@ export default function Settings() {
   const [resetError, setResetError] = useState<string | null>(null);
   const [confirmInput, setConfirmInput] = useState('');
   const [showClearAll, setShowClearAll] = useState(false);
+  const clearAllDialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (showClearAll && clearAllDialogRef.current) {
+      clearAllDialogRef.current.showModal();
+    }
+  }, [showClearAll]);
 
   const confirmPhrase = t('settings.reset.confirmPhrase');
   const confirmMatched = confirmInput.trim() === confirmPhrase;
@@ -254,7 +261,7 @@ export default function Settings() {
 
       {/* Clear all confirmation dialog */}
       {showClearAll && (
-        <dialog ref={(el) => { if (el) el.showModal(); }} className="export-dialog" onClose={() => setShowClearAll(false)}>
+        <dialog ref={clearAllDialogRef} className="export-dialog" onClose={() => setShowClearAll(false)}>
           <div className="export-dialog__panel">
             <div className="export-dialog__header">
               <span className="export-dialog__title">{t('settings.reset.clearAll')}</span>

@@ -43,7 +43,7 @@ export function SourceCard({
         {cover ? (
           <img src={cover} className="book-cover" alt={title} loading="lazy" decoding="async" />
         ) : (
-          <div className="book-placeholder">{title.charAt(0).toUpperCase()}</div>
+          <div className="book-placeholder">{(title || '?').charAt(0).toUpperCase()}</div>
         )}
         {pageCount > 0 && <div className="book-pages-badge">{pageCount}</div>}
         {isBusy && (
