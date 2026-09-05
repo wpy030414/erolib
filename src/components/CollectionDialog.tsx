@@ -14,11 +14,10 @@ import { M3eDialog } from '@m3e/react/dialog';
 import { M3eButton } from '@m3e/react/button';
 
 interface CollectionDialogProps {
-  visible: boolean;
   onClose: () => void;
 }
 
-export function CollectionDialog({ visible, onClose }: CollectionDialogProps) {
+export function CollectionDialog({ onClose }: CollectionDialogProps) {
   const { t } = useI18n();
   const store = useCollectionsStore();
   const toast = useToastStore();
@@ -34,13 +33,8 @@ export function CollectionDialog({ visible, onClose }: CollectionDialogProps) {
 
   useEffect(() => {
     store.ensureLoaded();
-  }, [store]);
-
-  useEffect(() => {
-    if (!visible) return;
-    store.ensureLoaded();
     refreshCounts();
-  }, [visible, store]);
+  }, [store]);
 
   async function refreshCounts() {
     api.searchBooks({ sort_by: 'date', sort_order: 'desc', page: 1, page_size: 1 })
@@ -138,8 +132,6 @@ export function CollectionDialog({ visible, onClose }: CollectionDialogProps) {
     }
     setTimeout(refreshCounts, 100);
   }
-
-  if (!visible) return null;
 
   return createPortal(
     <>
