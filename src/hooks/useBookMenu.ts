@@ -19,6 +19,8 @@ export function useBookMenu() {
 
   const closeMenu = useCallback((bookId: string) => {
     setMenuOpen((prev) => ({ ...prev, [bookId]: false }));
+    const el = menuRefs.current.get(bookId);
+    if (el?.close) el.close();
   }, []);
 
   const openCollectionPicker = useCallback((bookId: string) => {
