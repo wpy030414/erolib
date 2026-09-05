@@ -3,7 +3,7 @@
     <div class="book-cover-wrap">
       <img v-if="cover" :src="cover" class="book-cover" :alt="title" loading="lazy" decoding="async" />
       <div v-else class="book-placeholder">{{ title.charAt(0).toUpperCase() }}</div>
-      <div class="book-pages-badge">{{ pageCount }}</div>
+      <div v-if="pageCount > 0" class="book-pages-badge">{{ pageCount }}</div>
       <div v-if="isBusy" class="book-cover-mask">
         <div v-if="hasProgress" class="progress-ring-wrap">
           <svg class="progress-ring" viewBox="0 0 36 36">

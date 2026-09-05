@@ -81,6 +81,8 @@ import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToastStore } from '@/stores/toast';
 import { useEhentaiBrowseStore } from '@/stores/ehentai-browse';
+import '@material/web/button/filled-tonal-button.js';
+import '@material/web/switch/switch.js';
 import MdiIcon from '@/components/MdiIcon.vue';
 import SourceCard from '@/components/SourceCard.vue';
 import FeedList from '@/components/FeedList.vue';
@@ -170,7 +172,7 @@ async function startLogin() {
     await api.openEHentaiLoginWindow();
   } catch (e) {
     loggingIn.value = false;
-    console.error('opening login window:', e);
+    toast.addToast('error', t('eh.login.loginFailed', { error: String(e) }));
   }
 }
 
@@ -179,8 +181,9 @@ async function startLogin() {
 async function onLogout() {
   try {
     await api.ehentaiLogout();
+    toast.addToast('success', t('eh.login.loggedOut'));
   } catch (e) {
-    console.error('ehentai logout:', e);
+    toast.addToast('error', t('eh.login.logoutFailed', { error: String(e) }));
   }
   cookie.value = '';
   store.resetAll();
@@ -219,6 +222,7 @@ onMounted(async () => {
       cookie.value = evt.payload.cookie;
       loggedIn.value = true;
       loggingIn.value = false;
+      toast.addToast('success', t('eh.login.loggedInToast'));
     }
   });
 

@@ -3,7 +3,7 @@
     class="reader fill-height"
     :class="{ 'reader--ui-hidden': uiHidden }"
     @mousemove="onMouseMove"
-    @mouseleave="uiHidden = true"
+    @mouseleave="onMouseLeave"
   >
     <header class="reader-topbar">
       <button
@@ -40,6 +40,7 @@
     <div
       class="reader-viewport"
       @click="onViewportClick"
+      @contextmenu.prevent="onContextMenu"
     >
       <template v-if="isAnimated">
         <canvas v-show="!animLoading" ref="animCanvas" class="reader-image reader-image--anim" />
@@ -85,6 +86,37 @@
 
       <span class="reader-page-label text-body-2">{{ pageCount ?? '?' }}</span>
     </div>
+
+    <!-- Right-click context menu on the displayed image.
+         A hidden 1×1 anchor dot is moved to the click position so the menu
+         appears exactly where the cursor is, rather than at the viewport edge. -->
+    <div
+      id="reader-menu-anchor"
+      ref="menuAnchorEl"
+      class="reader-menu-anchor"
+      :style="menuAnchorStyle"
+    />
+    <md-menu
+      id="reader-image-menu"
+      ref="readerMenuRef"
+      anchor="reader-menu-anchor"
+      :open="menuOpen"
+      positioning="fixed"
+      @closed="menuOpen = false"
+    >
+      <md-menu-item @click="onSetAsTheme">
+        <MdiIcon slot="start" :path="mdiPalette" :size="18" />
+        <div slot="headline">{{ t('reader.menu.setAsTheme') }}</div>
+      </md-menu-item>
+      <md-menu-item v-if="!isAnimated" @click="onSaveImage">
+        <MdiIcon slot="start" :path="mdiContentSave" :size="18" />
+        <div slot="headline">{{ t('reader.menu.saveImage') }}</div>
+      </md-menu-item>
+      <md-menu-item v-if="!isAnimated" @click="onDeletePage">
+        <MdiIcon slot="start" :path="mdiDelete" :size="18" />
+        <div slot="headline">{{ t('reader.menu.deletePage') }}</div>
+      </md-menu-item>
+    </md-menu>
   </div>
 </template>
 
@@ -93,14 +125,33 @@ import {
   mdiArrowLeft,
   mdiImageSizeSelectLarge,
   mdiImageSizeSelectActual,
+  mdiPalette,
+  mdiContentSave,
+  mdiDelete,
 } from '@mdi/js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { save as dialogSave } from '@tauri-apps/plugin-dialog';
+import { sourceColorFromImage, hexFromArgb } from '@material/material-color-utilities';
+import '@material/web/menu/menu.js';
+import '@material/web/menu/menu-item.js';
+import '@material/web/slider/slider.js';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
-import { applyMd3Theme } from '@/services/md3-theme';
 import { useThemeStore } from '@/stores/theme';
 import type { Seed } from '@/services/md3-theme';
+import type { Book } from '@/types';
+import MdiIcon from '@/components/MdiIcon.vue';
+import { useToastStore } from '@/stores/toast';
+import { deleteThumb } from '@/services/thumb-cache';
+
+/** Material Web menu element — uses the same pattern as Library.vue to call
+ *  .show() on right-click so the menu opens at the cursor position. */
+type MdMenuElement = HTMLElement & {
+  show: () => void;
+  close: () => void;
+  open: boolean;
+};
 
 type ZoomMode = 'fill' | 'contain';
 
@@ -124,7 +175,66 @@ const blobs = ref<Record<number, string>>({});
 const current = ref(0);
 const zoomMode = ref<ZoomMode>(readZoomMode());
 const uiHidden = ref(false);
+
+// Context-menu state
+const menuOpen = ref(false);
+const readerMenuRef = ref<MdMenuElement | null>(null);
+const menuAnchorEl = ref<HTMLElement | null>(null);
+const menuAnchorStyle = ref('');
+const bookMeta = ref<Book | null>(null);
+/** Per-page file extension inferred from magic bytes, e.g. "jpg" / "png" / "webp". */
+const pageExtensions = ref<Record<number, string>>({});
+
+// Backend reading-session id for this Reader mount (one session per mount).
+// `null` until `api.openBook` resolves — if the call fails we still track time
+// locally, we just don't report it to the reading-sessions table.
+let readSessionId: number | null = null;
+// True once we've logged the "no session yet" warning for the current session,
+// so the per-second tick doesn't spam the console while open_book is pending.
+let warnedNoSession = false;
+
+/** Report this session's reading delta (ms) to the backend. The delta is
+ *  accumulated - baseline, where baseline was captured when the session opened —
+ *  never the cumulative all-time total, which would inflate the weekly stat. */
+function reportReadTimeToBackend(bookId: string) {
+  if (readSessionId === null) {
+    // Either open_book hasn't resolved yet, or it failed permanently. Warn once
+    // per "still null" streak so a silent failure (which would leave the Home
+    // hero stat stuck) is visible in the console without flooding it every tick.
+    if (!warnedNoSession) {
+      warnedNoSession = true;
+      console.warn(
+        `[Reader] recordReading skipped — no session_id yet for ${bookId} (open_book pending or failed)`
+      );
+    }
+    return;
+  }
+  warnedNoSession = false;
+  const deltaMs = Math.max(0, Math.round((readTimeAccumulated - readTimeSessionBaseline) * 1000));
+  void api
+    .recordReading(bookId, readSessionId, deltaMs)
+    .catch((e) => console.warn(`[Reader] recordReading failed for ${bookId}:`, e));
+}
+
+// Auto-hide the bars on a grace period: while the cursor is parked inside the
+// bar zone there is NO timer and the bar stays visible.  Only the *transition
+// out of* the zone starts a 2s timer; if the cursor re-enters before it fires
+// the timer is canceled and the bar stays.  The timer firing hides the bar.
 let uiHideTimer: ReturnType<typeof setTimeout> | null = null;
+let wasInZone = false;
+function clearUiHideTimer() {
+  if (uiHideTimer) {
+    clearTimeout(uiHideTimer);
+    uiHideTimer = null;
+  }
+}
+function scheduleUiHide() {
+  clearUiHideTimer();
+  uiHideTimer = setTimeout(() => {
+    uiHidden.value = true;
+    uiHideTimer = null;
+  }, 2000);
+}
 
 watch(zoomMode, (v) => {
   saveZoomMode(v);
@@ -306,6 +416,128 @@ function saveBookProgress(bookId: string, page: number) {
   }
 }
 
+// ── Reading-time tracking ───────────────────────────────────────────────
+// Tracks how long the user spends reading each book. Only counts while the
+// tab is visible (document.hidden === false) so backgrounded tabs don't
+// inflate the number. Accumulated seconds are persisted per book in
+// localStorage so they survive reloads; a ticking ref keeps the footer
+// readout live. Animated (ugoira) books are tracked the same way.
+//
+// Accumulation is *incremental*, not "wall span": every tick reads the delta
+// from the last tick and only adds it if it falls within TICK_CAP_SECONDS.
+// That bound is what keeps an OS-level JS freeze (which WKWebView applies when
+// the app is backgrounded or the lid closes, WITHOUT firing visibilitychange)
+// from dumping the whole frozen span into the tally at once. In steady state
+// each tick contributes ≈1s, freezes contribute nothing, and at most ~1–2s can
+// ever leak through.
+const TICK_CAP_SECONDS = 2;
+
+const readTimeDisplay = ref('0m');
+let readTimeStart: number | null = null; // wallclock (ms) when the active window opened — "is running" marker
+let readTimeLastTick: number | null = null; // wallclock (ms) of the previous tick — delta reference
+let readTimeAccumulated = 0; // confirmed seconds banked for this book (before + ticks)
+let readTimeSessionBaseline = 0; // readTimeAccumulated snapshot when the backend session opened; reported delta = accumulated - this
+let readTimeBookId: string | null = null; // which book the accumulated time belongs to
+let readTimeTimer: ReturnType<typeof setInterval> | null = null;
+
+function readTimeKey(bookId: string): string {
+  return `erolib.reader.readtime.${bookId}`;
+}
+
+function loadReadTime(bookId: string): number {
+  try {
+    const raw = window.localStorage.getItem(readTimeKey(bookId));
+    const parsed = raw ? Number(raw) : 0;
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveReadTime(bookId: string, seconds: number) {
+  try {
+    window.localStorage.setItem(readTimeKey(bookId), String(Math.max(0, Math.round(seconds))));
+  } catch {
+    // ignore
+  }
+}
+
+function formatReadTime(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+/** Live footer readout reflects the banked total for the open book. */
+function refreshReadTime() {
+  readTimeDisplay.value = formatReadTime(readTimeAccumulated);
+}
+
+function startReadTime(bookId: string) {
+  if (!bookId || readTimeStart != null) return;
+  readTimeAccumulated = loadReadTime(bookId);
+  readTimeBookId = bookId;
+  readTimeStart = Date.now();
+  readTimeLastTick = readTimeStart;
+  refreshReadTime();
+  // Open a backend reading session so the Home page can aggregate per-book
+  // stats. Failure is non-fatal — the localStorage fallback still works.
+  if (readSessionId === null) {
+    // Snapshot the banked total at the moment this backend session opens so we
+    // report the per-session DELTA (accumulated - baseline), not the cumulative
+    // all-time total. Set synchronously before the async openBook resolves: early
+    // ticks are dropped (readSessionId still null) but no time is lost, since the
+    // delta is always measured from this preserved baseline.
+    readTimeSessionBaseline = readTimeAccumulated;
+    void api.openBook(bookId).then((id) => { readSessionId = id; }).catch(() => {});
+  }
+}
+
+/** Halt accumulation and mark the window ended. Last-tick fields are reset so
+ *  the next start picks a fresh baseline. */
+function stopReadTime() {
+  readTimeStart = null;
+  readTimeLastTick = null;
+}
+
+function clearReadTimeTimer() {
+  if (readTimeTimer != null) {
+    clearInterval(readTimeTimer);
+    readTimeTimer = null;
+  }
+}
+
+function ensureReadTimeTimer() {
+  if (readTimeTimer != null) return;
+  // Incremental accumulation: each tick credits only (now - lastTick)/1000, and
+  // only if it's within TICK_CAP_SECONDS — anything larger means JS was frozen
+  // (WKWebView backgrounding / OS sleep) and must NOT be counted. In normal
+  // running the delta is ≈1s; on a freeze-resume we skip it, losing at most the
+  // 1s before the book was parked — so the tally stays truthful.
+  readTimeTimer = setInterval(() => {
+    if (readTimeStart != null && readTimeLastTick != null && readTimeBookId) {
+      const now = Date.now();
+      const deltaSec = (now - readTimeLastTick) / 1000;
+      readTimeLastTick = now;
+      if (deltaSec > 0 && deltaSec <= TICK_CAP_SECONDS) {
+        readTimeAccumulated += deltaSec;
+      }
+      refreshReadTime();
+      saveReadTime(readTimeBookId, readTimeAccumulated);
+      reportReadTimeToBackend(readTimeBookId);
+    }
+  }, 1000);
+}
+
+function onVisibilityChangeReadTime() {
+  if (document.hidden) stopReadTime();
+  else startReadTime(props.id);
+}
+
 /** Guess a mime type from an ArrayBuffer's leading magic bytes so blob URLs
  *  render all stored formats. Raw bytes now arrive as ArrayBuffer (Tauri raw
  *  IPC), so sniff a 12-byte Uint8Array view over the buffer without copying. */
@@ -324,6 +556,13 @@ function mimeFromArrayBuffer(buf: ArrayBuffer): string {
     b[11] === 0x50
   )
     return 'image/webp';
+  // ISO-BMFF "ftyp" box with an avif/avis brand: AVIF pages still present in
+  // pre-migration books. (macOS 12's WebKit can't render AVIF regardless, but
+  // the blob type should at least be honest rather than mislabeled jpeg.)
+  if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+    const brand = String.fromCharCode(b[8], b[9], b[10], b[11]);
+    if (brand === 'avif' || brand === 'avis') return 'image/avif';
+  }
   return 'image/jpeg';
 }
 
@@ -337,12 +576,15 @@ function go(delta: number) {
 }
 
 function onViewportClick(e: MouseEvent) {
-  if (isAnimated.value) return; // animated books play continuously; taps do nothing
-  const target = e.currentTarget as HTMLElement;
-  const rect = target.getBoundingClientRect();
+  // Animated books play continuously — taps do nothing.  Only static pages
+  // respond to zone taps (left/right third); the middle ~34% is inert.
+  if (isAnimated.value) return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   const x = e.clientX - rect.left;
-  if (x > rect.width / 2) go(1);
-  else go(-1);
+  const zone = x / rect.width;
+  if (zone < 0.33) go(-1);
+  else if (zone > 0.66) go(1);
+  // Middle ~34%: nothing.
 }
 
 function onKeyDown(e: KeyboardEvent) {
@@ -353,6 +595,34 @@ function onKeyDown(e: KeyboardEvent) {
   } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
     e.preventDefault();
     go(-1);
+  }
+}
+
+// ── Trackpad two-finger horizontal swipe ────────────────────────────
+// macOS WebKit delivers two-finger horizontal swipes as `wheel` events with
+// non-zero `deltaX`. Accumulate horizontal displacement; when it exceeds the
+// threshold, turn exactly one page and reset. Vertical-dominant events are
+// ignored so normal page scrolling still works. `preventDefault()` suppresses
+// WebKit's rubber-band bounce; the listener MUST be registered with
+// `passive: false` (not `passive: true`) or the call becomes a no-op.
+const SWIPE_THRESHOLD = 50;
+let swipeAccumX = 0;
+
+function onWheel(e: WheelEvent) {
+  if (isAnimated.value) return;
+  // Vertical-dominant: reset and let the browser scroll normally.
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    swipeAccumX = 0;
+    return;
+  }
+  // Ignore tiny momentum/inertia events (naturally < 1px per event).
+  if (Math.abs(e.deltaX) < 1) return;
+  e.preventDefault();
+  swipeAccumX += e.deltaX;
+  if (Math.abs(swipeAccumX) >= SWIPE_THRESHOLD) {
+    // 向右滑 (deltaX < 0) = 下一张; 向左滑 (deltaX > 0) = 上一张
+    go(swipeAccumX > 0 ? -1 : 1);
+    swipeAccumX = 0;
   }
 }
 
@@ -368,6 +638,7 @@ async function loadMetadata() {
       api.getBook(props.id),
       api.getBookPageCount(props.id),
     ]);
+    bookMeta.value = book;
     title.value = book.title;
     pageCount.value = count;
     try {
@@ -386,6 +657,193 @@ async function loadMetadata() {
  *  than the old span=2 so back/forward jumps within a few pages are instant,
  *  while the out-of-window eviction below keeps memory bounded for huge books. */
 const PREFETCH_SPAN = 10;
+
+// ── Right-click context menu ────────────────────────────────────────
+
+function onContextMenu(e: MouseEvent) {
+  // Move the hidden 1×1 anchor dot to the click position so the menu opens
+  // exactly where the user right-clicked.
+  menuAnchorStyle.value = `left:${e.clientX}px;top:${e.clientY}px;`;
+  menuOpen.value = true;
+  nextTick(() => {
+    const el = readerMenuRef.value;
+    if (el && typeof el.show === 'function') {
+      el.show();
+    }
+  });
+}
+
+/** "Set as Theme": extract dominant colour from the current page image and
+ *  install it as a custom MD3 theme seed. */
+async function onSetAsTheme() {
+  menuOpen.value = false;
+  // For animated books the canvas element holds the current frame; for static
+  // pages the <img> is what we need.  sourceColorFromImage wants a fully-loaded
+  // <img>, so we always create a fresh Image from the current blob URL.
+  const srcUrl = blobs.value[current.value];
+  if (!srcUrl) return;
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  const colorPromise = new Promise<number>((resolve, reject) => {
+    img.onload = () => {
+      sourceColorFromImage(img).then(resolve).catch(reject);
+    };
+    img.onerror = () => reject(new Error('Failed to load image for colour extraction'));
+  });
+  img.src = srcUrl;
+
+  try {
+    const argb = await colorPromise;
+    const seedHex = hexFromArgb(argb);
+
+    // Full-resolution image as data URL for the background overlay (downscale to
+    // at most MAX_BG_DIM px wide to keep the data URL manageable — ~300-500KB jpeg).
+    const MAX_BG_DIM = 1920;
+    const fullCanvas = document.createElement('canvas');
+    const fullScale = Math.min(MAX_BG_DIM / img.naturalWidth, MAX_BG_DIM / img.naturalHeight, 1);
+    fullCanvas.width = Math.round(img.naturalWidth * fullScale);
+    fullCanvas.height = Math.round(img.naturalHeight * fullScale);
+    const fullCtx = fullCanvas.getContext('2d')!;
+    fullCtx.drawImage(img, 0, 0, fullCanvas.width, fullCanvas.height);
+    const imageB64 = fullCanvas.toDataURL('image/jpeg', 0.7);
+
+    // Generate a small thumbnail (THUMB_DIM×THUMB_DIM) for the settings page.
+    const THUMB_DIM = 100;
+    const thumbCanvas = document.createElement('canvas');
+    const scale = Math.min(THUMB_DIM / img.naturalWidth, THUMB_DIM / img.naturalHeight, 1);
+    thumbCanvas.width = Math.round(img.naturalWidth * scale);
+    thumbCanvas.height = Math.round(img.naturalHeight * scale);
+    const thumbCtx = thumbCanvas.getContext('2d')!;
+    thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    const thumbnailB64 = thumbCanvas.toDataURL('image/jpeg', 0.6);
+
+    const themeStore = useThemeStore();
+    themeStore.addCustomTheme(
+      seedHex,
+      imageB64,
+      thumbnailB64,
+      current.value,
+      props.id,
+      bookMeta.value?.title ?? '',
+    );
+
+    // addCustomTheme calls setSeed which re-applies the global theme tokens
+    // via applyArgbTheme — the Reader must immediately re-force its own dark
+    // variant so the reading view stays dark regardless of the global mode.
+    // Also update the "previous" snapshots so onBeforeUnmount can restore the
+    // correct values when the user leaves the Reader.
+    // Use store methods: applyMd3Theme would try argbFromHex("custom:<uuid>") and crash.
+    themeStore.setMode('dark');
+    previousSeed.value = themeStore.seed;
+    previousMode.value = 'dark';
+
+    const toast = useToastStore();
+    toast.addToast('success', t('reader.menu.themeApplied'));
+  } catch (e) {
+    console.warn('[Reader] Failed to extract theme colour:', e);
+  }
+}
+
+/** "Save Image": export the current page as an individual file via the system
+ *  save dialog.  File name follows "${title}_p${page_leftpad}.${postfix}". */
+async function onSaveImage() {
+  menuOpen.value = false;
+  if (isAnimated.value) return;
+
+  const titleStr = (bookMeta.value?.title || 'page').replace(/[/\\?%*:|"<>]/g, '_');
+  const totalWidth = String(pageCount.value ?? 1).length;
+  const padded = String(current.value + 1).padStart(Math.max(1, totalWidth), '0');
+  const ext = pageExtensions.value[current.value] ?? 'jpg';
+
+  const defaultPath = `${titleStr}_p${padded}.${ext}`;
+  const dest = await dialogSave({
+    defaultPath,
+    filters: [
+      { name: `Image (.${ext})`, extensions: [ext] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+
+  if (dest) {
+    try {
+      await api.saveBookPage(props.id, current.value, dest);
+      const toast = useToastStore();
+      toast.addToast('success', t('reader.menu.imageSaved'));
+    } catch (e) {
+      console.warn('[Reader] Failed to save page:', e);
+      const toast = useToastStore();
+      toast.addToast('error', t('reader.menu.imageSaveFailed'));
+    }
+  }
+}
+
+/** "Delete Page": physically remove the current page from the book's archive —
+ *  for ad pages wedged into a book. The backend repacks the .cb7 without it
+ *  and returns the new page count, so exports no longer contain the page.
+ *  Every later page shifts down one, invalidating every prefetched blob at
+ *  once. The swap must be instant (no loading-skeleton flash), and `blobs`
+ *  is only reactive as a whole — mutating entries in place doesn't retrigger
+ *  `src` — so after the delete we REPLACE blobs with a fresh object holding
+ *  just the page that should now be on screen:
+ *   - Deleting any page with a successor (the common case): that same index
+ *     now holds the NEXT page, whose bytes are fetched BEFORE the state swap.
+ *   - Deleting the last page: the clamp moves onto the previous page; its old
+ *     blob still shows exactly that content, so it's carried over as-is. */
+async function onDeletePage() {
+  menuOpen.value = false;
+  if (isAnimated.value || pageCount.value == null) return;
+
+  const toast = useToastStore();
+  const dropped = current.value;
+  try {
+    const newCount = await api.deletePage(props.id, dropped);
+    const nextIndex = Math.min(dropped, Math.max(0, newCount - 1));
+    const carriedOver = nextIndex !== dropped;
+
+    // Fetch the replacement page before touching reactive state. Skipped when
+    // clamping moved us onto an earlier page — its existing blob is correct.
+    let replacement: string | null = null;
+    if (!carriedOver) {
+      try {
+        const buf = await api.getBookPage(props.id, nextIndex);
+        const mime = mimeFromArrayBuffer(buf);
+        pageExtensions.value[nextIndex] = mime.split('/')[1] ?? 'jpg';
+        replacement = URL.createObjectURL(new Blob([buf], { type: mime }));
+      } catch {
+        // No seamless swap possible; prefetch below will fill the window.
+      }
+    }
+
+    // Single atomic state swap. Replacing blobs.value wholesale guarantees the
+    // src computed recomputes this tick; in-place entry mutation would not.
+    pageCount.value = newCount;
+    const stale = blobs.value;
+    if (replacement) {
+      blobs.value = { [nextIndex]: replacement };
+    } else {
+      // Last-page clamp: the old blob at the clamped index already shows the
+      // right page — carry it into the fresh object so there's no skeleton
+      // flash. (Missing blob just means prefetch fills in a beat later.)
+      const kept = stale[nextIndex];
+      blobs.value = kept ? { [nextIndex]: kept } : {};
+    }
+    for (const url of Object.values(stale)) {
+      if (!Object.values(blobs.value).includes(url)) URL.revokeObjectURL(url);
+    }
+    current.value = nextIndex;
+    saveBookProgress(props.id, current.value);
+    // The cover is extracted from page 0; when it was the one deleted the old
+    // thumbnail is stale, so drop it and let the library re-fetch.
+    if (dropped === 0) void deleteThumb(props.id);
+    toast.addToast('success', t('reader.menu.pageDeleted'));
+  } catch (e) {
+    console.warn('[Reader] Failed to delete page:', e);
+    toast.addToast('error', t('reader.menu.pageDeleteFailed'));
+  }
+}
+
+// ── Prefetching ──────────────────────────────────────────────────────
 // Pages currently being fetched by an in-flight prefetchPages call. Without
 // this, two overlapping calls (rapid scrolling fires the watch repeatedly)
 // both see a not-yet-assigned page as "unloaded", both fetch it, and the second
@@ -423,7 +881,9 @@ async function prefetchPages() {
     targets.map(async (p) => {
       try {
         const buf = await api.getBookPage(props.id, p);
-        const blob = new Blob([buf], { type: mimeFromArrayBuffer(buf) });
+        const mime = mimeFromArrayBuffer(buf);
+        pageExtensions.value[p] = mime.split('/')[1] ?? 'jpg';
+        const blob = new Blob([buf], { type: mime });
         blobs.value[p] = URL.createObjectURL(blob);
       } catch (e) {
         console.warn(`Failed to load page ${p}:`, e);
@@ -438,12 +898,24 @@ function toggleZoom() {
   zoomMode.value = zoomMode.value === 'fill' ? 'contain' : 'fill';
 }
 
-function onMouseMove() {
-  uiHidden.value = false;
-  if (uiHideTimer) clearTimeout(uiHideTimer);
-  uiHideTimer = setTimeout(() => {
-    uiHidden.value = true;
-  }, 2000);
+function onMouseMove(e: MouseEvent) {
+  // Bar-zone model: parked inside the zone → bar stays, NO timer.  Only the
+  // *transition out of* the zone starts a 2s grace timer; re-entering before
+  // it fires cancels it (bar stays).  Timer firing hides the bar.
+  const inZone = e.clientY < 64 || e.clientY > window.innerHeight - 56;
+  if (inZone) {
+    uiHidden.value = false;
+    clearUiHideTimer();
+  } else if (wasInZone) {
+    scheduleUiHide();
+  }
+  wasInZone = inZone;
+}
+
+function onMouseLeave() {
+  wasInZone = false;
+  uiHidden.value = true;
+  clearUiHideTimer();
 }
 
 /** Force dark theme while Reader is mounted, restore on leave. */
@@ -454,21 +926,39 @@ const themeStore = useThemeStore();
 onMounted(() => {
   loadMetadata();
   window.addEventListener('keydown', onKeyDown);
+  // passive: false is REQUIRED — onWheel calls preventDefault() to stop
+  // WebKit's rubber-band bounce. With passive: true the browser ignores it.
+  window.addEventListener('wheel', onWheel, { passive: false });
   previousMode.value = themeStore.mode;
   previousSeed.value = themeStore.seed;
-  applyMd3Theme(themeStore.seed, 'dark');
+  themeStore.setMode('dark');
+  scheduleUiHide();
+  document.addEventListener('visibilitychange', onVisibilityChangeReadTime);
+  ensureReadTimeTimer();
+  if (!document.hidden) startReadTime(props.id);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('wheel', onWheel);
+  clearUiHideTimer();
   clearPlayTimer();
+  document.removeEventListener('visibilitychange', onVisibilityChangeReadTime);
+  if (readSessionId !== null && readTimeBookId) {
+    stopReadTime();
+    reportReadTimeToBackend(readTimeBookId);
+  }
+  clearReadTimeTimer();
   resizeObserver?.disconnect();
   resizeObserver = null;
   closeBitmaps();
   clearBlobs();
-  if (uiHideTimer) clearTimeout(uiHideTimer);
-  if (previousMode.value && previousSeed.value) {
-    applyMd3Theme(previousSeed.value, previousMode.value);
+  if (previousMode.value != null && previousSeed.value != null) {
+    // Use the store's setSeed/setMode rather than applyMd3Theme directly: when
+    // the seed is a custom:<uuid> key, applyMd3Theme would try to parse the key
+    // as a hex colour and crash.  The store's applyTheme dispatches correctly.
+    themeStore.setMode(previousMode.value);
+    themeStore.setSeed(previousSeed.value);
   }
 });
 
@@ -476,6 +966,13 @@ watch(() => props.id, () => {
   current.value = 0;
   clearBlobs();
   closeBitmaps();
+  stopReadTime();
+  if (readSessionId !== null && readTimeBookId) {
+    reportReadTimeToBackend(readTimeBookId); // finalize the previous book's session delta + ended_at
+  }
+  readSessionId = null;
+  warnedNoSession = false;
+  startReadTime(props.id);
   loadMetadata();
 });
 
@@ -673,5 +1170,15 @@ onBeforeUnmount(() => {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Hidden anchor dot — moved to the right-click position so the context menu
+   opens exactly where the user clicked, not at the viewport edge. */
+.reader-menu-anchor {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  z-index: 0;
 }
 </style>

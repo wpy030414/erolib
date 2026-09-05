@@ -145,6 +145,9 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import '@material/web/button/filled-tonal-button.js';
+import '@material/web/tabs/tabs.js';
+import '@material/web/tabs/primary-tab.js';
 import { api } from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToastStore } from '@/stores/toast';
@@ -244,7 +247,7 @@ async function startLogin() {
     await api.openPixivLoginWindow();
   } catch (e) {
     loggingIn.value = false;
-    console.error('opening login window:', e);
+    toast.addToast('error', t('pixiv.login.loginFailed', { error: String(e) }));
   }
 }
 
@@ -253,8 +256,9 @@ async function startLogin() {
 async function onLogout() {
   try {
     await api.pixivLogout();
+    toast.addToast('success', t('pixiv.login.loggedOut'));
   } catch (e) {
-    console.error('pixiv logout:', e);
+    toast.addToast('error', t('pixiv.login.logoutFailed', { error: String(e) }));
   }
   store.resetAll();
   login.value = null;
@@ -300,6 +304,7 @@ onMounted(async () => {
         user_name: evt.payload.user_name,
       };
       loggingIn.value = false;
+      toast.addToast('success', t('pixiv.login.loggedInToast'));
     },
   );
 

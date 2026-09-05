@@ -9,10 +9,7 @@
     <div v-if="feed.end && feed.items.length" class="feed-end text-center text-medium-emphasis">
       {{ texts.end }}
     </div>
-    <div v-if="feed.loading" class="feed-loading text-center text-medium-emphasis">
-      <md-circular-progress indeterminate />
-      <span>{{ texts.loadingMore }}</span>
-    </div>
+    <FeedLoading v-if="feed.loading">{{ texts.loadingMore }}</FeedLoading>
     <div ref="sentinel" class="feed-sentinel" />
   </div>
 </template>
@@ -20,6 +17,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
+import FeedLoading from '@/components/FeedLoading.vue';
 
 /**
  * Browse-grid scaffolding shared by every feed (Pixiv recommend/following/
@@ -32,7 +30,7 @@ import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
  * AGENTS.md); the per-feed progress ring on SourceCard stays hand-rolled SVG.
  * The sentinel arms itself on mount, so a freshly-shown feed (tab switch, post
  * login, ex toggle) auto-loads its first page. */
-defineProps<{
+const props = defineProps<{
   feed: { items: unknown[]; loading: boolean; end: boolean };
   texts: { empty: string; end: string; loadingMore: string };
 }>();
@@ -40,22 +38,12 @@ defineProps<{
 const emit = defineEmits<{ (e: 'load-more'): void }>();
 
 const sentinel = ref<HTMLElement | null>(null);
-useInfiniteSentinel(sentinel, () => emit('load-more'));
+useInfiniteSentinel(sentinel, () => emit('load-more'), {
+  feedState: props.feed,
+});
 </script>
 
 <style scoped>
-.feed-sentinel {
-  height: 1px;
-}
-
-.feed-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 24px 0;
-}
-
 .feed-end {
   padding: 20px 0;
   font-size: 13px;

@@ -3,6 +3,9 @@ use std::sync::Arc;
 use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::Book;
+use crate::services::locale;
+
+use super::feed::xml_escape;
 
 /// Generates OPDS Atom feeds from the book library. The running HTTP server
 /// (spawned by the `start_opds_server` command) uses this to render responses.
@@ -26,22 +29,46 @@ impl OpdsService {
     }
 
     pub async fn root_feed(&self) -> Result<String, AppError> {
-        let books = sqlx::query_as::<_, Book>(
-            "SELECT * FROM books ORDER BY created_at DESC",
-        )
+        // Join tags + the translation lookup so the blurb's 标签 line renders in
+        // the current locale. (Previously `SELECT *` left book.tags = None, so
+        // feeds showed no tags at all.)
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
+             GROUP BY books.id \
+             ORDER BY books.created_at DESC"
+        );
+        let books = sqlx::query_as::<_, Book>(&sql)
         .fetch_all(&self.db.pool)
         .await
         .map_err(AppError::Db)?;
 
         let base = self.base_url.lock().map(|s| s.clone()).unwrap_or_default();
-        Ok(render_feed(&base, &books, "EroLib Library", "/opds"))
+        Ok(render_feed(&base, &books, "EroLib", "/opds"))
     }
 
     pub async fn search_feed(&self, query: &str) -> Result<String, AppError> {
         let pattern = format!("%{}%", query);
-        let books = sqlx::query_as::<_, Book>(
-            "SELECT * FROM books WHERE title LIKE ? OR original_filename LIKE ? ORDER BY created_at DESC",
-        )
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
+             WHERE books.title LIKE ? OR books.original_filename LIKE ? \
+             GROUP BY books.id \
+             ORDER BY books.created_at DESC"
+        );
+        let books = sqlx::query_as::<_, Book>(&sql)
         .bind(&pattern)
         .bind(&pattern)
         .fetch_all(&self.db.pool)
@@ -60,10 +87,7 @@ fn render_feed(base: &str, books: &[Book], title: &str, self_path: &str) -> Stri
         let updated = book.updated_at.to_rfc3339();
         let download = format!("{}/download/{}", base, book.id);
         let cover = format!("{}/covers/{}", base, book.id);
-        let summary_xml = book
-            .original_filename
-            .as_deref()
-            .unwrap_or("");
+        let summary = format!("<![CDATA[{}]]>", super::feed::book_metadata_blurb(&book));
         entries.push_str(&format!(
             r#"<entry>
   <title>{}</title>
@@ -71,14 +95,14 @@ fn render_feed(base: &str, books: &[Book], title: &str, self_path: &str) -> Stri
   <updated>{}</updated>
   <link rel="http://opds-spec.org/acquisition" href="{}" type="application/x-cb7"/>
   <link rel="http://opds-spec.org/image/thumbnail" href="{}" type="image/jpeg"/>
-  <summary>{}</summary>
+  <summary type="html">{}</summary>
 </entry>"#,
             xml_escape(&book.title),
             book.id,
             updated,
             download,
             cover,
-            xml_escape(summary_xml),
+            summary,
         ));
     }
 
@@ -101,12 +125,4 @@ fn render_feed(base: &str, books: &[Book], title: &str, self_path: &str) -> Stri
         base,
         entries,
     )
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }

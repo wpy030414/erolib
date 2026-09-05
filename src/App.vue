@@ -1,5 +1,6 @@
 <template>
   <div id="erolib-app" class="erolib-app d-flex fill-height">
+    <div v-if="themeBgImage && !isReader" class="theme-bg-overlay" />
     <AppShell v-if="!isReader" />
     <main ref="appMainRef" class="app-main flex-grow-1">
       <router-view />
@@ -14,12 +15,21 @@ import { useRoute } from 'vue-router';
 import AppShell from './components/AppShell.vue';
 import AppToast from './components/AppToast.vue';
 import { useSettingsStore } from './stores/settings';
+import { useThemeStore } from './stores/theme';
+import { useLibraryStore } from './stores/library';
 import { usePixivBrowseStore } from './stores/pixiv-browse';
 import { useEhentaiBrowseStore } from './stores/ehentai-browse';
+import { useNicecatBrowseStore } from './stores/nicecat-browse';
+import { api } from './services/api';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { onLocaleChange, useI18n } from './i18n';
 
 const route = useRoute();
 const isReader = computed(() => route.path.startsWith('/reader'));
+const themeStore = useThemeStore();
+const themeBgImage = computed(() => themeStore.themeBgImage);
 const settingsStore = useSettingsStore();
+const { locale } = useI18n();
 
 // Scroll container — every secondary view scrolls inside this <main>.
 const appMainRef = ref<HTMLElement | null>(null);
@@ -101,11 +111,27 @@ watch(
   },
 );
 
+// F11 toggles fullscreen on any page (requires window focus, which is the
+// browser's default expectation for programmatic fullscreen).
+async function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'F11') {
+    e.preventDefault();
+    const win = getCurrentWindow();
+    try {
+      const isFs = await win.isFullscreen();
+      await win.setFullscreen(!isFs);
+    } catch {
+      // ignore — e.g. permission not granted at runtime
+    }
+  }
+}
+
 onMounted(() => {
   const el = appMainRef.value;
   if (el) {
     el.addEventListener('scroll', onMainScroll, { passive: true });
   }
+  window.addEventListener('keydown', onKeyDown);
   // Restore the initial view's scroll after first layout.
   nextTick(() => {
     requestAnimationFrame(() => restoreScroll(route.path));
@@ -114,14 +140,25 @@ onMounted(() => {
   // app opens (saved ports — single source of truth).
   void settingsStore.autoStartAll();
 
-  // Instantiate both browse stores at app start so their task://progress
-  // listeners are armed immediately — a download that finishes while the user
-  // is on the Tasks page (or anywhere else) flips the corresponding card in
-  // either source, not just the one whose view happens to be mounted. Pinia
-  // returns the same singleton on later usePixivBrowseStore()/useEhentaiBrowseStore()
-  // calls, so the listener registers exactly once per source.
+  // Instantiate browse stores at app start so their task://progress listeners
+  // are armed immediately — a download that finishes while the user is on the
+  // Tasks page (or anywhere else) flips the corresponding card in any source,
+  // not just the one whose view happens to be mounted. Pinia returns the same
+  // singleton on later useXxxBrowseStore() calls, so each listener registers
+  // exactly once per source.
   usePixivBrowseStore();
   useEhentaiBrowseStore();
+  useNicecatBrowseStore();
+
+  // Push the current locale to the backend on startup so SQL renders tags in
+  // the right language from the first query (the backend `settings` row is
+  // empty until pushed; the frontend's localStorage value is the source of
+  // truth). Then, whenever the locale changes, refresh the library grid + tag
+  // chips + metadata so every tag-bearing view re-renders in the new language.
+  void api.setLocale(locale.value).catch(() => {});
+  onLocaleChange(() => {
+    void useLibraryStore().refresh();
+  });
 });
 
 onBeforeUnmount(() => {
@@ -129,6 +166,7 @@ onBeforeUnmount(() => {
   if (el) {
     el.removeEventListener('scroll', onMainScroll);
   }
+  window.removeEventListener('keydown', onKeyDown);
 });
 </script>
 
@@ -142,5 +180,21 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: auto;
+}
+
+/* Custom-theme background overlay — bottom-right image fading toward top-left.
+   Only shown on non-reader pages; the reader already forces its own dark theme
+   and would clash with a semi-transparent overlay. */
+.theme-bg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--theme-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.02) 80%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.02) 80%);
 }
 </style>

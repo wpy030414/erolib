@@ -2,23 +2,13 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-/// Placeholder default used only for `#[serde(skip, default)]` on Task.payload
-/// so that `serde::Deserialize` for Task compiles. The field is never
-/// deserialized from JSON in practice.
-#[allow(dead_code)] // referenced via #[serde(default = "..")] on Task.payload
-pub fn default_task_payload() -> TaskPayload {
-    TaskPayload::PixivBookmarks {
-        cookie: String::new(),
-        user_id: String::new(),
-        limit: 0,
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskSource {
     Pixiv,
     Ehentai,
+    Ahentai,
+    Nicecat,
 }
 
 impl fmt::Display for TaskSource {
@@ -26,6 +16,8 @@ impl fmt::Display for TaskSource {
         match self {
             TaskSource::Pixiv => write!(f, "pixiv"),
             TaskSource::Ehentai => write!(f, "ehentai"),
+            TaskSource::Ahentai => write!(f, "ahentai"),
+            TaskSource::Nicecat => write!(f, "nicecat"),
         }
     }
 }
@@ -36,6 +28,8 @@ impl FromStr for TaskSource {
         match s {
             "pixiv" => Ok(TaskSource::Pixiv),
             "ehentai" => Ok(TaskSource::Ehentai),
+            "ahentai" => Ok(TaskSource::Ahentai),
+            "nicecat" => Ok(TaskSource::Nicecat),
             _ => Err(format!("unknown task source: {s}")),
         }
     }
@@ -50,6 +44,20 @@ pub enum TaskStatus {
     Completed,
     Failed,
     Cancelled,
+}
+
+/// Outcome of a completed-task re-download request, returned to the frontend
+/// so it can pick the right toast. `restarted`/`redownloaded` both kick off a
+/// download (the book is wholly re-fetched); `already_complete` is a no-op.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RedownloadAction {
+    /// No matching book was in the library — a plain retry (full download).
+    Restarted,
+    /// A book existed but was incomplete — it was removed and fully re-fetched.
+    Redownloaded,
+    /// The local archive already matched the remote page count — nothing done.
+    AlreadyComplete,
 }
 
 impl fmt::Display for TaskStatus {
@@ -83,16 +91,6 @@ impl FromStr for TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TaskPayload {
-    PixivBookmarks {
-        cookie: String,
-        user_id: String,
-        limit: u64,
-    },
-    PixivUserWorks {
-        cookie: String,
-        target_user_id: String,
-        limit: u64,
-    },
     EhentaiGallery {
         cookie: String,
         gallery_url: String,
@@ -103,15 +101,49 @@ pub enum TaskPayload {
         cookie: String,
         work_id: String,
     },
+    AhentaiGallery {
+        gallery_id: String,
+        title: String,
+    },
+    NicecatGallery {
+        comic_id: String,
+        title: String,
+    },
 }
 
 impl TaskPayload {
     pub fn source(&self) -> TaskSource {
         match self {
-            TaskPayload::PixivBookmarks { .. }
-            | TaskPayload::PixivUserWorks { .. }
-            | TaskPayload::PixivSingleWork { .. } => TaskSource::Pixiv,
+            TaskPayload::PixivSingleWork { .. } => TaskSource::Pixiv,
             TaskPayload::EhentaiGallery { .. } => TaskSource::Ehentai,
+            TaskPayload::AhentaiGallery { .. } => TaskSource::Ahentai,
+            TaskPayload::NicecatGallery { .. } => TaskSource::Nicecat,
+        }
+    }
+
+    /// Canonical `books.source_url` this payload registers under — must stay
+    /// byte-identical to what each `process_*` stamps (task_manager.rs:
+    /// EHentai ~:1837, Pixiv ~:1250, AHentai ~:1933, NiceCat ~:2302), since
+    /// the re-download scan looks books up by exact string match.
+    pub fn source_url(&self) -> String {
+        match self {
+            TaskPayload::EhentaiGallery { gallery_url, gid, token, .. } => {
+                let host = if gallery_url.contains("exhentai") {
+                    "exhentai.org"
+                } else {
+                    "e-hentai.org"
+                };
+                format!("https://{host}/g/{gid}/{token}/")
+            }
+            TaskPayload::PixivSingleWork { work_id, .. } => {
+                format!("https://www.pixiv.net/artworks/{work_id}")
+            }
+            TaskPayload::AhentaiGallery { gallery_id, .. } => {
+                format!("{}/g/{}/", crate::services::ahentai::AHENTAI_BASE, gallery_id)
+            }
+            TaskPayload::NicecatGallery { comic_id, .. } => {
+                format!("https://ncmm.cc/comic/info/id.{comic_id}")
+            }
         }
     }
 }
@@ -137,7 +169,6 @@ pub struct Task {
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     /// The deserialized payload — never stored as a column.
     #[serde(skip)]
-    #[serde(default = "default_task_payload")]
     pub payload: TaskPayload,
 }
 

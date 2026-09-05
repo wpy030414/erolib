@@ -1,7 +1,10 @@
 <template>
   <div class="pa-6">
     <div class="library-header d-flex align-center gap-4 mb-6">
-      <h2 class="text-h5 library-header__title">{{ t('nav.library') }}</h2>
+      <h2 class="text-h5 library-header__title">
+        <template v-if="collectionsStore.isAllActive">{{ t('nav.library') }}</template>
+        <template v-else>"{{ collectionsStore.activeCollectionName }}"</template>
+      </h2>
       <span class="spacer" />
 
       <SearchBox
@@ -65,6 +68,10 @@
           positioning="fixed"
           @closed="menuOpen[book.id] = false"
         >
+          <md-menu-item @click="openCollectionPicker(book.id)">
+            <MdiIcon slot="start" :path="mdiPlaylistPlus" :size="18" />
+            <div slot="headline">{{ t('lib.collections.addTo') }}</div>
+          </md-menu-item>
           <md-menu-item @click="viewMeta(book)">
             <MdiIcon slot="start" :path="mdiInformationOutline" :size="18" />
             <div slot="headline">{{ t('lib.viewMeta') }}</div>
@@ -97,41 +104,48 @@
       {{ t('lib.empty') }}
     </div>
 
-    <dialog ref="metaDialog" class="meta-dialog" @click="onDialogBackdrop">
-      <div v-if="metaBook" class="meta-dialog__panel">
-        <div class="meta-dialog__header">
-          <span class="meta-dialog__title">{{ t('lib.viewMeta') }}</span>
-          <button
-            class="icon-btn"
-            :aria-label="t('common.dismiss')"
-            @click="closeMeta"
-          >
-            <MdiIcon :path="mdiClose" :size="20" />
-          </button>
-        </div>
-        <dl class="meta-list">
-          <template v-for="row in metaRows(metaBook)" :key="row.label">
-            <dt>{{ row.label }}</dt>
-            <dd>{{ row.value }}</dd>
-          </template>
-        </dl>
-      </div>
-    </dialog>
+    <!-- Shared meta dialog -->
+    <BookMetaDialog ref="metaDialog" />
+
+    <!-- Shared export dialog (format picker → save) -->
+    <BookExportDialog ref="exportDialog" />
+
+    <!-- Collection management FAB + dialogs -->
+    <FabButton
+      :icon="mdiPlaylistPlay"
+      :aria-label="t('lib.collections.manage')"
+      @click="showCollectionDialog = true"
+    />
+
+    <CollectionDialog
+      :model-value="showCollectionDialog"
+      @update:model-value="showCollectionDialog = $event"
+      @close="showCollectionDialog = false"
+    />
+
+    <BookCollectionPicker
+      v-if="pickerBookId"
+      :book-id="pickerBookId"
+      @close="pickerBookId = null"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, reactive } from 'vue';
-import { useRouter } from 'vue-router';
-import { save as dialogSave } from '@tauri-apps/plugin-dialog';
+import { useRouter, useRoute } from 'vue-router';
+import '@material/web/menu/menu.js';
+import '@material/web/menu/menu-item.js';
 import {
   mdiFolderOpen,
   mdiContentSave,
   mdiDelete,
   mdiInformationOutline,
-  mdiClose,
+  mdiPlaylistPlay,
+  mdiPlaylistPlus,
 } from '@mdi/js';
 import { useLibraryStore } from '@/stores/library';
+import { useCollectionsStore } from '@/stores/collections';
 import { api } from '@/services/api';
 import { getThumb, setThumb, deleteThumb } from '@/services/thumb-cache';
 import { useToastStore } from '@/stores/toast';
@@ -139,51 +153,46 @@ import { useI18n } from '@/i18n';
 import MdiIcon from '@/components/MdiIcon.vue';
 import SourceCard from '@/components/SourceCard.vue';
 import SearchBox from '@/components/SearchBox.vue';
+import FabButton from '@/components/FabButton.vue';
+import CollectionDialog from '@/components/CollectionDialog.vue';
+import BookCollectionPicker from '@/components/BookCollectionPicker.vue';
+import BookMetaDialog from '@/components/BookMetaDialog.vue';
+import BookExportDialog from '@/components/BookExportDialog.vue';
 import { useInfiniteSentinel } from '@/composables/useInfiniteSentinel';
-import { formatSize } from '@/utils/format';
+import { useBookMenu, type MdMenuElement } from '@/composables/useBookMenu';
 import type { Book } from '@/types';
 
-type MdMenuElement = HTMLElement & {
-  show: () => void;
-  close: () => void;
-  open: boolean;
-};
-
 const router = useRouter();
+const route = useRoute();
 const libraryStore = useLibraryStore();
+const collectionsStore = useCollectionsStore();
 const toast = useToastStore();
 const { t } = useI18n();
 
+const { menuOpen, menuRefs, pickerBookId, setMenuRef, openMenu, openCollectionPicker, cleanupBook, clearAll } = useBookMenu();
+const metaDialog = ref<InstanceType<typeof BookMetaDialog> | null>(null);
+const exportDialog = ref<InstanceType<typeof BookExportDialog> | null>(null);
+
 /** Infinite-scroll sentinel — IntersectionObserver calls loadMore() when the
- *  grid bottom scrolls near (the store no-ops while busy or exhausted). */
+ *  grid bottom scrolls near (the store no-ops while busy or exhausted).
+ *  feedState lets the sentinel auto-fill: after each page load finishes, it
+ *  rechecks whether the grid has filled the viewport. */
 const sentinelEl = ref<HTMLElement | null>(null);
-useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore());
+useInfiniteSentinel(sentinelEl, () => libraryStore.loadMore(), {
+  feedState: {
+    get loading() { return libraryStore.isLoading || libraryStore.isLoadingMore; },
+    get end() { return !libraryStore.hasMore; },
+  },
+});
 
 const coverMap = reactive<Record<string, string | null>>({});
-const menuOpen = reactive<Record<string, boolean>>({});
-const menuRefs = new Map<string, MdMenuElement | null>();
+const showCollectionDialog = ref(false);
 
 /** Chip-row display cap (backend `get_all_tags` returns the top 30). When the
  *  cap is reached we append a non-interactive "…" chip to signal more exist. */
 const TAG_DISPLAY_LIMIT = 30;
 
 let prevIds = new Set<string>();
-
-function setMenuRef(bookId: string, el: MdMenuElement | null) {
-  if (el) {
-    menuRefs.set(bookId, el);
-  } else {
-    menuRefs.delete(bookId);
-  }
-}
-
-function openMenu(bookId: string) {
-  menuOpen[bookId] = true;
-  const menuEl = menuRefs.get(bookId);
-  if (menuEl && typeof menuEl.show === 'function') {
-    menuEl.show();
-  }
-}
 
 async function loadCover(book: Book) {
   if (book.id in coverMap) return;
@@ -215,7 +224,7 @@ async function loadCover(book: Book) {
   };
 }
 
-const stopWatch = watch(
+const stopCoverWatch = watch(
   () => libraryStore.books,
   (books) => {
     const currentIds = new Set(books.map((b) => b.id));
@@ -224,8 +233,7 @@ const stopWatch = watch(
         const url = coverMap[id];
         if (url) URL.revokeObjectURL(url);
         delete coverMap[id];
-        delete menuOpen[id];
-        menuRefs.delete(id);
+        cleanupBook(id);
       }
     }
     prevIds = currentIds;
@@ -236,33 +244,64 @@ const stopWatch = watch(
 
 onMounted(() => {
   libraryStore.ensureLoaded();
+  collectionsStore.ensureLoaded();
 });
 
+// When the active collection changes, re-filter the library and re-tally tags.
+const stopCollectionWatch = watch(
+  () => collectionsStore.activeCollectionId,
+  () => {
+    libraryStore.collectionFilter = collectionsStore.activeCollectionName;
+    // reload() fetches books, but we also need tag counts scoped to the
+    // collection. applySearch() calls loadTags() with the current text filter.
+    libraryStore.applySearch();
+  },
+);
+
+// When navigated to (e.g. from Tasks "view" button) with ?search=…,
+// set the text box and trigger a search. Also sync the collection filter
+// so the switch to "All" (done by Tasks before navigating) takes effect.
+const stopRouteWatch = watch(
+  () => route.query.search,
+  (val) => {
+    const text = (typeof val === 'string' && val) ? val : '';
+    if (!text) return;
+    // Always sync collectionFilter to the current store state first, so a
+    // prior setActiveCollection(null) from another view takes effect.
+    libraryStore.collectionFilter = collectionsStore.activeCollectionName;
+    if (text === libraryStore.query) {
+      // Same query text but collection may have changed — still reload.
+      libraryStore.applySearch();
+      return;
+    }
+    libraryStore.query = text;
+    libraryStore.applySearch();
+  },
+  { immediate: true },
+);
+
 onBeforeUnmount(() => {
-  stopWatch();
+  stopCoverWatch();
+  stopRouteWatch();
+  stopCollectionWatch();
   for (const url of Object.values(coverMap)) {
     if (url) URL.revokeObjectURL(url);
   }
-  menuRefs.clear();
+  clearAll();
 });
-
-/** Format a website publish time (ISO/RFC or site-local) into a local date;
- *  tolerates partial formats like EHentai's "2024-01-15 12:00". */
-function formatDate(iso?: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (!Number.isNaN(d.getTime())) return d.toLocaleDateString();
-  const m = iso.match(/^\d{4}-\d{2}-\d{2}/);
-  return m ? m[0] : iso;
-}
 
 async function onImport() {
   const file = await api.openFile([
-    { name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'pdf'] },
+    { name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'epub', 'pdf'] },
   ]);
   if (typeof file === 'string') {
-    await api.importBook(file);
-    await libraryStore.refresh();
+    try {
+      const book = await api.importBook(file);
+      await libraryStore.refresh();
+      toast.addToast('success', t('lib.imported', { title: book.title }));
+    } catch (e) {
+      toast.addToast('error', t('lib.importFailed', { error: String(e) }));
+    }
   }
 }
 
@@ -273,59 +312,18 @@ async function deleteBookItem(book: Book) {
     void deleteThumb(book.id);
     toast.addToast('success', t('lib.deleted', { title: book.title }));
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error(t('common.error', { message: String(e) }));
+    toast.addToast('error', t('lib.deleteFailed', { error: String(e) }));
   }
 }
 
 async function saveToLocal(book: Book) {
   menuOpen[book.id] = false;
-  const defaultName = `${book.title || 'book'}.${book.format}`;
-  const dest = await dialogSave({
-    defaultPath: defaultName,
-    filters: [
-      { name: t('lib.save.filterName'), extensions: [book.format] },
-      { name: t('lib.save.allFiles'), extensions: ['*'] },
-    ],
-  });
-  if (dest) {
-    await api.saveBook(book.id, dest);
-  }
+  exportDialog.value?.open(book);
 }
-
-const metaDialog = ref<HTMLDialogElement | null>(null);
-const metaBook = ref<Book | null>(null);
 
 function viewMeta(book: Book) {
   menuOpen[book.id] = false;
-  metaBook.value = book;
-  metaDialog.value?.showModal();
-}
-
-function closeMeta() {
-  metaDialog.value?.close();
-}
-
-function onDialogBackdrop(e: MouseEvent) {
-  if (e.target === e.currentTarget) closeMeta();
-}
-
-/** Ordered label/value rows shown in the metadata dialog. */
-function metaRows(book: Book): { label: string; value: string }[] {
-  return [
-    { label: t('lib.meta.title'), value: book.title || '—' },
-    { label: t('lib.meta.author'), value: book.author || '—' },
-    { label: t('lib.meta.source'), value: book.source_plugin || '—' },
-    { label: t('lib.meta.postId'), value: book.source_post_id || '—' },
-    { label: t('lib.meta.published'), value: formatDate(book.published_at) || '—' },
-    { label: t('lib.meta.pages'), value: String(book.page_count ?? 0) },
-    { label: t('lib.meta.format'), value: (book.format || '').toUpperCase() || '—' },
-    { label: t('lib.meta.size'), value: formatSize(book.file_size) },
-    { label: t('lib.meta.tags'), value: book.tags || '—' },
-    { label: t('lib.meta.sourceUrl'), value: book.source_url || '—' },
-    { label: t('lib.meta.imported'), value: formatDate(book.created_at) },
-    { label: t('lib.meta.scraped'), value: formatDate(book.scraped_at) || '—' },
-  ];
+  metaDialog.value?.open(book);
 }
 </script>
 
@@ -333,90 +331,6 @@ function metaRows(book: Book): { label: string; value: string }[] {
 .library-header__title {
   margin: 0;
   white-space: nowrap;
-}
-
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-full);
-  background: transparent;
-  color: var(--md-sys-color-on-surface-variant);
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.icon-btn:hover {
-  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
-}
-
-.meta-dialog {
-  width: min(480px, calc(100vw - 48px));
-  max-height: calc(100vh - 96px);
-  padding: 0;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-large);
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  box-shadow: var(--md-sys-elevation-level3);
-  overflow: hidden;
-}
-.meta-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
-}
-
-.meta-dialog__panel {
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 96px);
-}
-
-.meta-dialog__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.meta-dialog__title {
-  font: var(--md-sys-typescale-title-large-weight)
-    var(--md-sys-typescale-title-large-size) /
-    var(--md-sys-typescale-title-large-line-height)
-    var(--md-sys-typescale-font);
-}
-
-.meta-list {
-  margin: 0;
-  padding: 8px 20px 20px;
-  overflow-y: auto;
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: 24px;
-  row-gap: 8px;
-}
-
-.meta-list dt {
-  color: var(--md-sys-color-on-surface-variant);
-  font: var(--md-sys-typescale-body-medium-weight)
-    var(--md-sys-typescale-body-medium-size) /
-    var(--md-sys-typescale-body-medium-line-height)
-    var(--md-sys-typescale-font);
-  white-space: nowrap;
-}
-
-.meta-list dd {
-  margin: 0;
-  font: var(--md-sys-typescale-body-medium-weight)
-    var(--md-sys-typescale-body-medium-size) /
-    var(--md-sys-typescale-body-medium-line-height)
-    var(--md-sys-typescale-font);
-  word-break: break-all;
 }
 
 .tag-chips {
@@ -467,7 +381,6 @@ function metaRows(book: Book): { label: string; value: string }[] {
   opacity: 0.75;
 }
 
-/* Non-interactive ellipsis chip shown when the chip row hits its cap. */
 .tag-chip--ellipsis {
   border: none;
   background: transparent;
@@ -476,8 +389,6 @@ function metaRows(book: Book): { label: string; value: string }[] {
   opacity: 0.6;
 }
 
-/* Infinite-scroll sentinel: a 1px observer target at the grid bottom; the
- * IntersectionObserver in useInfiniteSentinel watches it. */
 .feed-sentinel {
   height: 1px;
   width: 100%;

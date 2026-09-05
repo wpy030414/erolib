@@ -3,7 +3,7 @@ import { createPinia } from 'pinia';
 import App from './App.vue';
 import router from './router';
 import { readSavedTheme, useThemeStore } from './stores/theme';
-import { applyMd3Theme } from './services/md3-theme';
+import { applyMd3Theme, applyArgbTheme, argbFromHex } from './services/md3-theme';
 
 // MD3 design tokens + base utilities, then register Material Web components.
 import './styles/tokens.css';
@@ -12,8 +12,30 @@ import './material-web.ts';
 
 // Apply the saved/derived MD3 theme tokens to :root before mount so the first
 // paint is already themed (no white flash) and MWC picks them up immediately.
+// Custom seeds (custom:<uuid>) must use applyArgbTheme — applyMd3Theme would
+// pass the key string straight to argbFromHex and crash.
 const initial = readSavedTheme();
-applyMd3Theme(initial.seed, initial.mode);
+if (initial.seed.startsWith('custom:')) {
+  // Locate the custom theme's hex from localStorage (Pinia store isn't ready yet).
+  try {
+    const raw = window.localStorage.getItem('erolib.customThemes');
+    if (raw) {
+      const map = JSON.parse(raw) as Record<string, { seedColorHex: string }>;
+      const ct = map[initial.seed];
+      if (ct) {
+        applyArgbTheme(argbFromHex(ct.seedColorHex), initial.mode === 'dark');
+      } else {
+        applyMd3Theme('pink', initial.mode);
+      }
+    } else {
+      applyMd3Theme('pink', initial.mode);
+    }
+  } catch {
+    applyMd3Theme('pink', initial.mode);
+  }
+} else {
+  applyMd3Theme(initial.seed, initial.mode);
+}
 
 import { applyWindowTitle } from './i18n';
 
@@ -24,9 +46,10 @@ app.mount('#app');
 
 // Keep the theme store's persisted seed/mode in sync with the tokens that
 // actually landed (system-dark default may have been selected above).
+// Delegate to the store so it handles custom:<uuid> seeds correctly.
 const themeStore = useThemeStore();
-if (initial.seed !== themeStore.seed || initial.mode !== themeStore.mode) {
-  themeStore.setSeed(initial.seed);
+themeStore.setSeed(initial.seed);
+if (initial.mode !== themeStore.mode) {
   themeStore.setMode(initial.mode);
 }
 

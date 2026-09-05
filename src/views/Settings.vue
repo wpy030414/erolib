@@ -2,35 +2,54 @@
   <div class="pa-6">
     <!-- Project + author cards (split one row 50/50) -->
     <div class="about-row mb-6">
-      <a
-        href="https://github.com/wpy030414/erolib"
-        target="_blank"
-        rel="noreferrer"
-        class="md3-card md3-card--outlined about-card"
-      >
+      <div class="md3-card md3-card--outlined about-card">
         <div class="md3-card__header-titles">
           <span class="md3-card__title">{{ t('settings.projectName') }}</span>
-          <span class="md3-card__subtitle">v{{ version }}</span>
+          <span class="md3-card__subtitle version-line">
+            v{{ version }}
+            <span
+              v-if="updateStore.info?.hasUpdate"
+              class="update-badge"
+              :title="t('settings.update.hasUpdate', { version: updateStore.info.latest })"
+              @click.prevent="openUpdateDialog"
+            >
+              <span class="update-dot" />
+              {{ t('settings.update.hasUpdate', { version: updateStore.info.latest }) }}
+            </span>
+            <span
+              v-else-if="updateStore.info && !updateStore.info.hasUpdate"
+              class="update-badge update-badge--up-to-date"
+              :title="t('settings.update.upToDate')"
+            >
+              <span class="update-dot update-dot--success" />
+              {{ t('settings.update.upToDate') }}
+            </span>
+          </span>
         </div>
-        <span class="md3-card__header-action">
+        <a
+          :href="GITHUB_URL"
+          target="_blank"
+          rel="noreferrer"
+          class="md3-card__header-action"
+        >
           <MdiIcon :path="mdiGithub" :size="22" />
-        </span>
-      </a>
+        </a>
+      </div>
 
-      <a
-        href="https://space.bilibili.com/92465406"
-        target="_blank"
-        rel="noreferrer"
-        class="md3-card md3-card--outlined about-card"
-      >
+      <div class="md3-card md3-card--outlined about-card">
         <div class="md3-card__header-titles">
           <span class="md3-card__title">{{ t('settings.authorName') }}</span>
           <span class="md3-card__subtitle">&ldquo;Do one thing, and do it well.&rdquo;</span>
         </div>
-        <span class="md3-card__header-action">
-          <BrandIcon :path="BILIBILI_PATH" fill-rule="evenodd" :size="22" />
-        </span>
-      </a>
+        <a
+          :href="BILIBILI_URL"
+          target="_blank"
+          rel="noreferrer"
+          class="md3-card__header-action"
+        >
+          <BrandIcon :path="BILIBILI_PATH" fill-rule="evenodd" :size="22" brand />
+        </a>
+      </div>
     </div>
 
     <!-- Tabs -->
@@ -85,6 +104,38 @@
           </template>
         </div>
 
+        <!-- Custom themes from reader "Set as Theme" -->
+        <template v-if="customThemeList.length">
+          <p class="text-body-2 text-medium-emphasis mb-3">
+            {{ t('settings.theme.custom') }}
+          </p>
+          <div class="d-flex gap-3 mb-4 flex-wrap">
+            <template v-for="ct in customThemeList" :key="ct.key">
+              <div
+                class="custom-theme-item"
+                :class="{ 'custom-theme-item--selected': themeStore.seed === ct.key }"
+              >
+                <div
+                  class="custom-theme-thumb"
+                  :style="{ backgroundImage: `url(${ct.thumbnailB64})` }"
+                  :title="ct.sourceTitle"
+                  @click="themeStore.activateCustomTheme(ct.key)"
+                />
+                <button
+                  v-if="themeStore.seed !== ct.key"
+                  class="custom-theme-delete"
+                  :aria-label="t('settings.theme.removeCustom')"
+                  @click="themeStore.removeCustomTheme(ct.key)"
+                >
+                  <svg :width="12" :height="12" viewBox="0 0 24 24" fill="currentColor">
+                    <path :d="mdiClose" />
+                  </svg>
+                </button>
+              </div>
+            </template>
+          </div>
+        </template>
+
         <div class="d-flex align-center">
           <span class="text-body-2 dark-mode-label">{{ t('settings.theme.dark') }}</span>
           <md-switch
@@ -94,29 +145,19 @@
         </div>
       </section>
 
-      <!-- Personal data -->
+      <!-- Usage data -->
       <section class="mb-6">
         <div class="d-flex align-center mb-2">
-          <MdiIcon :path="mdiDeleteForever" :size="22" class="mr-2" />
+          <MdiIcon :path="mdiDatabaseOutline" :size="22" class="mr-2" />
           <h3 class="text-h6">{{ t('settings.reset.title') }}</h3>
         </div>
 
-        <div class="data-row">
-          <div class="data-row__text">
-            <div class="data-row__title">{{ t('settings.reset.clearCache') }}</div>
-            <div class="data-row__sub">{{ t('settings.reset.clearCacheHint') }}</div>
-          </div>
+        <div class="d-flex gap-3">
           <md-outlined-button :disabled="clearingCache" @click="onClearCache">
             <MdiIcon slot="icon" :path="mdiBroom" :size="20" />
             {{ t('settings.reset.clearCache') }}
           </md-outlined-button>
-        </div>
 
-        <div class="data-row">
-          <div class="data-row__text">
-            <div class="data-row__title">{{ t('settings.reset.clearAll') }}</div>
-            <div class="data-row__sub">{{ t('settings.reset.clearAllHint') }}</div>
-          </div>
           <md-filled-button :disabled="resetting" @click="onClearAll">
             <MdiIcon slot="icon" :path="mdiDeleteForever" :size="20" />
             {{ resetting ? t('settings.reset.running') : t('settings.reset.clearAll') }}
@@ -253,10 +294,8 @@
         <p v-if="settingsStore.rssError" class="mt-3 text-body-2 text-error">{{ settingsStore.rssError }}</p>
       </section>
     </div>
-    <md-dialog ref="clearAllDialogRef" @close="onDialogClose">
-      <div slot="headline">{{ t('settings.reset.clearAll') }}</div>
+    <md-dialog ref="clearAllDialogRef" @close="onDialogClose">      <div slot="headline">{{ t('settings.reset.clearAll') }}</div>
       <form id="clear-all-form" slot="content" method="dialog" class="clear-all-dialog__content">
-        <p class="text-body-2 text-medium-emphasis">{{ t('settings.reset.clearAllHint') }}</p>
         <p class="text-body-2 text-error">{{ t('settings.reset.confirmWarn') }}</p>
         <md-outlined-text-field
           :label="t('settings.reset.typeConfirm', { phrase: confirmPhrase })"
@@ -273,6 +312,8 @@
         </md-filled-button>
       </div>
     </md-dialog>
+
+    <UpdateDialog ref="updateDialogRef" />
   </div>
 </template>
 
@@ -281,6 +322,8 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
   mdiBroom,
   mdiCheckCircle,
+  mdiClose,
+  mdiDatabaseOutline,
   mdiDeleteForever,
   mdiFolderSyncOutline,
   mdiGithub,
@@ -297,14 +340,35 @@ import { useI18n, LOCALES, LOCALE_LABELS, type Locale } from '@/i18n';
 import { useSettingsStore } from '@/stores/settings';
 import { useThemeStore } from '@/stores/theme';
 import { useToastStore } from '@/stores/toast';
+import { useUpdateStore } from '@/stores/update';
 import { getVersion } from '@tauri-apps/api/app';
+import '@material/web/button/outlined-button.js';
+import '@material/web/button/text-button.js';
+import '@material/web/textfield/outlined-text-field.js';
+import '@material/web/select/outlined-select.js';
+import '@material/web/select/select-option.js';
+import '@material/web/switch/switch.js';
+import '@material/web/tabs/tabs.js';
+import '@material/web/tabs/primary-tab.js';
+import '@material/web/dialog/dialog.js';
 import MdiIcon from '@/components/MdiIcon.vue';
 import BrandIcon from '@/components/BrandIcon.vue';
+import UpdateDialog from '@/components/UpdateDialog.vue';
 import { clearThumbs } from '@/services/thumb-cache';
+
+/** External links shown in the About section. */
+const GITHUB_URL = 'https://github.com/wpy030414/erolib';
+const BILIBILI_URL = 'https://space.bilibili.com/92465406';
 
 const { t, locale, setLocale } = useI18n();
 const settingsStore = useSettingsStore();
 const themeStore = useThemeStore();
+const updateStore = useUpdateStore();
+
+/** Custom themes from the reader "Set as Theme" context menu. */
+const customThemeList = computed(() =>
+  Array.from(themeStore.customThemes.values()),
+);
 
 /** Show only the target folder's name in the narrow sync field; the full path
  *  is what's stored and sent to the backend — hover (title) reveals it. */
@@ -315,6 +379,20 @@ const syncDirName = computed(() => {
 const toastStore = useToastStore();
 
 const version = ref('0.1.0');
+
+// ── App update ───────────────────────────────────────────────────────
+const updateDialogRef = ref<InstanceType<typeof UpdateDialog> | null>(null);
+
+function openUpdateDialog() {
+  updateDialogRef.value?.open();
+}
+
+/** Manual "check for updates": refresh, then surface the dialog — the user
+ *  explicitly asked, so show the result whether or not an update exists. */
+async function onCheckUpdate() {
+  await updateStore.check();
+  openUpdateDialog();
+}
 
 /** B站 brand mark (single 24×24 path, evenodd for the eye holes). Rendered
  *  via BrandIcon with currentColor so it matches the GitHub mdi icon's colour. */
@@ -344,6 +422,9 @@ onMounted(async () => {
   } catch {
     // fallback
   }
+  // Silent startup update check — populates the badge on the version card
+  // without opening anything. Errors are swallowed (offline, rate-limited).
+  updateStore.check().catch(() => {});
 });
 
 async function onClearCache() {
@@ -561,33 +642,62 @@ onBeforeUnmount(() => {
   color: var(--md-sys-color-on-surface-variant);
 }
 
+/* Update badge on the version card — a small "new version" pill with a dot.
+ * The line height is pinned to the subtitle's body-medium line so the badge
+ * never inflates the card row. */
+.version-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--md-sys-typescale-body-medium-line-height);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+}
+
+.update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+  font-size: 0.78em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--md-sys-color-error);
+  flex-shrink: 0;
+}
+
+/* "Up to date" badge — same pill shape, success-tinted. */
+.update-badge--up-to-date {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  cursor: default;
+}
+
+.update-dot--success {
+  background: var(--md-sys-color-tertiary);
+}
+
 .about-card .md3-card__header-action {
   display: inline-flex;
   flex-shrink: 0;
   margin-left: auto;
   color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  border-radius: var(--md-sys-shape-corner-full);
+  padding: 4px;
+  transition: background-color 0.15s ease;
 }
 
-.data-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
-}
-
-.data-row__text {
-  min-width: 0;
-}
-
-.data-row__title {
-  font: 500 var(--md-sys-typescale-body-large-size) / var(--md-sys-typescale-body-large-line-height) var(--md-sys-typescale-font);
-  color: var(--md-sys-color-on-surface);
-}
-
-.data-row__sub {
-  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font);
-  color: var(--md-sys-color-on-surface-variant);
+.about-card .md3-card__header-action:hover {
+  background: var(--md-sys-color-surface-container-highest);
 }
 
 .clear-all-dialog__content {
@@ -603,5 +713,55 @@ onBeforeUnmount(() => {
 
 .clear-all-dialog__content md-outlined-text-field {
   width: 100%;
+}
+
+/* ── Custom theme items (reader "Set as Theme") ─────────────────── */
+
+.custom-theme-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
+.custom-theme-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.custom-theme-item--selected .custom-theme-thumb {
+  border-color: var(--md-sys-color-on-surface);
+  box-shadow:
+    0 0 0 2px var(--md-sys-color-surface),
+    0 0 0 4px var(--md-sys-color-on-surface);
+}
+
+.custom-theme-delete {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-error);
+  color: var(--md-sys-color-on-error);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+
+.custom-theme-item:hover .custom-theme-delete {
+  opacity: 1;
 }
 </style>

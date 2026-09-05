@@ -19,8 +19,12 @@ export const useLibraryStore = defineStore('library', () => {
   const isLoadingMore = ref(false);
   const error = ref<string | null>(null);
   const query = ref('');
-  /** Tags currently selected in the chip row — union (OR) filter: any match. */
+  /** Tags currently selected in the chip row, by their (translated) display
+   *  `name` — union (OR) filter: any match. Filtering expands each selected
+   *  label to its folded raw spellings (`raw_names`) for the backend. */
   const selectedTags = ref<string[]>([]);
+  /** Active collection name for filtering (null = "All" = no filter). */
+  const collectionFilter = ref<string | null>(null);
   /** Tag usage counts that drive the chip row. When a text query is active
    *  these are tallied only over the text-filtered book set (text dominates
    *  the chips); otherwise over the full library. Top 30 by count. */
@@ -36,11 +40,12 @@ export const useLibraryStore = defineStore('library', () => {
   const hasMore = computed(() => books.value.length < total.value);
 
   /** Re-tally tag usage counts. `text` restricts the count to books matching
-   *  that text (text dominates the chips). Capped to 30 by the backend.
-   *  Silent on failure. */
+   *  that text (text dominates the chips); `collection` further scopes to a
+   *  collection. Capped to 30 by the backend. Silent on failure. */
   async function loadTags(text?: string) {
     try {
-      allTags.value = await api.getAllTags(text);
+      const col = collectionFilter.value || undefined;
+      allTags.value = await api.getAllTags(text, col);
     } catch {
       // keep the previous list on error
     }
@@ -50,10 +55,16 @@ export const useLibraryStore = defineStore('library', () => {
    *  (infinite scroll) vs replaces (new search / filter change). */
   async function fetchPage(p: number, accumulate: boolean) {
     const text = query.value.trim();
-    const tagsAny = selectedTags.value.length ? [...selectedTags.value] : undefined;
+    // Selected chips are keyed by translated label; expand each to its folded
+    // raw spellings so the backend OR-matches every raw form of that concept.
+    const expanded = selectedTags.value.flatMap(
+      (name) => allTags.value.find((t) => t.name === name)?.raw_names ?? [name],
+    );
+    const tagsAny = expanded.length ? [...new Set(expanded)] : undefined;
     const q: SearchQuery = {
       text: text || undefined,
       tags_any: tagsAny,
+      collections: collectionFilter.value ? [collectionFilter.value] : undefined,
       sort_by: 'date',
       sort_order: 'desc',
       page: p,
@@ -151,6 +162,7 @@ export const useLibraryStore = defineStore('library', () => {
     error,
     query,
     selectedTags,
+    collectionFilter,
     allTags,
     total,
     hasMore,

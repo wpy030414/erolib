@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for EroLib",
-  "windows": ["main", "pixiv-login", "ehentai-login"],
+  "windows": ["main", "pixiv-login", "ehentai-login", "nicecat-api-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -11,11 +11,14 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-title",
     "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-webview-close",
     "shell:allow-open",
     "dialog:default",
     "fs:default",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-write-text",
     {
       "identifier": "fs:scope",
       "allow": [
@@ -26,6 +29,13 @@
         { "path": "$HOME/**" }
       ]
     },
-    "core:path:default"
+    "core:path:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://gxxa.fun/**" },
+        { "url": "https://ncmm.cc/**" }
+      ]
+    }
   ]
 }

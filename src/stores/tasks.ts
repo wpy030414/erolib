@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue';
+import { defineStore } from 'pinia';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '@/services/api';
 import type { TaskItem } from '@/services/api';
@@ -9,51 +10,59 @@ import { useI18n } from '@/i18n';
 
 export type { TaskItem };
 
-const tasks = ref<TaskItem[]>([]);
-const selectedTaskId = ref<string | null>(null);
-let initialized = false;
-
-export function useTaskStore() {
+export const useTaskStore = defineStore('tasks', () => {
+  const tasks = ref<TaskItem[]>([]);
+  const selectedTaskId = ref<string | null>(null);
+  const loading = ref(false);
   const toastStore = useToastStore();
   const { t } = useI18n();
+  let initPromise: Promise<void> | null = null;
 
-  async function init() {
-    if (initialized) return;
-    initialized = true;
-    await refresh();
+  function init() {
+    if (!initPromise) {
+      initPromise = (async () => {
+        loading.value = true;
+        try {
+          await refresh();
 
-    await listen<TaskItem>('task://progress', (event) => {
-      const idx = tasks.value.findIndex((t) => t.id === event.payload.id);
-      if (idx !== -1) {
-        tasks.value[idx] = event.payload;
-      } else {
-        tasks.value.unshift(event.payload);
-      }
-    });
+          await listen<TaskItem>('task://progress', (event) => {
+            const idx = tasks.value.findIndex((t) => t.id === event.payload.id);
+            if (idx !== -1) {
+              tasks.value[idx] = event.payload;
+            } else {
+              tasks.value.unshift(event.payload);
+            }
+          });
 
-    await listen<{ kind: string; title: string }>('task://toast', (event) => {
-      const { kind, title } = event.payload;
-      if (kind === 'completed') {
-        toastStore.addToast('success', t('tasks.toast.completed', { title }));
-        // A finished download produced new library data — refresh the shelf.
-        useLibraryStore().refresh().catch(() => {});
-        // And push it to the local sync folder if enabled.
-        useSettingsStore().syncIfEnabled();
-      } else if (kind === 'failed') {
-        toastStore.addToast('error', t('tasks.toast.failed', { title }));
-      } else if (kind === 'cancelled') {
-        toastStore.addToast('info', t('tasks.toast.cancelled', { title }));
-      }
-    });
+          await listen<{ kind: string; title: string }>('task://toast', (event) => {
+            const { kind, title } = event.payload;
+            if (kind === 'completed') {
+              toastStore.addToast('success', t('tasks.toast.completed', { title }));
+              // A finished download produced new library data — refresh the shelf.
+              useLibraryStore().refresh().catch(() => {});
+              // And push it to the local sync folder if enabled.
+              useSettingsStore().syncIfEnabled();
+            } else if (kind === 'failed') {
+              toastStore.addToast('error', t('tasks.toast.failed', { title }));
+            } else if (kind === 'cancelled') {
+              toastStore.addToast('info', t('tasks.toast.cancelled', { title }));
+            }
+          });
 
-    // A book deleted from the library detaches from its task: clear the
-    // book_id so the "Read" button (v-if item.book_id) disappears.
-    await listen<{ bookId: string }>('book://deleted', (event) => {
-      const idx = tasks.value.findIndex((t) => t.book_id === event.payload.bookId);
-      if (idx !== -1) {
-        tasks.value[idx] = { ...tasks.value[idx], book_id: null };
-      }
-    });
+          // A book deleted from the library detaches from its task: clear the
+          // book_id so the "Read" button (v-if item.book_id) disappears.
+          await listen<{ bookId: string }>('book://deleted', (event) => {
+            const idx = tasks.value.findIndex((t) => t.book_id === event.payload.bookId);
+            if (idx !== -1) {
+              tasks.value[idx] = { ...tasks.value[idx], book_id: null };
+            }
+          });
+        } finally {
+          loading.value = false;
+        }
+      })();
+    }
+    return initPromise;
   }
 
   async function refresh() {
@@ -98,6 +107,12 @@ export function useTaskStore() {
     await refresh();
   }
 
+  async function redownloadTask(id: string) {
+    const action = await api.taskRedownload(id);
+    await refresh();
+    return action;
+  }
+
   async function clearCompleted() {
     await api.tasksClearCompleted();
     // Drop any selected task that was just cleared.
@@ -108,12 +123,18 @@ export function useTaskStore() {
     await refresh();
   }
 
+  async function retryAll() {
+    await api.tasksRetryAll();
+    await refresh();
+  }
+
   const selectedTask = computed(() =>
     tasks.value.find((t) => t.id === selectedTaskId.value) ?? null,
   );
 
   return {
     tasks,
+    loading,
     selectedTaskId,
     selectedTask,
     init,
@@ -124,6 +145,8 @@ export function useTaskStore() {
     cancelTask,
     deleteTask,
     retryTask,
+    redownloadTask,
     clearCompleted,
+    retryAll,
   };
-}
+});

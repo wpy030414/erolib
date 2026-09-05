@@ -4,16 +4,20 @@
       <h2 class="text-h5 tasks-header__title">{{ t('tasks.title') }}</h2>
     </div>
 
-    <div v-if="tasks.length === 0" class="empty-state">
+    <div v-if="taskStore.loading" class="empty-state">
+      <FeedLoading />
+    </div>
+
+    <div v-else-if="taskStore.tasks.length === 0" class="empty-state">
       <p class="text-body-1 text-medium-emphasis">{{ t('tasks.empty') }}</p>
     </div>
 
     <div v-else class="task-list">
       <div
-        v-for="item in tasks"
+        v-for="item in taskStore.tasks"
         :key="item.id"
         class="md3-card md3-card--outlined task-card"
-        :class="{ 'task-card--selected': selectedTaskId === item.id }"
+        :class="{ 'task-card--selected': taskStore.selectedTaskId === item.id }"
         @click="selectTask(item.id)"
       >
         <div class="task-header">
@@ -35,8 +39,16 @@
           </span>
         </div>
 
-        <!-- Inline logs: expand below the progress bar when this card is selected. -->
-        <div class="task-logs-wrap" :class="{ 'task-logs-wrap--open': selectedTaskId === item.id }">
+        <!-- Inline logs: <details> handles expand/collapse natively.
+             The `open` attr is driven by selectedTaskId so clicking a different
+             card collapses the old one and expands the new one. -->
+        <details
+          class="task-logs-wrap"
+          :open="taskStore.selectedTaskId === item.id"
+          @toggle.prevent
+          @contextmenu.prevent="copyLogs(item)"
+        >
+          <summary class="task-logs-summary" />
           <div class="task-logs-inner">
             <div v-if="item.logs.length" class="logs-list">
               <div
@@ -51,16 +63,18 @@
               {{ t('tasks.detail.noLogs') }}
             </p>
           </div>
-        </div>
+        </details>
 
         <div class="task-footer">
           <div class="task-actions">
+            <!-- Completed tasks: show "View" button that navigates to Library
+                 and searches the book by title. -->
             <md-filled-button
               v-if="item.status === 'completed' && item.book_id"
-              @click.stop="readBook(item.book_id)"
+              @click.stop="viewInLibrary(item.title)"
             >
-              <MdiIcon slot="icon" :path="mdiBookOpen" :size="18" />
-              {{ t('tasks.actions.read') }}
+              <MdiIcon slot="icon" :path="mdiMagnify" :size="18" />
+              {{ t('tasks.actions.view') }}
             </md-filled-button>
 
             <md-filled-tonal-button
@@ -96,6 +110,15 @@
             </md-filled-tonal-button>
 
             <md-outlined-button
+              v-if="item.status === 'completed'"
+              :disabled="redownloadingId === item.id"
+              @click.stop="onRedownload(item)"
+            >
+              <MdiIcon slot="icon" :path="mdiDownload" :size="18" />
+              {{ t('tasks.actions.redownload') }}
+            </md-outlined-button>
+
+            <md-outlined-button
               v-if="item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled'"
               @click.stop="taskStore.deleteTask(item.id)"
             >
@@ -115,6 +138,14 @@
     </div>
 
     <FabButton
+      v-if="hasRetryable"
+      :icon="mdiRestart"
+      :aria-label="t('tasks.actions.retryAll')"
+      :disabled="retrying"
+      style="bottom: 96px"
+      @click="onRetryAll"
+    />
+    <FabButton
       v-if="hasCompleted"
       :icon="mdiBroom"
       :aria-label="t('tasks.actions.clearCompleted')"
@@ -127,51 +158,75 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import '@material/web/button/outlined-button.js';
+import '@material/web/button/filled-tonal-button.js';
 import {
   mdiPause,
   mdiPlay,
   mdiClose,
   mdiDelete,
   mdiRefresh,
-  mdiBookOpen,
+  mdiMagnify,
   mdiBroom,
+  mdiRestart,
+  mdiDownload,
 } from '@mdi/js';
 import { useI18n } from '@/i18n';
 import { useTaskStore } from '@/stores/tasks';
 import { useToastStore } from '@/stores/toast';
+import { useCollectionsStore } from '@/stores/collections';
 import MdiIcon from '@/components/MdiIcon.vue';
 import FabButton from '@/components/FabButton.vue';
+import FeedLoading from '@/components/FeedLoading.vue';
 import { formatBytes, formatSpeed, formatDuration } from '@/utils/format';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
 const { t } = useI18n();
 const router = useRouter();
 const toastStore = useToastStore();
 const taskStore = useTaskStore();
-const { tasks, selectedTaskId } = taskStore;
+const collectionsStore = useCollectionsStore();
 
 const clearing = ref(false);
+const retrying = ref(false);
 
-const TERMINAL = ['completed', 'failed', 'cancelled'];
-const hasCompleted = computed(() => tasks.value.some((tk) => TERMINAL.includes(tk.status)));
+const hasCompleted = computed(() => taskStore.tasks.some((tk) => tk.status === 'completed'));
+const hasRetryable = computed(() => taskStore.tasks.some((tk) => tk.status === 'failed' || tk.status === 'paused'));
 
 function progressPercent(item: { progress_current: number; progress_total: number }): number {
-  if (item.progress_total <= 0) return 0;
+  if (item.progress_total <= 0) return 100;
   return Math.min(100, Math.round((item.progress_current / item.progress_total) * 100));
 }
 
 function selectTask(id: string) {
-  // Toggle: clicking the open card again collapses it.
-  taskStore.selectTask(selectedTaskId.value === id ? null : id);
+  // Clicking the already-open card is a no-op; clicking a different card
+  // collapses the previous one and expands the new one.
+  if (taskStore.selectedTaskId === id) return;
+  taskStore.selectTask(id);
 }
 
-function readBook(bookId: string) {
-  router.push(`/reader/${bookId}`);
+/**
+ * Task titles are formatted as "{Source}: {actual book title}" (e.g.
+ * "ASMHentai: ある作品"). Strip the source prefix so the search matches
+ * the bare book title registered in the library.
+ */
+function extractBookTitle(taskTitle: string): string {
+  // Known prefixes: "Pixiv: ", "EHentai: ", "EXHentai: ", "ASMHentai: ",
+  // "NiceCat: ".  Strip the first "Prefix: " segment if present.
+  return taskTitle.replace(/^[A-Za-z]+:\s*/, '');
+}
+
+function viewInLibrary(taskTitle: string) {
+  // Switch back to "All" so the user can see all books, then search by title.
+  collectionsStore.setActiveCollection(null);
+  const title = extractBookTitle(taskTitle);
+  router.push({ path: '/library', query: { search: title } });
 }
 
 async function onClearCompleted() {
   clearing.value = true;
   try {
-    const before = tasks.value.filter((tk) => TERMINAL.includes(tk.status)).length;
+    const before = taskStore.tasks.filter((tk) => tk.status === 'completed').length;
     await taskStore.clearCompleted();
     toastStore.addToast('info', t('tasks.toast.cleared', { count: before }));
   } catch (e) {
@@ -181,8 +236,53 @@ async function onClearCompleted() {
   }
 }
 
-onMounted(() => {
-  taskStore.init();
+async function onRetryAll() {
+  retrying.value = true;
+  try {
+    await taskStore.retryAll();
+    toastStore.addToast('info', t('tasks.toast.retried'));
+  } catch (e) {
+    toastStore.addToast('error', t('common.error', { message: String(e) }));
+  } finally {
+    retrying.value = false;
+  }
+}
+
+const redownloadingId = ref<string | null>(null);
+async function onRedownload(item: import('@/services/api').TaskItem) {
+  // Global debounce: only one re-download at a time (the backend has its own
+  // guards, but this also keeps the UX from firing twice on a double-click).
+  if (redownloadingId.value) return;
+  redownloadingId.value = item.id;
+  try {
+    const action = await taskStore.redownloadTask(item.id);
+    const title = extractBookTitle(item.title);
+    if (action === 'already_complete') {
+      toastStore.addToast('info', t('tasks.toast.alreadyComplete', { title }));
+    } else {
+      toastStore.addToast('success', t('tasks.toast.redownloadStarted', { title }));
+    }
+  } catch (e) {
+    toastStore.addToast('error', t('tasks.toast.redownloadFailed', { message: String(e) }));
+  } finally {
+    redownloadingId.value = null;
+  }
+}
+
+async function copyLogs(item: import('@/services/api').TaskItem) {
+  if (!item.logs.length) return;
+  const text = item.logs.join('\n');
+  try {
+    await writeText(text);
+    toastStore.addToast('success', t('tasks.logs.copied'));
+  } catch (e) {
+    console.error('[Tasks] copyLogs failed:', e);
+    toastStore.addToast('error', t('tasks.logs.copyFailed'));
+  }
+}
+
+onMounted(async () => {
+  await taskStore.init();
 });
 </script>
 
@@ -307,22 +407,23 @@ onMounted(() => {
   color: var(--md-sys-color-on-surface-variant);
 }
 
-/* Inline logs: collapsed by default, smoothly expand when the card is selected.
-   max-height transition gives the "quickly grow taller" effect. */
+/* Inline logs: smoothly expand when the card is selected. <details> provides
+   the expand/collapse mechanics; the summary decoy hides the native arrow. */
 .task-logs-wrap {
-  max-height: 0;
   overflow: hidden;
   opacity: 0;
   transition:
-    max-height 0.2s ease,
     opacity 0.2s ease,
     margin 0.2s ease;
 }
-
-.task-logs-wrap--open {
-  /* Generous ceiling; the inner list itself scrolls beyond this. */
-  max-height: 240px;
+.task-logs-wrap[open] {
   opacity: 1;
+}
+
+/* Hide the native <summary> arrow — the open/close state is driven by
+   card selection, not by clicking the summary itself. */
+.task-logs-summary {
+  display: none;
 }
 
 .task-logs-inner {

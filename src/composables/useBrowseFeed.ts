@@ -69,6 +69,10 @@ export interface UseBrowseFeedOptions<
  *  past a page boundary stay buffered for the next loadMore. */
 const BROWSE_PAGE_SIZE = 48;
 
+/** Max concurrent cover proxy-fetch calls. Prevents flooding the Tauri IPC
+ *  queue + shared reqwest client when 48+ cards render at once. */
+const COVER_MAX_CONCURRENT = 6;
+
 const TERMINAL = ['completed', 'failed', 'cancelled'];
 
 export function useBrowseFeed<
@@ -101,6 +105,11 @@ export function useBrowseFeed<
   let buffer: TItem[] = [];
   // Whether the underlying source feed has reported no more items.
   let sourceEnded = false;
+  // Tracks keys of all items already shown or buffered so duplicates (caused by
+  // server-side real-time updates shifting old content into the next page) are
+  // silently dropped during pagination. The while-loop keeps fetching until a
+  // full unified page of genuinely-new items is assembled or the source ends.
+  const seenKeys = new Set<TKey>();
 
   async function refreshStatus(keys: TKey[]) {
     if (!keys.length) return;
@@ -119,13 +128,27 @@ export function useBrowseFeed<
       // Top up the buffer across the source's own page boundaries until it
       // holds at least one unified page, or the source runs out. This flattens
       // Pixiv's ~30/~60 and EHentai's 25 into a steady 48/page.
+      //
+      // seenKeys persists across loadMore() calls — it grows monotonically and
+      // is only cleared on resetFeed(). This ensures items sitting in the
+      // buffer (left over when a fetch returns more than BROWSE_PAGE_SIZE,
+      // e.g. Pixiv bookmark pulling 100 at a time) stay tracked, so server-
+      // side real-time updates that shift old content into the next page are
+      // silently dropped. The while-loop keeps fetching until a full unified
+      // page of genuinely-new items is assembled or the source runs out.
       while (buffer.length < BROWSE_PAGE_SIZE && !sourceEnded) {
         const res = await opts.fetchPage(cursor);
         if (res.items.length === 0) {
           sourceEnded = true;
           break;
         }
-        buffer.push(...res.items);
+        for (const item of res.items) {
+          const key = opts.keyOf(item);
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            buffer.push(item);
+          }
+        }
         cursor = res.nextCursor;
         if (res.end) sourceEnded = true;
       }
@@ -152,13 +175,38 @@ export function useBrowseFeed<
 
   /** Fetch a cover via the backend proxy (the source host hotlink-blocks the
    *  WKWebView). Cached in coverMap as a blob URL; backed by IndexedDB so
-   *  repeat covers load instantly across reloads/view-switches. */
+   *  repeat covers load instantly across reloads/view-switches.
+   *
+   *  Concurrency-limited (COVER_MAX_CONCURRENT): the watch calls loadCover for
+   *  every item in a page (up to 48), but only 6 proxy-fetch + IndexedDB
+   *  operations run at once.  The rest queue up without flooding the IPC
+   *  channel / reqwest client / microtask queue. */
+  let coverGate = 0;
+  const coverQueue: Array<() => void> = [];
+
+  function coverGateEnter(): Promise<void> {
+    if (coverGate < COVER_MAX_CONCURRENT) {
+      coverGate++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      coverQueue.push(() => { coverGate++; resolve(); });
+    });
+  }
+
+  function coverGateLeave() {
+    coverGate--;
+    const next = coverQueue.shift();
+    if (next) next();
+  }
+
   async function loadCover(item: TItem) {
     const key = coverKeyOf(item);
     const url = opts.coverUrlOf(item);
     if (!url || key in coverMap || coverLoading.has(key)) return;
     coverLoading.add(key);
     coverMap[key] = null;
+    await coverGateEnter();
     try {
       let blob = await getThumb(key);
       if (!blob) {
@@ -171,6 +219,7 @@ export function useBrowseFeed<
       coverMap[key] = null;
     } finally {
       coverLoading.delete(key);
+      coverGateLeave();
     }
   }
 
@@ -196,6 +245,7 @@ export function useBrowseFeed<
   function resetFeed() {
     feed.items.splice(0, feed.items.length);
     buffer.splice(0, buffer.length);
+    seenKeys.clear();
     cursor = opts.initialCursor;
     sourceEnded = false;
     feed.end = false;

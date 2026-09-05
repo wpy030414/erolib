@@ -201,6 +201,13 @@ impl Aria2Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // On Windows, hide the console window to prevent a black window from popping up.
+        #[cfg(target_os = "windows")]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let mut child = cmd.spawn().context(
             "failed to spawn the bundled aria2c binary; the app may be damaged, \
              or start an aria2 daemon on localhost:6800 manually",
@@ -282,6 +289,7 @@ impl Aria2Client {
         &self,
         uri: &str,
         referer: Option<&str>,
+        origin: Option<&str>,
         out: Option<&str>,
         dir: Option<&Path>,
     ) -> Result<String> {
@@ -301,11 +309,25 @@ impl Aria2Client {
         if let Some(r) = referer {
             options.insert("referer".to_string(), json!(r));
         }
+        if let Some(origin) = origin {
+            options.insert(
+                "header".to_string(),
+                json!(vec![format!("Origin: {origin}")]),
+            );
+        }
         if let Some(o) = out {
             options.insert("out".to_string(), json!(o));
         }
         if let Some(d) = dir {
             options.insert("dir".to_string(), json!(d.to_string_lossy().to_string()));
+        }
+
+        // Auto-detect the system HTTP proxy (env vars + macOS `scutil --proxy`,
+        // cached ~60s) so Pixiv/EHentai downloads route through the user's
+        // Clash/V2Ray proxy with zero configuration. aria2's all-proxy is
+        // http/https-only (no SOCKS), which detect_http_proxy already filters for.
+        if let Some(proxy) = crate::services::proxy::detect_http_proxy().await {
+            options.insert("all-proxy".to_string(), json!(proxy));
         }
 
         let result = self

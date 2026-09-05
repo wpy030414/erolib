@@ -1,9 +1,39 @@
 
 use tauri::{Emitter, State};
 
-use crate::errors::AppError;
-use crate::models::BookMetadata;
 use crate::AppState;
+use crate::models::{Book, BookMetadata};
+
+/// Project a stored `Book` row into the `BookMetadata` an exporter needs: tags
+/// are split from the comma-joined DB string, provenance is carried across
+/// so cb7/epub/pdf exports all round-trip.
+fn book_to_metadata(book: &Book) -> BookMetadata {
+    let tags = book
+        .tags
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    BookMetadata {
+        title: book.title.clone(),
+        author: book.author.clone(),
+        artist: None,
+        description: None,
+        tags,
+        status: None,
+        rating: None,
+        source_plugin: book.source_plugin.clone(),
+        source_url: book.source_url.clone(),
+        source_post_id: book.source_post_id.clone(),
+        published_at: book.published_at.clone(),
+        scraped_at: book.scraped_at.map(|t| t.to_rfc3339()),
+        delays: book.delays.clone(),
+    }
+}
 
 #[tauri::command]
 pub async fn import_book(
@@ -13,19 +43,6 @@ pub async fn import_book(
     state
         .library_service
         .import_book(file_path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn import_book_from_images(
-    images: Vec<Vec<u8>>,
-    metadata: BookMetadata,
-    state: State<'_, AppState>,
-) -> Result<crate::models::Book, String> {
-    state
-        .library_service
-        .import_from_images(images, metadata)
         .await
         .map_err(|e| e.to_string())
 }
@@ -47,19 +64,6 @@ pub async fn delete_book(
     // this just brings the in-memory state in sync.
     let _ = app.emit("book://deleted", serde_json::json!({ "bookId": id }));
     Ok(())
-}
-
-#[tauri::command]
-pub async fn update_book_metadata(
-    id: String,
-    metadata: BookMetadata,
-    state: State<'_, AppState>,
-) -> Result<crate::models::Book, String> {
-    state
-        .library_service
-        .update_metadata(id, metadata)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 /// Metadata for a book (page count, title, file path on disk).
@@ -127,18 +131,6 @@ pub async fn get_book_page_count(
 }
 
 #[tauri::command]
-pub async fn get_book_cover(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
-    state
-        .library_service
-        .get_cover(&id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn get_book_cover_thumb(
     id: String,
     state: State<'_, AppState>,
@@ -150,29 +142,20 @@ pub async fn get_book_cover_thumb(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn export_book(
-    id: String,
-    format: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let book = state
-        .library_service
-        .get_book(&id)
-        .await
-        .map_err(|e| e.to_string())?;
-    if format == book.format {
-        return Ok(book.file_path);
-    }
-    Err(AppError::Other(format!("Export to {} not yet implemented", format)).to_string())
-}
-
-/// Copy a book file to a destination chosen by the user (via the save dialog).
-/// Looks up the book by id, then duplicates its file to `dest`.
+/// Copy a book file to a destination chosen by the user (via the save dialog),
+/// optionally transpiling it into cb7 / epub / pdf. `format` defaults to "cb7"
+/// (a verbatim copy of the stored archive); the other formats repack the
+/// archive's image pages + ComicInfo metadata into the target container, so
+/// provenance (source url, tags, delays) round-trips through the chosen format.
+///
+/// Per-page progress is pushed to the frontend over `book://export-progress`
+/// (`{book_id, done, total}`) so the export dialog can render a progress bar.
 #[tauri::command]
 pub async fn save_book(
+    app: tauri::AppHandle,
     id: String,
     dest: String,
+    format: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let book = state
@@ -188,8 +171,116 @@ pub async fn save_book(
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
     }
-    std::fs::copy(src, &dest).map_err(|e| format!("copy to {}: {}", dest.display(), e))?;
+
+    let format = format.unwrap_or_else(|| "cb7".to_string());
+
+    // cb7 is a straight copy of the stored archive — the library file already
+    // carries ComicInfo.xml, so no repackaging is needed. One progress event
+    // still goes out so the dialog's bar behaves like the epub/pdf path.
+    if format == "cb7" {
+        let _ = app.emit(
+            "book://export-progress",
+            serde_json::json!({
+                "book_id": book.id,
+                "done": 0,
+                "total": book.page_count.max(0),
+            }),
+        );
+        std::fs::copy(src, &dest).map_err(|e| format!("copy to {}: {}", dest.display(), e))?;
+        return Ok(());
+    }
+
+    // epub/pdf: read the pages + metadata out of the stored cb7, then export.
+    // The blocking work (zip read + format write) runs off the async runtime.
+    let storage = state.storage.clone();
+    let src = src.to_path_buf();
+    let metadata = book_to_metadata(&book);
+    let book_id = book.id.clone();
+    tokio::task::spawn_blocking(move || -> std::result::Result<(), anyhow::Error> {
+        let images = storage.read_all_pages(&src)?;
+        let total = images.len();
+        let mut progress = |done: usize| {
+            let _ = app.emit(
+                "book://export-progress",
+                serde_json::json!({
+                    "book_id": book_id,
+                    "done": done + 1,
+                    "total": total,
+                }),
+            );
+        };
+        crate::services::export::export_book(&images, &metadata, &dest, &format, &mut progress)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("export join failed: {e}"))?
+    .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Export a single page image from a book's CB7/CBZ archive to a user-chosen
+/// path on disk. `page` is 0-based. The raw image bytes (jpg/png/webp) are
+/// read from the archive and written verbatim — no re-encoding.
+#[tauri::command]
+pub async fn save_book_page(
+    id: String,
+    page: usize,
+    dest: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let file_path = state
+        .library_service
+        .get_book_file_path(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let path = std::path::PathBuf::from(&file_path);
+    let storage = state.storage.clone();
+    let bytes = tokio::task::spawn_blocking(move || storage.read_page(&path, page))
+        .await
+        .map_err(|e| format!("page read join failed: {e}"))?
+        .ok_or_else(|| format!("page {page} not found for book {id}"))?;
+    let dest = std::path::Path::new(&dest).to_path_buf();
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+    }
+    std::fs::write(&dest, &bytes)
+        .map_err(|e| format!("write to {}: {}", dest.display(), e))?;
+    Ok(())
+}
+
+/// Physically remove one page (0-based) from the book's CB7/CBZ archive and
+/// return the new page count. The archive is repacked without the dropped page,
+/// so later exports (save_book / sync_to_dir, which copy the whole file) no
+/// longer contain it. The blocking repack runs on a spawn_blocking thread like
+/// the other zip-touching commands.
+#[tauri::command]
+pub async fn delete_page(
+    id: String,
+    page: usize,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let file_path = state
+        .library_service
+        .get_book_file_path(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let storage = state.storage.clone();
+    let new_count = tokio::task::spawn_blocking(move || {
+        storage.rewrite_without_page(std::path::PathBuf::from(&file_path).as_path(), page)
+    })
+    .await
+    .map_err(|e| format!("page delete join failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // Persist the new count and refresh the cover when page 0 was dropped —
+    // same book-level bookkeeping as the service method, kept here so the
+    // heavy repack above stays off the async runtime.
+    state
+        .library_service
+        .finalize_page_deletion(&id, new_count as u32, page == 0)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(new_count as u32)
 }
 
 #[tauri::command]
@@ -201,6 +292,59 @@ pub async fn list_books(
     state
         .library_service
         .list_books(limit.unwrap_or(100), offset.unwrap_or(0))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Mark a book as read and open a reading session; returns the new session id,
+/// which the reader later hands to `record_reading` when the book is closed.
+#[tauri::command]
+pub async fn open_book(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<i64, String> {
+    state
+        .library_service
+        .open_book(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Finalize a reading span recorded via `open_book`: stamp its `ended_at` and
+/// the session's `duration_ms` delta (the per-session reading time).
+#[tauri::command]
+pub async fn record_reading(
+    id: String,
+    session_id: i64,
+    duration_ms: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .library_service
+        .record_reading(&id, session_id, duration_ms)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Total reading duration (ms) for the current week (Monday 00:00 local).
+#[tauri::command]
+pub async fn get_weekly_reading_ms(state: State<'_, AppState>) -> Result<i64, String> {
+    state
+        .library_service
+        .get_weekly_reading_ms()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Most-recently-read books first, for the home shelf.
+#[tauri::command]
+pub async fn list_recent_books(
+    limit: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::Book>, String> {
+    state
+        .library_service
+        .list_recent_books(limit)
         .await
         .map_err(|e| e.to_string())
 }

@@ -4,7 +4,7 @@ export interface Book {
   original_filename?: string;
   file_path: string;
   file_size: number;
-  format: 'cb7' | 'cbz' | 'cbr' | 'pdf';
+  format: 'cb7' | 'cbz' | 'cbr' | 'epub' | 'pdf';
   page_count: number;
   cover_path?: string;
   source_plugin?: string;
@@ -23,34 +23,14 @@ export interface Book {
   delays?: string;
 }
 
-export interface Tag {
-  id: string;
-  name: string;
-  tag_type: 'genre' | 'artist' | 'author' | 'series' | 'custom';
-  created_at: string;
-}
-
-/** A tag with the number of books linked to it, for the tag-chip filter row. */
+/** A tag with the number of books linked to it, for the tag-chip filter row.
+ *  `name` is the display label in the current app locale (translated in SQL);
+ *  `raw_names` are the original stored spellings folded into this label — sent
+ *  back in `tags_any` so selecting a translated chip filters by every raw form. */
 export interface TagCount {
   name: string;
   count: number;
-}
-
-export interface Collection {
-  id: string;
-  name: string;
-  description?: string;
-  created_at: string;
-}
-
-export interface BookMetadata {
-  title: string;
-  author?: string;
-  artist?: string;
-  description?: string;
-  tags: string[];
-  status?: string;
-  rating?: number;
+  raw_names: string[];
 }
 
 export interface SearchQuery {
@@ -67,16 +47,9 @@ export interface SearchQuery {
   page_size: number;
 }
 
-export interface SearchFacets {
-  tags: Tag[];
-  collections: Collection[];
-  sources: string[];
-}
-
 export interface SearchResult {
   books: Book[];
   total: number;
-  facets: SearchFacets;
 }
 
 /** A Pixiv artwork shown in the 关注/收藏 browse grid (mirrors backend UserWork). */
@@ -128,4 +101,44 @@ export interface CardStatus {
  *  EhentaiBrowseStatus). Keyed by canonical gallery URL. */
 export interface EhentaiBrowseStatus extends CardStatus {
   galleryUrl: string;
+}
+
+/** A gallery row from an asmhentai.com listing (mirrors backend AhentaiGalleryItem). */
+export interface AhentaiGalleryItem {
+  id: string;
+  title: string;
+  thumbUrl: string;
+  pageCount: number;
+  /** Uploader/artist name extracted from the title bracket convention. */
+  uploader?: string;
+  /** Category display name, e.g. "Doujinshi", "Manga". */
+  category: string;
+}
+
+/** Local state of an AHentai gallery in the browse grid (mirrors backend
+ *  AhentaiBrowseStatus). Keyed by gallery numeric ID. */
+export interface AhentaiBrowseStatus extends CardStatus {
+  galleryId: string;
+}
+
+/** A single comic item from NiceCat API. */
+export interface NicecatComicItem {
+  uid: string;
+  image: string;
+  name: string;
+  categories?: string;
+}
+
+/** Local state of a NiceCat comic in the browse grid (mirrors backend NicecatBrowseStatus). */
+export interface NicecatBrowseStatus extends CardStatus {
+  comicId: string;
+}
+
+/** A named collection of books (reading list). */
+export interface Collection {
+  id: string;
+  name: string;
+  description?: string;
+  position: number;
+  created_at: string;
 }

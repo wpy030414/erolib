@@ -2,13 +2,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Local, TimeZone, Utc};
 use sqlx::{Row, Sqlite};
 use uuid::Uuid;
 
 use crate::db::Database;
 use crate::errors::AppError;
-use crate::models::{Book, BookMetadata, BookSource};
+use crate::models::{Book, BookSource};
+use crate::services::locale;
 use crate::services::StorageService;
 
 pub struct LibraryService {
@@ -21,12 +22,17 @@ impl LibraryService {
         Self { db, storage }
     }
 
-    /// Import an existing CB7/CBZ/CBR/PDF file into the library.
+    /// Import an existing CB7/CBZ/CBR/EPUB/PDF file into the library.
     ///
-    /// For CB7/CBZ the archive's ComicInfo.xml is read back (title, tags,
-    /// source, delays) so an erolib-exported cb7 round-trips losslessly.
-    /// CBR/PDF and archives without ComicInfo fall back to the file name and
-    /// empty source.
+    /// - **CB7/CBZ**: copied into library storage verbatim, then the archive's
+    ///   `ComicInfo.xml` is read back (title, tags, source, delays) so an
+    ///   erolib-exported cb7 round-trips losslessly.
+    /// - **EPUB/PDF**: parsed back into image pages + metadata (OPF `dc:`
+    ///   fields + `ero:` refines for epub; Info dict + erolib metadata stream
+    ///   for pdf), then repackaged into a library CB7 via `create_cb7`. This
+    ///   makes the reader (zip-only) able to page through them and keeps the
+    ///   library storage uniformly cb7.
+    /// - **CBR** and archives without provenance fall back to the file name.
     pub async fn import_book(&self, file_path: String) -> Result<Book, AppError> {
         let path = Path::new(&file_path);
         let file_name = path
@@ -36,20 +42,74 @@ impl LibraryService {
             .to_string();
 
         let format = detect_format(&file_name);
-        let page_count = count_archive_pages(path, &format).unwrap_or(0);
-
         let book_id = Uuid::new_v4().to_string();
         let dest = self
             .storage
             .library_path
             .join(format!("{}.cb7", book_id));
 
-        // Copy into library storage.
-        std::fs::copy(path, &dest).map_err(AppError::Io)?;
+        // All zip formats are repacked into a library cb7 with pages
+        // re-encoded to the unified webp format; metadata comes from the
+        // format's own carrier (OPF / PDF info / ComicInfo.xml). cbr (rar)
+        // can't be read by the zip backend and keeps the verbatim copy —
+        // which the reader can't open either, so it imports with 0 pages
+        // (pre-existing behavior, unchanged).
+        let meta = if format == "epub" || format == "pdf" {
+            let (images, parsed) = tokio::task::spawn_blocking({
+                let path = path.to_path_buf();
+                let fmt = format.clone();
+                move || -> std::result::Result<_, anyhow::Error> {
+                    if fmt == "epub" {
+                        crate::services::import::read_epub(&path)
+                    } else {
+                        crate::services::import::read_pdf(&path)
+                    }
+                }
+            })
+            .await
+            .map_err(|e| AppError::Other(format!("parse join failed: {e}")))?
+            .map_err(|e| AppError::Other(e.to_string()))?;
 
-        // Recover metadata from ComicInfo.xml (cb7/cbz only). read_comic_info
-        // returns None for non-zip formats or archives without ComicInfo.
-        let meta = self.storage.read_comic_info(&dest);
+            self.storage
+                .create_cb7(&images, &parsed, true)
+                .map_err(|e| AppError::Other(e.to_string()))?;
+            Some(parsed)
+        } else if format == "cb7" || format == "cbz" {
+            // Repack instead of verbatim-copying: an external cbz may hold
+            // avif pages that would otherwise bypass the webp conversion and
+            // break PDF export later. Metadata (incl. ugoira delays) is read
+            // back from the source's ComicInfo.xml.
+            let storage = self.storage.clone();
+            let path = path.to_path_buf();
+            let meta = tokio::task::spawn_blocking(move || -> std::result::Result<_, anyhow::Error> {
+                let images = storage.read_all_pages(&path)?;
+                let meta = storage.read_comic_info(&path);
+                storage.create_cb7(
+                    &images,
+                    &meta.clone().unwrap_or_default(),
+                    true,
+                )?;
+                Ok(meta)
+            })
+            .await
+            .map_err(|e| AppError::Other(format!("repack join failed: {e}")))?
+            .map_err(|e| AppError::Other(e.to_string()))?;
+            meta
+        } else {
+            // cbr (rar): verbatim copy, existing behavior.
+            std::fs::copy(path, &dest).map_err(AppError::Io)?;
+            self.storage.read_comic_info(&dest)
+        };
+
+        // Count pages from the (now-cb7) library file; fall back to a quick
+        // archive scan of the source for formats we still copy verbatim.
+        let mut page_count = count_archive_pages(&dest, "cb7").unwrap_or_else(|| {
+            if format == "cb7" || format == "cbz" {
+                count_archive_pages(path, &format).unwrap_or(0)
+            } else {
+                0
+            }
+        });
 
         let file_stem = path
             .file_stem()
@@ -63,6 +123,12 @@ impl LibraryService {
             .unwrap_or(file_stem);
         let tags = meta.as_ref().map(|m| m.tags.clone()).unwrap_or_default();
         let delays = meta.as_ref().and_then(|m| m.delays.clone());
+        // Animated books (ugoira) contain per-frame delays and are logically a
+        // single page — the reader plays the jpg sequence on a timer. The raw
+        // image count (count_archive_pages) would be the frame count, not 1.
+        if delays.as_deref().map_or(false, |d| !d.is_empty()) {
+            page_count = 1;
+        }
         // Only reconstruct a BookSource when the archive actually carried an
         // erolib source plugin; otherwise leave source as None.
         let source = meta.as_ref().and_then(|m| {
@@ -71,7 +137,7 @@ impl LibraryService {
                 return None;
             }
             Some(BookSource {
-                plugin: plugin.to_string(),
+                source_plugin: plugin.to_string(),
                 source_url: m.source_url.clone().unwrap_or_default(),
                 scraped_at: m.scraped_at.as_deref().and_then(parse_rfc3339),
                 source_post_id: m.source_post_id.clone(),
@@ -108,78 +174,6 @@ impl LibraryService {
         Ok(book)
     }
 
-    /// Import a book from a set of in-memory images + metadata.
-    pub async fn import_from_images(
-        &self,
-        images: Vec<Vec<u8>>,
-        metadata: BookMetadata,
-    ) -> Result<Book, AppError> {
-        if images.is_empty() {
-            return Err(AppError::Other("No images provided".into()));
-        }
-
-        let book_id = Uuid::new_v4().to_string();
-        let file_path = self.storage.create_cb7(&images, &metadata)?;
-
-        let cover_path = self
-            .storage
-            .extract_cover(&file_path, &book_id)
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
-
-        let file_size = std::fs::metadata(&file_path).map(|m| m.len() as i64).unwrap_or(0);
-        let now = Utc::now();
-
-        let book = Book {
-            id: book_id,
-            title: metadata.title.clone(),
-            original_filename: None,
-            file_path: file_path.to_string_lossy().to_string(),
-            file_size,
-            format: "cb7".into(),
-            page_count: images.len() as i32,
-            cover_path,
-            source_plugin: None,
-            source_url: None,
-            source_post_id: None,
-            author: None,
-            author_id: None,
-            published_at: None,
-            scraped_at: Some(now),
-            created_at: now,
-            updated_at: now,
-            last_read_at: None,
-            read_count: 0,
-            tags: None,
-            delays: None,
-        };
-
-        sqlx::query(
-            r#"INSERT INTO books
-            (id, title, file_path, file_size, format, page_count, cover_path, scraped_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&book.id)
-        .bind(&book.title)
-        .bind(&book.file_path)
-        .bind(book.file_size)
-        .bind(&book.format)
-        .bind(book.page_count)
-        .bind(&book.cover_path)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .execute(&self.db.pool)
-        .await
-        .map_err(AppError::Db)?;
-
-        // Insert tags and associations.
-        for tag_name in &metadata.tags {
-            upsert_tag_and_link(&self.db.pool, &book.id, tag_name, "custom").await?;
-        }
-
-        Ok(book)
-    }
 
     pub async fn delete_book(&self, id: String) -> Result<(), AppError> {
         let row = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id = ?")
@@ -211,41 +205,51 @@ impl LibraryService {
         Ok(())
     }
 
-    pub async fn update_metadata(
+
+    /// Persist the new page count after a page deletion repack, and re-extract
+    /// the cover when the first page was the one dropped. Split from the
+    /// blocking zip work (which runs on a `spawn_blocking` thread in the
+    /// command layer, driving `storage.rewrite_without_page` directly) so this
+    /// DB + cover IO stays on the async runtime. Animated (ugoira) books are a
+    /// single logical page whose frames play as an animation; deleting a frame
+    /// would break playback, so callers must not invoke this for them.
+    pub async fn finalize_page_deletion(
         &self,
-        id: String,
-        metadata: BookMetadata,
-    ) -> Result<Book, AppError> {
-        let mut book = sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&self.db.pool)
-            .await
-            .map_err(AppError::Db)?
-            .ok_or_else(|| AppError::BookNotFound(id.clone()))?;
-
-        book.title = metadata.title;
-        book.updated_at = Utc::now();
-
-        sqlx::query("UPDATE books SET title = ?, updated_at = ? WHERE id = ?")
-            .bind(&book.title)
-            .bind(book.updated_at.to_rfc3339())
-            .bind(&id)
+        id: &str,
+        new_count: u32,
+        dropped_first_page: bool,
+    ) -> Result<(), AppError> {
+        sqlx::query("UPDATE books SET page_count = ? WHERE id = ?")
+            .bind(new_count as i32)
+            .bind(id)
             .execute(&self.db.pool)
             .await
             .map_err(AppError::Db)?;
 
-        Ok(book)
+        if dropped_first_page {
+            let file_path = self.get_book_file_path(id).await?;
+            let path = Path::new(&file_path);
+            let _ = self.storage.extract_cover(path, id);
+        }
+        Ok(())
     }
 
     pub async fn get_book(&self, id: &str) -> Result<Book, AppError> {
-        sqlx::query_as::<_, Book>(
-            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+        // Tags rendered in the current locale (translated); DISTINCT folds raw
+        // synonyms into one label, unmapped tags keep their raw name.
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
              FROM books \
              LEFT JOIN book_tags ON book_tags.book_id = books.id \
              LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
              WHERE books.id = ? \
-             GROUP BY books.id",
-        )
+             GROUP BY books.id"
+        );
+        sqlx::query_as::<_, Book>(&sql)
         .bind(id)
         .fetch_optional(&self.db.pool)
         .await
@@ -285,26 +289,25 @@ impl LibraryService {
     }
 
     pub async fn list_books(&self, limit: i64, offset: i64) -> Result<Vec<Book>, AppError> {
-        sqlx::query_as::<_, Book>(
-            "SELECT books.*, GROUP_CONCAT(tags.name, ',') AS tags \
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
              FROM books \
              LEFT JOIN book_tags ON book_tags.book_id = books.id \
              LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
              GROUP BY books.id \
              ORDER BY books.created_at DESC \
-             LIMIT ? OFFSET ?",
-        )
+             LIMIT ? OFFSET ?"
+        );
+        sqlx::query_as::<_, Book>(&sql)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.db.pool)
         .await
         .map_err(AppError::Db)
-    }
-
-    pub async fn get_cover(&self, id: &str) -> Result<Vec<u8>, AppError> {
-        self.storage
-            .read_cover(id)
-            .ok_or_else(|| AppError::NotFound(format!("Cover for {}", id)))
     }
 
     /// Low-res cover thumbnail (longest edge ≤ 256px JPEG) for the library
@@ -363,7 +366,7 @@ impl LibraryService {
             .map(|p| p.to_string_lossy().to_string());
         let now = Utc::now();
 
-        let source_plugin = source.as_ref().map(|s| s.plugin.clone()).unwrap_or_default();
+        let source_plugin = source.as_ref().map(|s| s.source_plugin.clone()).unwrap_or_default();
         let source_url = source.as_ref().map(|s| s.source_url.clone()).unwrap_or_default();
         let scraped_at = source.as_ref().and_then(|s| s.scraped_at);
         let source_post_id = source.as_ref().and_then(|s| s.source_post_id.clone());
@@ -398,8 +401,15 @@ impl LibraryService {
         .await
         .map_err(AppError::Db)?;
 
-        for tag_name in tags {
-            upsert_tag_and_link(&self.db.pool, book_id, tag_name, "custom").await?;
+        if !tags.is_empty() {
+            tracing::info!(target: "erolib::library", book_id, count = tags.len(), "register_stored_book: linking tags");
+            for tag_name in tags {
+                if let Err(e) = upsert_tag_and_link(&self.db.pool, book_id, tag_name, "custom").await {
+                    tracing::error!(target: "erolib::library", %book_id, %tag_name, ?e, "link tag failed");
+                }
+            }
+        } else {
+            tracing::warn!(target: "erolib::library", %book_id, "register_stored_book: no tags to link");
         }
 
         let book = self.get_book(book_id).await?;
@@ -414,6 +424,143 @@ impl LibraryService {
         }
         Ok(())
     }
+
+    /// Mark a book as just-read and open a fresh reading session for it.
+    ///
+    /// Bumps `last_read_at` + `read_count` (the routine read marker) and inserts a
+    /// new `reading_sessions` row whose `duration_ms` starts at 0; the returned
+    /// session id is later passed to `record_reading` when the book is closed so
+    /// the span's duration can be finalized. The two writes are independent: a
+    /// failure to open a session must not roll back the read marker.
+    pub async fn open_book(&self, id: &str) -> Result<i64, AppError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE books SET last_read_at = ?, read_count = read_count + 1 WHERE id = ?")
+            .bind(&now)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await
+            .map_err(AppError::Db)?;
+
+        // RETURNING id yields the freshly inserted row's id on the SAME
+        // connection that ran the INSERT. This replaces a separate
+        // `SELECT last_insert_rowid()`, which is per-connection and unsafe across
+        // sqlx's pool (max_connections=8): the INSERT and that SELECT could land
+        // on different connections, returning some OTHER connection's last rowid
+        // (e.g. a concurrent tasks insert) or 0. A wrong id meant record_reading's
+        // `WHERE id = ?` never matched the real session row, so every session was
+        // left at duration_ms=0 / ended_at=NULL — the Home "本周已阅读" stayed 0.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO reading_sessions (book_id, started_at, duration_ms) \
+             VALUES (?, ?, 0) \
+             RETURNING id",
+        )
+        .bind(id)
+        .bind(&now)
+        .fetch_one(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(id)
+    }
+
+    /// Finalize a reading span: stamp `ended_at` and the session's
+    /// `duration_ms` (the per-session delta reported by the reader). Scoped to
+    /// both the session id and its book so a stale session id can't mutate
+    /// another book's row.
+    pub async fn record_reading(
+        &self,
+        id: &str,
+        session_id: i64,
+        duration_ms: i64,
+    ) -> Result<(), AppError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE reading_sessions SET ended_at = ?, duration_ms = ? WHERE id = ? AND book_id = ?",
+        )
+        .bind(&now)
+        .bind(duration_ms)
+        .bind(session_id)
+        .bind(id)
+        .execute(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(())
+    }
+
+    /// Crash recovery: any session left open (NULL `ended_at`) means the app
+    /// closed without recording. Neutralize them with a zero-length closed span
+    /// so they still render in history but contribute 0 to duration stats.
+    pub async fn close_stale_sessions(&self) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE reading_sessions \
+             SET ended_at = started_at, duration_ms = 0 \
+             WHERE ended_at IS NULL",
+        )
+        .execute(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(())
+    }
+
+    /// Total reading duration (ms) for the current week (Monday 00:00 local →
+    /// now). Aggregated purely from `reading_sessions`; returns 0 when there are
+    /// no sessions in the window.
+    pub async fn get_weekly_reading_ms(&self) -> Result<i64, AppError> {
+        let week_start = monday_start_local().to_rfc3339();
+        let total: Option<i64> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(duration_ms), 0) \
+             FROM reading_sessions \
+             WHERE started_at >= ?",
+        )
+        .bind(&week_start)
+        .fetch_one(&self.db.pool)
+        .await
+        .map_err(AppError::Db)?;
+        Ok(total.unwrap_or(0))
+    }
+
+    /// Most-recently-read books first (those with a `last_read_at`), for the
+    /// home "recently read" shelf. Reuses the same `books.* + tags` projection
+    /// the rest of the library uses so the `Book` FromRow mapping lines up.
+    pub async fn list_recent_books(&self, limit: i64) -> Result<Vec<Book>, AppError> {
+        let loc = locale::current_locale(&self.db).await;
+        let disp = locale::display_expr(&loc, "tags");
+        let join = locale::tag_join("tags");
+        let sql = format!(
+            "SELECT books.*, GROUP_CONCAT(DISTINCT {disp}) AS tags \
+             FROM books \
+             LEFT JOIN book_tags ON book_tags.book_id = books.id \
+             LEFT JOIN tags ON tags.id = book_tags.tag_id \
+             {join} \
+             WHERE books.last_read_at IS NOT NULL \
+             GROUP BY books.id \
+             ORDER BY books.last_read_at DESC \
+             LIMIT ?"
+        );
+        sqlx::query_as::<_, Book>(&sql)
+        .bind(limit)
+        .fetch_all(&self.db.pool)
+        .await
+        .map_err(AppError::Db)
+    }
+
+
+}
+
+/// Monday 00:00:00 in the local timezone, as a UTC DateTime — the start of the
+/// current week for the "本周阅读时长" stat. RFC3339-comparable against the
+/// UTC `started_at` strings stored in `reading_sessions`.
+fn monday_start_local() -> DateTime<Utc> {
+    let now = Local::now();
+    let days_from_monday = now.weekday().num_days_from_monday() as i64;
+    let monday = now.date_naive() - chrono::Duration::days(days_from_monday);
+    let monday_local = monday
+        .and_hms_opt(0, 0, 0)
+        .expect("00:00:00 is a valid time");
+    Local
+        .from_local_datetime(&monday_local)
+        .single()
+        .expect("midnight is unambiguous")
+        .with_timezone(&Utc)
 }
 
 /// Parse an RFC3339 timestamp (as written into ComicInfo's ero:ScrapedAt) back
@@ -433,6 +580,8 @@ fn detect_format(name: &str) -> String {
         "cbz".into()
     } else if lower.ends_with(".cbr") {
         "cbr".into()
+    } else if lower.ends_with(".epub") {
+        "epub".into()
     } else if lower.ends_with(".pdf") {
         "pdf".into()
     } else {
@@ -454,6 +603,7 @@ fn count_archive_pages(path: &Path, format: &str) -> Option<i32> {
                 || name.ends_with(".jpeg")
                 || name.ends_with(".png")
                 || name.ends_with(".webp")
+                || name.ends_with(".avif")
             {
                 count += 1;
             }
@@ -471,16 +621,20 @@ async fn upsert_tag_and_link(
     tag_type: &str,
 ) -> Result<(), AppError> {
     let tag_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        r#"INSERT INTO tags (id, name, type) VALUES (?, ?, ?)
-           ON CONFLICT(name) DO UPDATE SET type = excluded.type"#,
+    let result = sqlx::query(
+        r#"INSERT INTO tags (id, name, tag_type) VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET tag_type = excluded.tag_type"#,
     )
     .bind(&tag_id)
     .bind(tag_name)
     .bind(tag_type)
     .execute(pool)
-    .await
-    .ok();
+    .await;
+
+    if let Err(e) = &result {
+        tracing::error!(target: "erolib::library", %tag_name, ?e, "upsert tag failed");
+    }
+    result.map_err(AppError::Db)?;
 
     // Fetch the (possibly existing) tag id.
     let row: (String,) = sqlx::query_as("SELECT id FROM tags WHERE name = ?")
@@ -498,5 +652,13 @@ async fn upsert_tag_and_link(
     .execute(pool)
     .await
     .map_err(AppError::Db)?;
+
+    // Resolve this tag into the exact+fuzzy translation map so read queries can
+    // render it in the current locale. Idempotent + single-row (no-op if the tag
+    // already resolved); best-effort so a resolution hiccup never blocks a book
+    // registration.
+    if let Err(e) = crate::services::locale::resolve_one_tag(pool, tag_name).await {
+        tracing::warn!(target: "erolib::library", %tag_name, %e, "resolve tag failed");
+    }
     Ok(())
 }

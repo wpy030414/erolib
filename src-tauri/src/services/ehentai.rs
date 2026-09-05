@@ -1,18 +1,10 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::Serialize;
-use uuid::Uuid;
 
-use crate::db::Database;
-use crate::models::{BookMetadata, BookSource};
-use crate::services::pixiv::{PixivProgress, PixivProgressSink};
-use crate::services::storage::StorageService;
-use crate::services::LibraryService;
 
 const EHENTAI_BASE: &str = "https://e-hentai.org";
 
@@ -418,127 +410,4 @@ fn extract_page_count(text: &str) -> i32 {
         }
     }
     0
-}
-
-/// A gallery download carried out one page at a time, emitting progress through
-/// a [PixivProgressSink] (reused verbatim — the frontends already render it).
-pub struct EhentaiDownloader {
-    client: EhentaiClient,
-}
-
-impl EhentaiDownloader {
-    pub fn new(cookie_str: &str) -> Result<Self> {
-        Ok(Self {
-            client: EhentaiClient::new(cookie_str, false)?,
-        })
-    }
-
-    /// Download a gallery's images into bytes. `page_urls` is the ordered list
-    /// from [EhentaiClient::fetch_gallery_pages]. Smart-skip behaviour (replace
-    /// on update) is left to callers/gallery-id source tracking as in Pixiv.
-    pub async fn download_gallery(
-        &self,
-        gallery_url: &str,
-        title: &str,
-        tags: &[String],
-        page_urls: Vec<String>,
-        sink: Arc<std::sync::Mutex<dyn PixivProgressSink>>,
-        cancelled: &AtomicBool,
-        library: &LibraryService,
-        _db: Arc<Database>,
-        storage: Arc<StorageService>,
-    ) -> Result<()> {
-        let (gid, token) = EhentaiClient::parse_gallery_url(gallery_url)?;
-        sink.lock().unwrap().emit(PixivProgress::Phase {
-            phase: "eh-fetched".into(),
-            message: format!("{} pages for {}", page_urls.len(), title),
-        });
-
-        let mut images: Vec<Vec<u8>> = Vec::new();
-        for (i, page_url) in page_urls.iter().enumerate() {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err(anyhow::anyhow!("cancelled"));
-            }
-            sink.lock().unwrap().emit(PixivProgress::WorkStart {
-                index: i as u64,
-                total: page_urls.len() as u64,
-                illust_id: format!("p{i}"),
-                title: format!("Page {}", i + 1),
-            });
-            // Resolve the image URL + download, with a gentle throttle.
-            match self.client.fetch_page_image(page_url).await {
-                Ok(img_url) => match self.client.download_image(&img_url).await {
-                    Ok(bytes) => {
-                        images.push(bytes);
-                        sink.lock().unwrap().emit(PixivProgress::WorkDone {
-                            illust_id: format!("p{i}"),
-                            title: format!("Page {}", i + 1),
-                            pages: 1,
-                        });
-                    }
-                    Err(e) => {
-                        sink.lock().unwrap().emit(PixivProgress::WorkFailed {
-                            illust_id: format!("p{i}"),
-                            title: format!("Page {}", i + 1),
-                            error: e.to_string(),
-                        });
-                    }
-                },
-                Err(e) => {
-                    sink.lock().unwrap().emit(PixivProgress::WorkFailed {
-                        illust_id: format!("p{i}"),
-                        title: format!("Page {}", i + 1),
-                        error: e.to_string(),
-                    });
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(400)).await;
-        }
-
-        if images.is_empty() {
-            anyhow::bail!("no images downloaded from {gallery_url}");
-        }
-
-        sink.lock().unwrap().emit(PixivProgress::Phase {
-            phase: "eh-building".into(),
-            message: "building CB7".into(),
-        });
-        let book_id = Uuid::new_v4().to_string();
-        let file_path = storage.create_cb7(
-            &images,
-            &BookMetadata {
-                title: title.to_string(),
-                tags: tags.to_owned(),
-                ..Default::default()
-            },
-        )?;
-
-        let source_url = format!("{}/g/{}/{}/", self.client.base, gid, token);
-        let is_ex = self.client.base.contains("exhentai");
-        let source = BookSource {
-            plugin: (if is_ex { "exhentai" } else { "e-hentai" }).into(),
-            source_url: source_url.clone(),
-            scraped_at: Some(chrono::Utc::now()),
-            ..Default::default()
-        };
-
-        library
-            .register_stored_book(
-                &book_id,
-                title,
-                &file_path,
-                images.len() as i32,
-                Some(&source),
-                tags,
-                None,
-            )
-            .await?;
-
-        sink.lock().unwrap().emit(PixivProgress::WorkDone {
-            illust_id: book_id,
-            title: title.into(),
-            pages: images.len() as u32,
-        });
-        Ok(())
-    }
 }

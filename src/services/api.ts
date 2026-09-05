@@ -1,11 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import type {
+  AhentaiBrowseStatus,
+  AhentaiGalleryItem,
   Book,
-  BookMetadata,
   Collection,
   EhentaiBrowseStatus,
   GalleryListItem,
+  NicecatBrowseStatus,
   PixivBrowseStatus,
   PixivWork,
   SearchQuery,
@@ -33,35 +35,53 @@ export interface TaskItem {
   completed_at: string | null;
 }
 
+/** Outcome of a completed-task re-download (mirrors the Rust enum). */
+export type RedownloadAction = 'restarted' | 'redownloaded' | 'already_complete';
+
 export const api = {
   // Book operations
   importBook: (filePath: string) =>
     invoke<Book>('import_book', { filePath }),
 
-  importBookFromImages: (images: number[][], metadata: BookMetadata) =>
-    invoke<Book>('import_book_from_images', { images, metadata }),
-
   deleteBook: (id: string) =>
     invoke<void>('delete_book', { id }),
 
-  updateBookMetadata: (id: string, metadata: BookMetadata) =>
-    invoke<Book>('update_book_metadata', { id, metadata }),
-
-  getBookCover: (id: string) =>
-    invoke<number[]>('get_book_cover', { id }),
   /** Low-res JPEG thumbnail (≤256px) — small over IPC, cached in IndexedDB. */
   getBookCoverThumb: (id: string) =>
     invoke<number[]>('get_book_cover_thumb', { id }),
 
-  exportBook: (id: string, format: string) =>
-    invoke<string>('export_book', { id, format }),
+  // Copy/convert a book file to a user-chosen location. `format` selects cb7
+  // (verbatim copy) / epub / pdf (repack with provenance). Right-click → 导出.
+  saveBook: (id: string, dest: string, format?: 'cb7' | 'epub' | 'pdf') =>
+    invoke<void>('save_book', { id, dest, format }),
 
-  // Copy a book file to a user-chosen location (right-click → 保存到本地).
-  saveBook: (id: string, dest: string) =>
-    invoke<void>('save_book', { id, dest }),
+  // Export a single page image to a user-chosen location (reader right-click).
+  saveBookPage: (id: string, page: number, dest: string) =>
+    invoke<void>('save_book_page', { id, page, dest }),
+
+  // Physically remove one page from the book's archive (reader right-click,
+  // for ad pages). Returns the new page count.
+  deletePage: (id: string, page: number) =>
+    invoke<number>('delete_page', { id, page }),
 
   listBooks: (limit?: number, offset?: number) =>
     invoke<Book[]>('list_books', { limit, offset }),
+
+  // Reading-time tracking — one session_id is minted per Reader mount by
+  // `open_book`; `record_reading` is fire-and-forget and the backend stores
+  // the latest per-session delta (last-write-wins on `duration_ms`).
+  openBook: (id: string) =>
+    invoke<number>('open_book', { id }),
+
+  recordReading: (id: string, sessionId: number, durationMs: number) =>
+    invoke<void>('record_reading', { id, sessionId, durationMs }),
+
+  // Home-page aggregates.
+  getWeeklyReadingMs: () =>
+    invoke<number>('get_weekly_reading_ms'),
+
+  listRecentBooks: (limit: number) =>
+    invoke<Book[]>('list_recent_books', { limit }),
 
   // One-way local sync: mirror the library into a directory as
   // ${title}-${metaHash}.cb7 (copies new books, mirror-deletes removed).
@@ -81,9 +101,12 @@ export const api = {
   searchBooks: (query: SearchQuery) =>
     invoke<SearchResult>('search_books', { query }),
 
-  getAllTags: (text?: string) => invoke<TagCount[]>('get_all_tags', { text }),
+  getAllTags: (text?: string, collection?: string) =>
+    invoke<TagCount[]>('get_all_tags', { text, collection }),
 
-  getAllCollections: () => invoke<Collection[]>('get_all_collections'),
+  // Persist the app locale so SQL renders tags in the current language.
+  setLocale: (locale: string) =>
+    invoke<void>('set_locale', { localeStr: locale }),
 
   // OPDS Server (kept; lives under Settings Sharing tab).
   startOpdsServer: (port: number) =>
@@ -97,32 +120,12 @@ export const api = {
 
   stopRssServer: () => invoke<void>('stop_rss_server_cmd'),
 
-  // Pixiv bookmarks
-  testPixivCookie: (cookie: string) =>
-    invoke<{ ok: boolean; has_phpsessid: boolean; cookie_length: number }>(
-      'pixiv_test_cookie',
-      { cookie },
-    ),
-
-  downloadPixivBookmarks: (cookie: string, userId: string, limit: number) =>
-    invoke<void>('pixiv_download_bookmarks', { cookie, userId, limit }),
-
-  cancelPixivDownload: () => invoke<void>('pixiv_cancel_download'),
-
   // EHentai in-app login
   openEHentaiLoginWindow: () =>
     invoke<void>('ehentai_open_login_window'),
 
   getEHentaiLogin: () =>
     invoke<string | null>('ehentai_get_login'),
-
-  setEHentaiLogin: (cookie: string) =>
-    invoke<void>('ehentai_set_login', { cookie }),
-
-  downloadEHentaiGallery: (galleryUrl: string) =>
-    invoke<void>('ehentai_download_gallery', { galleryUrl }),
-
-  cancelEHentaiDownload: () => invoke<void>('ehentai_cancel_download'),
 
   // EHentai browse grid (search + proxied thumbs + per-gallery state)
   ehentaiSearch: (keyword: string | null, category: string | null, next: string | null, ex: boolean) =>
@@ -133,6 +136,26 @@ export const api = {
 
   ehentaiBrowseStatus: (galleryUrls: string[]) =>
     invoke<EhentaiBrowseStatus[]>('ehentai_browse_status', { galleryUrls }),
+
+  // AHentai browse grid (no login — search + proxied thumbs + per-gallery state)
+  ahentaiSearch: (keyword: string | null, page: number | null) =>
+    invoke<AhentaiGalleryItem[]>('ahentai_search', { keyword, page }),
+
+  ahentaiProxyThumb: (url: string) =>
+    invoke<number[]>('ahentai_proxy_thumb', { url }),
+
+  ahentaiBrowseStatus: (galleryIds: string[]) =>
+    invoke<AhentaiBrowseStatus[]>('ahentai_browse_status', { galleryIds }),
+
+  // NiceCat browse — pure HTTP via RC4 token auth (no WebView needed).
+  nicecatFetchApi: (path: string, formFields: Record<string, string>) =>
+    invoke<any>('nicecat_fetch_api', { path, formFields }),
+
+  nicecatProxyThumb: (url: string) =>
+    invoke<number[]>('nicecat_proxy_thumb', { url }),
+
+  nicecatBrowseStatus: (comicIds: string[]) =>
+    invoke<NicecatBrowseStatus[]>('nicecat_browse_status', { comicIds }),
 
   // Pixiv in-app login
   getPixivLogin: () =>
@@ -146,19 +169,6 @@ export const api = {
   pixivLogout: () => invoke<void>('pixiv_clear_login'),
 
   ehentaiLogout: () => invoke<void>('ehentai_clear_login'),
-
-  // Pixiv followings + per-user works
-  fetchPixivFollowings: (limit: number) =>
-    invoke<Array<{ userId: string; userName: string; profileImageUrl: string }>>(
-      'pixiv_fetch_followings',
-      { limit },
-    ),
-
-  downloadPixivUserWorks: (targetUserId: string, limit: number) =>
-    invoke<void>('pixiv_download_user_works', {
-      targetUserId,
-      limit,
-    }),
 
   // Pixiv browse grid (关注/收藏 tabs)
   listPixivBookmarks: (offset: number, limit: number) =>
@@ -200,20 +210,29 @@ export const api = {
   taskRetry: (taskId: string) =>
     invoke<void>('task_retry', { taskId }),
 
+  // Re-download a completed task's book: skips when already complete,
+  // otherwise removes the (incomplete/missing) local book and re-fetches.
+  // Returns the outcome so the caller picks the right toast.
+  taskRedownload: (taskId: string) =>
+    invoke<RedownloadAction>('task_redownload', { taskId }),
+
   tasksClearCompleted: () =>
     invoke<number>('tasks_clear_completed'),
 
-  taskEnqueuePixivBookmarks: (cookie: string, userId: string, limit: number) =>
-    invoke<string>('task_enqueue_pixiv_bookmarks', { cookie, userId, limit }),
-
-  taskEnqueuePixivUserWorks: (cookie: string, targetUserId: string, limit: number) =>
-    invoke<string>('task_enqueue_pixiv_user_works', { cookie, targetUserId, limit }),
+  tasksRetryAll: () =>
+    invoke<[number, number]>('tasks_retry_all'),
 
   taskEnqueueEhentaiGallery: (cookie: string, galleryUrl: string, title: string) =>
     invoke<string>('task_enqueue_ehentai_gallery', { cookie, galleryUrl, title }),
 
   taskEnqueuePixivWork: (cookie: string, workId: string, title: string) =>
     invoke<string>('task_enqueue_pixiv_work', { cookie, workId, title }),
+
+  taskEnqueueAhentaiGallery: (galleryId: string, title: string) =>
+    invoke<string>('task_enqueue_ahentai_gallery', { galleryId, title }),
+
+  taskEnqueueNicecatGallery: (comicId: string, title: string) =>
+    invoke<string>('task_enqueue_nicecat_gallery', { comicId, title }),
 
   openFile: (filters?: Array<{ name: string; extensions: string[] }>) =>
     dialogOpen({
@@ -222,4 +241,69 @@ export const api = {
         { name: 'Comic', extensions: ['cb7', 'cbz', 'cbr', 'pdf'] },
       ],
     }),
+
+  // Collections (reading lists)
+  listCollections: () =>
+    invoke<Collection[]>('list_collections'),
+
+  reorderCollections: (positions: [string, number][]) =>
+    invoke<void>('reorder_collections', { positions }),
+
+  createCollection: (name: string) =>
+    invoke<Collection>('create_collection', { name }),
+
+  renameCollection: (id: string, name: string) =>
+    invoke<void>('rename_collection', { id, name }),
+
+  deleteCollection: (id: string) =>
+    invoke<void>('delete_collection', { id }),
+
+  addBookToCollection: (collectionId: string, bookId: string) =>
+    invoke<void>('add_book_to_collection', { collectionId, bookId }),
+
+  removeBookFromCollection: (collectionId: string, bookId: string) =>
+    invoke<void>('remove_book_from_collection', { collectionId, bookId }),
+
+  getBookCollections: (bookId: string) =>
+    invoke<string[]>('get_book_collections', { bookId }),
+
+  // App self-update
+  checkUpdate: () => invoke<UpdateInfo>('check_update'),
+
+  downloadUpdate: (url: string, name: string) =>
+    invoke<string>('download_update', { url, name }),
+
+  installUpdate: (path: string) =>
+    invoke<void>('install_update', { path }),
+
+  quitAndInstall: (path: string) =>
+    invoke<void>('quit_and_install', { path }),
 };
+
+export interface UpdateAsset {
+  name: string;
+  url: string;
+  size: number;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  hasUpdate: boolean;
+  notes: string;
+  asset: UpdateAsset | null;
+}
+
+export interface UpdateProgress {
+  percent: number;
+  speed: number;
+  completed: number;
+  total: number;
+}
+
+/** Per-page progress pushed during `save_book` over `book://export-progress`. */
+export interface ExportProgress {
+  book_id: string;
+  done: number;
+  total: number;
+}

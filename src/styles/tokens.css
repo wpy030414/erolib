@@ -167,7 +167,6 @@
   --md-sys-elevation-level2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
   --md-sys-elevation-level3: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 8px 3px rgba(0, 0, 0, 0.15);
   --md-sys-elevation-level4: 0 2px 3px rgba(0, 0, 0, 0.3), 0 6px 10px 4px rgba(0, 0, 0, 0.15);
-  --md-sys-elevation-level5: 0 4px 4px rgba(0, 0, 0, 0.3), 0 8px 12px 6px rgba(0, 0, 0, 0.15);
 
   /* ---- Motion (legacy easing/duration; web fallback for springs) ---- */
   --md-sys-motion-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
@@ -177,17 +176,5 @@
   --md-sys-motion-easing-standard-decelerate: cubic-bezier(0, 0, 0, 1);
   --md-sys-motion-easing-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
 
-  --md-sys-motion-duration-short2: 100ms;
-  --md-sys-motion-duration-short3: 150ms;
   --md-sys-motion-duration-short4: 200ms;
-  --md-sys-motion-duration-medium2: 250ms;
-  --md-sys-motion-duration-medium4: 300ms;
-  --md-sys-motion-duration-long2: 400ms;
-  --md-sys-motion-duration-long4: 500ms;
-
-  /* ---- State layer opacities ---- */
-  --md-sys-state-hover-opacity: 0.08;
-  --md-sys-state-focus-opacity: 0.12;
-  --md-sys-state-pressed-opacity: 0.12;
-  --md-sys-state-dragged-opacity: 0.16;
 }

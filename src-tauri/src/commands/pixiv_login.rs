@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::Emitter;
-use tauri::{AppHandle, Manager, State, Url, WindowEvent};
+use tauri::{AppHandle, Manager, State, WindowEvent};
 
 use crate::commands::cookies::adapter;
 use crate::commands::cookies::{capture_all_cookies, has_pixiv_session};
@@ -171,7 +171,25 @@ async fn try_capture_fallback(
         tauri::async_runtime::spawn(async move { capture_all_cookies(&app_clone).await })
             .await
             .ok()??;
+
+    tracing::info!(
+        target: "erolib::pixiv_login",
+        len = cookie.len(),
+        has_session = has_pixiv_session(&cookie),
+        platform = if cfg!(target_os = "windows") { "windows" } else { "other" },
+        "fallback cookie capture result"
+    );
+
     if !has_pixiv_session(&cookie) {
+        // On Windows, JS eval may not capture HttpOnly cookies. Try to extract
+        // any available cookies and see if the API can still work with them.
+        #[cfg(target_os = "windows")]
+        {
+            tracing::warn!(
+                target: "erolib::pixiv_login",
+                "Windows cannot capture HttpOnly PHPSESSID via JS. User may need to provide cookie manually."
+            );
+        }
         return None;
     }
     let user_id = PixivClient::fetch_current_user_id(&cookie)
@@ -187,23 +205,6 @@ async fn try_capture_fallback(
     let result = PixivLoginResult { user_id, user_name, cookie };
     persist(session, &result);
     Some(result)
-}
-
-/// Extract a Pixiv numeric user id from a profile URL like
-/// `https://www.pixiv.net/users/12345678/...`, if present.
-#[allow(dead_code)]
-fn user_id_from_pixiv_url(url: &Url) -> Option<String> {
-    if url.host_str() != Some("www.pixiv.net") {
-        return None;
-    }
-    let segments: Vec<&str> = url.path_segments()?.collect();
-    if segments.first() == Some(&"users") {
-        let id = segments.get(1)?;
-        if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-            return Some(id.to_string());
-        }
-    }
-    None
 }
 
 fn persist(session: &PixivSession, login: &PixivLoginResult) {

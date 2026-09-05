@@ -10,6 +10,11 @@
 -- does not read books_fts; this keeps the index structurally correct and
 -- ready for FTS-backed search later.
 
+-- Clean up stale migration trigger that referenced a non-existent `type`
+-- column (old column was renamed to `tag_type`). Leaving it in place breaks
+-- every tag INSERT with "no such column: NEW.type".
+DROP TRIGGER IF EXISTS trg_tags_type_to_tag_type;
+
 -- Books
 CREATE TABLE IF NOT EXISTS books (
     id TEXT PRIMARY KEY,
@@ -41,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_books_created ON books(created_at);
 CREATE TABLE IF NOT EXISTS tags (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
-    type TEXT NOT NULL DEFAULT 'custom',
+    tag_type TEXT NOT NULL DEFAULT 'custom',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -61,6 +66,7 @@ CREATE TABLE IF NOT EXISTS collections (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -132,5 +138,16 @@ CREATE TABLE IF NOT EXISTS tasks (
     payload TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+CREATE TABLE IF NOT EXISTS reading_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  started_at TEXT NOT NULL,        -- RFC3339 (UTC), e.g. 2026-07-13T10:30:00Z
+  ended_at TEXT,                   -- RFC3339, nullable until the session is closed
+  duration_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_reading_sessions_book ON reading_sessions(book_id);
+CREATE INDEX IF NOT EXISTS idx_reading_sessions_started ON reading_sessions(started_at);
+
+-- Per-book reading-duration tracking. Written only on explicit open/close
+-- (services/library.rs), never by the routine last_read_at/read_count update
+-- when a book is opened — so no AFTER UPDATE trigger churns this table.

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::services::task::{TaskPayload, TaskSnapshot};
+use crate::services::task::{RedownloadAction, TaskPayload, TaskSnapshot};
 use crate::services::task_manager::TaskManager;
 
 #[tauri::command]
@@ -64,7 +64,20 @@ pub async fn task_retry(
         .map_err(|e| e.to_string())
 }
 
-/// Delete all terminal tasks (completed/failed/cancelled) in one shot.
+/// Re-download a completed task's book (smart: compares the local archive
+/// against the source's current page count and skips when already complete).
+#[tauri::command]
+pub async fn task_redownload(
+    task_id: String,
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<RedownloadAction, String> {
+    manager
+        .redownload_task(&task_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete all completed tasks in one shot.
 #[tauri::command]
 pub async fn tasks_clear_completed(
     manager: State<'_, Arc<TaskManager>>,
@@ -75,40 +88,13 @@ pub async fn tasks_clear_completed(
         .map_err(|e| e.to_string())
 }
 
+/// Retry all failed tasks and resume all paused tasks.  Returns (retried, resumed).
 #[tauri::command]
-pub async fn task_enqueue_pixiv_bookmarks(
-    cookie: String,
-    user_id: String,
-    limit: u64,
+pub async fn tasks_retry_all(
     manager: State<'_, Arc<TaskManager>>,
-) -> Result<String, String> {
-    let payload = TaskPayload::PixivBookmarks {
-        cookie,
-        user_id: user_id.clone(),
-        limit,
-    };
-    let title = format!("Pixiv bookmarks (user {user_id})");
+) -> Result<(u64, u64), String> {
     manager
-        .enqueue(payload, title)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn task_enqueue_pixiv_user_works(
-    cookie: String,
-    target_user_id: String,
-    limit: u64,
-    manager: State<'_, Arc<TaskManager>>,
-) -> Result<String, String> {
-    let payload = TaskPayload::PixivUserWorks {
-        cookie,
-        target_user_id: target_user_id.clone(),
-        limit,
-    };
-    let title = format!("Pixiv user works (user {target_user_id})");
-    manager
-        .enqueue(payload, title)
+        .retry_and_resume_all()
         .await
         .map_err(|e| e.to_string())
 }
@@ -150,6 +136,40 @@ pub async fn task_enqueue_ehentai_gallery(
         "EHentai"
     };
     let task_title = format!("{prefix}: {}", title.trim());
+    manager
+        .enqueue(payload, task_title)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn task_enqueue_ahentai_gallery(
+    gallery_id: String,
+    title: String,
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<String, String> {
+    let payload = TaskPayload::AhentaiGallery {
+        gallery_id: gallery_id.clone(),
+        title: title.clone(),
+    };
+    let task_title = format!("ASMHentai: {}", title.trim());
+    manager
+        .enqueue(payload, task_title)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn task_enqueue_nicecat_gallery(
+    comic_id: String,
+    title: String,
+    manager: State<'_, Arc<TaskManager>>,
+) -> Result<String, String> {
+    let payload = TaskPayload::NicecatGallery {
+        comic_id: comic_id.clone(),
+        title: title.clone(),
+    };
+    let task_title = format!("NiceCat: {}", title.trim());
     manager
         .enqueue(payload, task_title)
         .await

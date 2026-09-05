@@ -78,7 +78,18 @@ impl ServiceAdapter {
             Service::Pixiv => !path.starts_with("/login"),
             // eH login is at /index.php?act=Login — the path looks generic so
             // we check the query string for the act=Login marker.
-            Service::Ehentai => !(path == "/index.php" && url.query().map_or(false, |q| q.contains("act=Login"))),
+            Service::Ehentai => {
+                // Never attempt cookie capture on forums.e-hentai.org: the login
+                // form is served from that Cloudflare-protected host, and the
+                // page may strip act=Login from the query via replaceState —
+                // treating it as post-login would let capture_all_cookies fall
+                // through to the JS eval redirect and blow away the login form.
+                // Wait for the redirect back to e-hentai.org / exhentai.org.
+                if host == "forums.e-hentai.org" {
+                    return false;
+                }
+                !(path == "/index.php" && url.query().map_or(false, |q| q.contains("act=Login")))
+            }
         }
     }
 
@@ -133,14 +144,23 @@ impl ServiceAdapter {
             .app_local_data_dir()
             .map(|d| d.join(self.data_directory_name))
             .unwrap_or_default();
-        tauri::WebviewWindowBuilder::new(app, self.window_label, WebviewUrl::External(url))
+        let builder = tauri::WebviewWindowBuilder::new(app, self.window_label, WebviewUrl::External(url))
             .title(self.window_title)
             .inner_size(520.0, 760.0)
             .center()
             .resizable(true)
             .data_directory(dir)
-            .additional_browser_args(self.additional_browser_args)
-            .build()
+            .additional_browser_args(self.additional_browser_args);
+
+        // Disable spell-check/autocorrect on every input — but ONLY on macOS.
+        // macOS 26 WKWebView shows the auto-correction panel (NSCorrectionPanel)
+        // as a sheet child window and hits an NSRemoteView assertion → crash the
+        // moment the user types in a field. On Windows the same script can cause
+        // rendering issues / white screen, so it must stay off there.
+        #[cfg(target_os = "macos")]
+        let builder = builder.initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#);
+
+        builder.build()
     }
 }
 
@@ -171,6 +191,15 @@ mod bdd {
         }
         for host in EHENTAI.post_login_hosts {
             let u = url::Url::parse(&format!("https://{host}/")).unwrap();
+            if *host == "forums.e-hentai.org" {
+                // Cloudflare login-form host: explicitly NOT post-login (see
+                // the guard in is_post_login).
+                assert!(
+                    !EHENTAI.is_post_login(&u),
+                    "forums.e-hentai.org must never be treated as post-login"
+                );
+                continue;
+            }
             assert!(
                 EHENTAI.is_post_login(&u),
                 "{host} should be post-login for eHentai"

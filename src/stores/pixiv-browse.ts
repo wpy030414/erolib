@@ -5,7 +5,7 @@ import { useBrowseFeed, type BrowseFeedShared } from '@/composables/useBrowseFee
 import type { PixivWork, PixivBrowseStatus } from '@/types';
 
 export type PixivTab = 'recommend' | 'following' | 'bookmark';
-export type FeedKey = PixivTab | 'search';
+type FeedKey = PixivTab | 'search';
 
 // Following & search return a fixed per-page from Pixiv (~30 / ~60); this is
 // the end-of-feed heuristic for those (a short page ⇒ last page). The grid's

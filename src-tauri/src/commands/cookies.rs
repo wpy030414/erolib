@@ -582,9 +582,23 @@ mod native_windows {
 // ---------------------------------------------------------------------------
 
 pub fn inject_cookie_redirect(window: &tauri::WebviewWindow) -> bool {
+    // Try multiple approaches to capture cookies:
+    // 1. Direct document.cookie (works for non-HttpOnly)
+    // 2. navigator.cookieEnabled check
     window
         .eval(
-            r#"document.location.href = 'about:blank#' + encodeURIComponent(document.cookie);"#,
+            r#"
+            (function() {
+                try {
+                    var cookies = document.cookie;
+                    if (cookies && cookies.length > 0) {
+                        document.location.href = 'about:blank#' + encodeURIComponent(cookies);
+                    }
+                } catch(e) {
+                    console.error('cookie capture failed:', e);
+                }
+            })();
+            "#,
         )
         .is_ok()
 }
@@ -629,8 +643,22 @@ pub fn extract_cookie_from_url(window: &tauri::WebviewWindow) -> Option<String> 
 /// Main cookie capture entry point.
 ///
 /// Capture order (most reliable first):
-/// 1. **The login window's own WKHtt
-
+/// 1. **Tauri's `cookies()` API** — works on all platforms, returns ALL cookies
+///    including HttpOnly (PHPSESSID for Pixiv). The underlying WebView2/WKWebView
+///    native cookie store is queried via the runtime dispatcher; safe to call
+///    from a background task (not the main thread) — the main thread stays
+///    free to pump messages.
+/// 2. **The login window's own WKWebView data store** (macOS) — fallback in
+///    case `cookies()` returns empty or errors out.
+/// 3. **Shared data stores** (macOS).
+/// 4. **Windows WebView2 cookie SQLite** — read-only plaintext read of the
+///    WebView2 cookie DB; the 3rolib HttpOnly path (COM Method 2c stays
+///    disabled, see above).
+/// 5. **JS eval redirect** — non-HttpOnly cookies only; last-resort fallback.
+///
+/// IMPORTANT: this is meant to be called from a **background tokio task**, NOT
+/// the main thread.  The blocking happens in a spawned thread so the main
+/// thread's run loop stays free to process any GCD completion callbacks.
 pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
     use adapter::ALL_ADAPTERS;
 
@@ -641,7 +669,40 @@ pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<Strin
     for &adapter in ALL_ADAPTERS {
         let label = adapter.window_label();
 
-        // Method 1: the login window's own WKWebView data store (macOS).
+        // Method 1: Tauri's native cookies() API (includes HttpOnly cookies).
+        // Works on all platforms; dispatches to the main thread under the hood.
+        if let Some(window) = app.get_webview_window(label) {
+            match window.cookies() {
+                Ok(cookies) if !cookies.is_empty() => {
+                    let cookie_str = cookies
+                        .iter()
+                        .map(|c| format!("{}={}", c.name(), c.value()))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    if !cookie_str.is_empty() {
+                        tracing::info!(
+                            target: "erolib::cookies",
+                            service = label,
+                            len = cookie_str.len(),
+                            "captured cookies via native cookies() API"
+                        );
+                        return Some(cookie_str);
+                    }
+                }
+                Ok(_) => {
+                    tracing::debug!(target: "erolib::cookies", "native cookies() returned empty");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "erolib::cookies",
+                        %e,
+                        "native cookies() API failed; falling back"
+                    );
+                }
+            }
+        }
+
+        // Method 2: the login window's own WKWebView data store (macOS).
         if let Some(window) = app.get_webview_window(label) {
             if let Some(wkptr) = get_wkwebview_ptr(&window) {
                 let addr = wkptr as usize;
@@ -670,13 +731,13 @@ pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<Strin
         }
     }
 
-    // Method 2: shared data stores (macOS).
+    // Method 3: shared data stores (macOS).
     #[cfg(target_os = "macos")]
     if let Some(c) = native::capture() {
         return Some(c);
     }
 
-    // Method 2b: Windows WebView2 cookie SQLite.
+    // Method 4: Windows WebView2 cookie SQLite (3rolib HttpOnly path).
     #[cfg(target_os = "windows")]
     {
         if let Ok(root) = app.path().app_local_data_dir() {
@@ -701,14 +762,20 @@ pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<Strin
     }
 
 
-    // Method 3: JS eval fallback (non-HttpOnly cookies — both services).
+    // Method 5: JS eval fallback (non-HttpOnly cookies — both services).
     for &adapter in ALL_ADAPTERS {
         let label = adapter.window_label();
         if let Some(window) = app.get_webview_window(label) {
             let _ = inject_cookie_redirect(&window);
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::thread::sleep(std::time::Duration::from_millis(500));
             if let Some(c) = extract_cookie_from_url(&window) {
                 if !c.is_empty() {
+                    tracing::info!(
+                        target: "erolib::cookies",
+                        len = c.len(),
+                        platform = if cfg!(target_os = "windows") { "windows" } else { "other" },
+                        "captured cookies via JS eval"
+                    );
                     return Some(c);
                 }
             }
@@ -749,6 +816,7 @@ fn get_wkwebview_ptr(window: &tauri::WebviewWindow) -> Option<*mut std::ffi::c_v
             }
             #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             {
+                let _ = &_webview;
                 let _ = tx.send(None);
             }
         })
