@@ -1,6 +1,5 @@
-import { useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { MdiIcon } from './MdiIcon';
-import { useDebouncedModel } from '@/hooks/useDebouncedModel';
 import { mdiMagnify, mdiClose } from '@mdi/js';
 
 interface SearchBoxProps {
@@ -20,21 +19,46 @@ export function SearchBox({
   onChange,
   onCommit,
 }: SearchBoxProps) {
-  const { value: localValue, onInput, clear } = useDebouncedModel(
-    value,
-    onCommit,
-    debounce,
-  );
+  const [localValue, setLocalValue] = useState(value);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onChangeRef = useRef(onChange);
+  const onCommitRef = useRef(onCommit);
+  onChangeRef.current = onChange;
+  onCommitRef.current = onCommit;
 
-  // Sync local value to parent on each keystroke
+  // Sync external value changes (but NOT from our own onChange calls)
+  const externalRef = useRef(value);
   useEffect(() => {
-    onChange(localValue);
-  }, [localValue, onChange]);
+    if (value !== externalRef.current) {
+      externalRef.current = value;
+      setLocalValue(value);
+    }
+  }, [value]);
 
-  function handleClear() {
-    onChange('');
-    clear();
-  }
+  const armDebounce = useCallback((v: string) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      onCommitRef.current(v);
+    }, debounce);
+  }, [debounce]);
+
+  const handleInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    setLocalValue(v);
+    onChangeRef.current(v);
+    armDebounce(v);
+  }, [armDebounce]);
+
+  const handleClear = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setLocalValue('');
+    onChangeRef.current('');
+    onCommitRef.current('');
+  }, []);
+
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, []);
 
   return (
     <div className="search-box">
@@ -44,14 +68,10 @@ export function SearchBox({
         type="search"
         value={localValue}
         placeholder={placeholder}
-        onChange={onInput}
+        onChange={handleInput}
       />
       {localValue && (
-        <button
-          className="search-clear"
-          aria-label={clearLabel}
-          onClick={handleClear}
-        >
+        <button className="search-clear" aria-label={clearLabel} onClick={handleClear}>
           <MdiIcon path={mdiClose} size={16} />
         </button>
       )}
