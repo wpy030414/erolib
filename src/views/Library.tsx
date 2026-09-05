@@ -14,6 +14,8 @@ import { SearchBox } from '@/components/SearchBox';
 import { FabButton } from '@/components/FabButton';
 import { lazy, Suspense } from 'react';
 import { mdiFolderOpen, mdiPlaylistPlay } from '@mdi/js';
+import { BookMetaDialog, type BookMetaDialogHandle } from '@/components/BookMetaDialog';
+import { BookExportDialog, type BookExportDialogHandle } from '@/components/BookExportDialog';
 import type { Book } from '@/types';
 
 const BookCollectionPicker = lazy(() => import('@/components/BookCollectionPicker'));
@@ -29,6 +31,8 @@ export default function Library() {
   const collectionsStore = useCollectionsStore();
   const toast = useToastStore();
   const { menuOpen, pickerBookId, openMenu, openCollectionPicker, cleanupBook, clearAll } = useBookMenu();
+  const metaDialogRef = useRef<BookMetaDialogHandle>(null);
+  const exportDialogRef = useRef<BookExportDialogHandle>(null);
   const [coverMap, setCoverMap] = useState<Record<string, string | null>>({});
   const [showCollectionDialog, setShowCollectionDialog] = useState(false);
   const sentinelEl = useRef<HTMLDivElement>(null);
@@ -123,6 +127,8 @@ export default function Library() {
       <FabButton icon={mdiPlaylistPlay} ariaLabel={t('lib.collections.manage')} onClick={() => setShowCollectionDialog(true)} />
       {showCollectionDialog && <Suspense><CollectionDialog onClose={() => setShowCollectionDialog(false)} /></Suspense>}
       {pickerBookId && <Suspense><BookCollectionPicker bookId={pickerBookId} onClose={() => openCollectionPicker('')} /></Suspense>}
+      <BookMetaDialog ref={metaDialogRef} />
+      <BookExportDialog ref={exportDialogRef} />
     </div>
   );
 }

@@ -8,15 +8,14 @@ import { useBookMenu } from '@/hooks/useBookMenu';
 import { MdiIcon } from '@/components/MdiIcon';
 import { SourceCard } from '@/components/SourceCard';
 import { WallCover } from '@/components/WallCover';
-import { lazy, Suspense } from 'react';
 import {
   mdiContentSave, mdiDelete, mdiInformationOutline, mdiPlaylistPlus,
 } from '@mdi/js';
 import type { Book } from '@/types';
 
-const BookCollectionPicker = lazy(() => import('@/components/BookCollectionPicker'));
-const BookMetaDialog = lazy(() => import('@/components/BookMetaDialog'));
-const BookExportDialog = lazy(() => import('@/components/BookExportDialog'));
+import { BookCollectionPicker } from '@/components/BookCollectionPicker';
+import { BookMetaDialog, type BookMetaDialogHandle } from '@/components/BookMetaDialog';
+import { BookExportDialog, type BookExportDialogHandle } from '@/components/BookExportDialog';
 
 const WALL_SLOTS = 21;
 
@@ -148,7 +147,9 @@ export default function Home() {
           </div>
         ) : <div className="text-body-2 text-medium-emphasis home-empty" style={{ padding: '8px 0' }}>{t('home.noData')}</div>}
       </section>
-      {pickerBookId && <Suspense><BookCollectionPicker bookId={pickerBookId} onClose={() => openCollectionPicker('')} /></Suspense>}
+      {pickerBookId && <BookCollectionPicker bookId={pickerBookId} onClose={() => openCollectionPicker('')} />}
+      <BookMetaDialog ref={metaDialogRef} />
+      <BookExportDialog ref={exportDialogRef} />
     </div>
   );
 }
