@@ -73,12 +73,14 @@ fn main() {
             // restarts. A captured login is restored on launch and re-written on
             // every set; only an explicit re-login (clear + new capture) changes
             // credentials.
-            let pixiv_session_path = storage_dir.join("pixiv_session.json");
+            let pixiv_session_path = storage_dir
+                .join(crate::commands::cookies::adapter::PIXIV.session_file);
             app.manage(Arc::new(commands::pixiv::PixivSession::with_persist(
                 pixiv_session_path,
             )));
             app.manage(Arc::new(commands::ehentai::EhentaiSession::with_persist(
-                storage_dir.join("ehentai_session.json"),
+                storage_dir
+                    .join(crate::commands::cookies::adapter::EHENTAI.session_file),
             )));
             // Task manager — must be in an Arc so init_self_ref works.
             let task_manager = Arc::new(

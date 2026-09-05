@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::Emitter;
-use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WindowEvent};
+use tauri::{AppHandle, Manager, State, Url, WindowEvent};
 
+use crate::commands::cookies::adapter;
 use crate::commands::cookies::{capture_all_cookies, has_pixiv_session};
 use crate::commands::pixiv::{PixivLogin, PixivSession};
 use crate::services::pixiv::PixivClient;
@@ -33,27 +34,9 @@ pub async fn pixiv_open_login_window(
     app_handle: AppHandle,
     session: State<'_, Arc<PixivSession>>,
 ) -> Result<(), String> {
-    let login_url: Url = "https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F"
-        .parse()
-        .map_err(|e| format!("bad login url: {e}"))?;
-
-    let window = tauri::WebviewWindowBuilder::new(
-        &app_handle,
-        "pixiv-login",
-        WebviewUrl::External(login_url),
-    )
-    .title("Login to Pixiv")
-    .inner_size(520.0, 760.0)
-    .center()
-    .resizable(true)
-    // Disable spell-check/autocorrect on every input. On macOS 26 WKWebView's
-    // auto-correction panel (NSCorrectionPanel) is shown as a sheet child
-    // window and hits an NSRemoteView assertion → crash the moment the user
-    // types in a field. With spellcheck off WebCore never calls
-    // showCorrectionPanel, sidestepping the bug.
-    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
-    .build()
-    .map_err(|e| format!("open login window: {e}"))?;
+    let window = adapter::PIXIV
+        .open_login_window(&app_handle)
+        .map_err(|e| format!("open pixiv login window: {e}"))?;
 
     let app_for_poll = app_handle.clone();
     let session_for_poll = session.inner().clone();
@@ -85,20 +68,21 @@ pub async fn pixiv_open_login_window(
                 Ok(u) => u,
                 Err(_) => continue,
             };
-            let host = url.host_str().unwrap_or("");
-            if host != "www.pixiv.net" {
+            // OAuth return_to frequently lands back on accounts.pixiv.net
+            // (post-login guard / OIDC prompt=none) before the redirect to
+            // www.pixiv.net. Accept both hosts; the only meaningful gate is
+            // the /login literal path. (The old `path.contains("accounts
+            // .pixiv.net")` clause was dead — paths never carry host names.)
+            if !adapter::PIXIV.is_post_login(&url) {
                 continue;
             }
             let path = url.path();
-            if path.contains("/login") || path.contains("accounts.pixiv.net") {
-                continue;
-            }
 
             // Capture cookies directly from the webview store (HttpOnly
             // PHPSESSID included). Retry each tick until the session lands.
             let app_clone = app_for_poll.clone();
-            let cap = tauri::async_runtime::spawn_blocking(move || {
-                capture_all_cookies(&app_clone)
+            let cap = tauri::async_runtime::spawn(async move {
+                capture_all_cookies(&app_clone).await
             })
             .await
             .ok()
@@ -184,7 +168,7 @@ async fn try_capture_fallback(
 ) -> Option<PixivLoginResult> {
     let app_clone = app.clone();
     let cookie =
-        tauri::async_runtime::spawn_blocking(move || capture_all_cookies(&app_clone))
+        tauri::async_runtime::spawn(async move { capture_all_cookies(&app_clone).await })
             .await
             .ok()??;
     if !has_pixiv_session(&cookie) {

@@ -746,33 +746,7 @@ impl PixivClient {
     }
 
     pub async fn fetch_current_user_id(cookie_str: &str) -> Result<String> {
-        if let Some(id) = Self::user_id_from_phpsessid(cookie_str) {
-            return Ok(id);
-        }
-        let no_redirect = Client::builder()
-            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("build reqwest client")?;
-        let resp = no_redirect
-            .get(format!("{}/setting_user.php", PIXIV_BASE))
-            .header("Cookie", cookie_str.trim())
-            .send()
-            .await
-            .context("request setting_user.php")?;
-        let location = resp
-            .headers()
-            .get("location")
-            .or_else(|| resp.headers().get("Location"))
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        if let Some(id) = user_id_from_setting_location(location) {
-            Ok(id)
-        } else {
-            Err(anyhow::anyhow!(
-                "could not determine user id from redirect: {location:?}"
-            ))
-        }
+        fetch_current_user_id_with(cookie_str, &RealReqwest).await
     }
     /// exposes the full id set via /profile/all with no timestamps, so we sort
     /// by id descending (ids are monotonic, so this approximates newest-first)
@@ -1239,6 +1213,64 @@ pub enum TagsMode {
     LocalOnly,
 }
 
+/// Fetch the `Location` header Pixiv sends in response to `setting_user.php`.
+/// Only that header is part of the contract; returning a plain `Option<String>`
+/// keeps the trait small and lets tests stub it without constructing a real
+/// `reqwest::Response`. Ponytail: one trait, two impls, no mock framework.
+trait HttpFetcher {
+    async fn get_location(&self, url: &str, cookie: &str) -> Result<Option<String>>;
+}
+
+/// Production fetcher: builds a no-redirect reqwest client per call (the
+/// redirect policy is set once at build time, so we can't reuse a shared
+/// client for both follow-redirect and no-redirect calls).
+struct RealReqwest;
+
+impl HttpFetcher for RealReqwest {
+    async fn get_location(&self, url: &str, cookie: &str) -> Result<Option<String>> {
+        let no_redirect = Client::builder()
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("build reqwest client")?;
+        let resp = no_redirect
+            .get(url)
+            .header("Cookie", cookie.trim())
+            .send()
+            .await
+            .context("request setting_user.php")?;
+        Ok(resp
+            .headers()
+            .get("location")
+            .or_else(|| resp.headers().get("Location"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()))
+    }
+}
+
+/// Inner, injectable variant — `fetch_current_user_id` is just this with
+/// `RealReqwest`. Tests pass a `StubFetcher` to cover the redirect-scrape
+/// branches without touching the network.
+async fn fetch_current_user_id_with<F: HttpFetcher>(
+    cookie_str: &str,
+    fetcher: &F,
+) -> Result<String> {
+    if let Some(id) = PixivClient::user_id_from_phpsessid(cookie_str) {
+        return Ok(id);
+    }
+    let location = fetcher
+        .get_location(&format!("{}/setting_user.php", PIXIV_BASE), cookie_str)
+        .await?
+        .unwrap_or_default();
+    if let Some(id) = user_id_from_setting_location(&location) {
+        Ok(id)
+    } else {
+        Err(anyhow::anyhow!(
+            "could not determine user id from redirect: {location:?}"
+        ))
+    }
+}
+
 /// Parse a Pixiv numeric user id out of a `/setting_user.php` redirect
 /// `Location` header, e.g. `/users/12345678/setting` (relative) or the full
 /// URL `https://www.pixiv.net/users/12345678/setting` → `Some("12345678")`.
@@ -1300,4 +1332,141 @@ pub async fn find_existing_by_source(
         page_count,
         title,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// BDD tests — mirror scenarios in tests/bdd/features/pixiv_login.feature
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod bdd_pixiv {
+    //! Pure-logic tests for the cookie → user_id path. Each test corresponds
+    //! 1:1 to a scenario in `tests/bdd/features/pixiv_login.feature`. Failures
+    //! in either side should point to the same root cause.
+
+    use super::PixivClient;
+
+    /// Run `PixivClient::fetch_current_user_id` against a cookie. The
+    /// PHPSESSID inline-parse branch returns synchronously without I/O; the
+    /// fallback path requires network so it'll return Err in tests, which we
+    /// normalize to `None` for the assertions below.
+    fn extract(cookie: &str) -> Option<String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        match rt.block_on(PixivClient::fetch_current_user_id(cookie)) {
+            Ok(id) => Some(id),
+            Err(_) => None,
+        }
+    }
+
+    #[test]
+    fn phpsessid_extracts_user_id() {
+        // Scenario: A captured cookie string with PHPSESSID parses to a user id
+        let cookie = "PHPSESSID=12345_abc; yuid_b=foo; p_ab_id=bar";
+        assert_eq!(extract(cookie).as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn cookie_without_phpsessid_returns_none() {
+        // Scenario: A cookie without PHPSESSID cannot authenticate
+        let cookie = "yuid_b=foo; p_ab_id=bar; category_mask=1";
+        assert!(extract(cookie).is_none());
+    }
+
+    #[test]
+    fn phpsessid_non_numeric_returns_none() {
+        // Scenario: PHPSESSID with non-numeric user id is rejected
+        let cookie = "PHPSESSID=notdigits_secret; yuid_b=foo";
+        assert!(extract(cookie).is_none());
+    }
+
+    #[test]
+    fn phpsessid_empty_prefix_returns_none() {
+        // Scenario: PHPSESSID where the prefix is empty is rejected
+        let cookie = "PHPSESSID=_onlysecret; yuid_b=foo";
+        assert!(extract(cookie).is_none());
+    }
+
+    // --- fallback path: HTTP redirect scrape (no PHPSESSID in cookie) ------
+
+    use super::{fetch_current_user_id_with, HttpFetcher};
+
+    /// Stub fetcher that returns a synthetic Location header. We don't care
+    /// about the response body or status code — `fetch_current_user_id_with`
+    /// only reads the Location string.
+    struct StubFetcher {
+        location: Option<&'static str>,
+    }
+
+    impl StubFetcher {
+        fn ok_no_location() -> Self {
+            Self { location: None }
+        }
+        fn moved(location: &'static str) -> Self {
+            Self { location: Some(location) }
+        }
+        fn moved_empty() -> Self {
+            Self { location: Some("") }
+        }
+    }
+
+    impl HttpFetcher for StubFetcher {
+        async fn get_location(&self, _url: &str, _cookie: &str) -> anyhow::Result<Option<String>> {
+            Ok(self.location.map(|s| s.to_string()))
+        }
+    }
+
+    /// No-PHPSESSID cookie so the test exercises the fallback branch.
+    fn no_phpsessid() -> &'static str {
+        "yuid_b=foo; p_ab_id=bar; category_mask=1"
+    }
+
+    fn run(fetcher: StubFetcher) -> anyhow::Result<String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(fetch_current_user_id_with(no_phpsessid(), &fetcher))
+    }
+
+    #[test]
+    fn fallback_extracts_user_id_from_302() {
+        // Scenario: 302 redirect to /users/42/setting yields user id "42"
+        let result = run(StubFetcher::moved("/users/42/setting"));
+        assert_eq!(result.unwrap(), "42");
+    }
+
+    #[test]
+    fn fallback_returns_err_on_200_no_location() {
+        // Scenario: A 200 with no Location header is not a redirect and cannot
+        // produce a user id.
+        let result = run(StubFetcher::ok_no_location());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fallback_returns_err_on_empty_location() {
+        // Scenario: A 302 with an empty Location header is rejected.
+        let result = run(StubFetcher::moved_empty());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn setting_location_parses_path_with_query() {
+        // Scenario: A full URL with a query string still yields the user id.
+        let loc = "https://x/users/99/setting?lang=ja";
+        assert_eq!(
+            super::user_id_from_setting_location(loc).as_deref(),
+            Some("99")
+        );
+    }
+
+    #[test]
+    fn setting_location_rejects_non_users() {
+        // Scenario: A Location pointing somewhere other than /users/<id> is
+        // rejected.
+        assert!(super::user_id_from_setting_location("/something/else").is_none());
+    }
 }

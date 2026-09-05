@@ -632,3 +632,49 @@ async fn spawn_downloader(
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// BDD tests — mirror scenarios in tests/bdd/features/pixiv_login.feature
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod bdd_pixiv_session {
+    //! Persisted Pixiv session round-trip scenarios. Each test corresponds
+    //! 1:1 to a scenario in `pixiv_login.feature`.
+
+    use super::PixivSession;
+
+    #[test]
+    fn captured_login_writes_session_file() {
+        // Scenario: A captured login is written to pixiv_session.json
+        let tmp = std::env::temp_dir().join(format!("erolib-bdd-session-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("pixiv_session.json");
+
+        let sess = PixivSession::with_persist(path.clone());
+        sess.set_login(super::PixivLogin {
+            cookie: "PHPSESSID=77777_aaa; yuid_b=foo".into(),
+            user_id: "77777".into(),
+            user_name: None,
+        });
+
+        let raw = std::fs::read(&path).expect("session file written");
+        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(v["cookie"], "PHPSESSID=77777_aaa; yuid_b=foo");
+        assert_eq!(v["user_id"], "77777");
+    }
+
+    #[test]
+    fn corrupted_session_file_is_ignored_at_startup() {
+        // Scenario: A corrupted pixiv_session.json is ignored at startup
+        let tmp = std::env::temp_dir().join(format!("erolib-bdd-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("pixiv_session.json");
+        std::fs::write(&path, b"{not valid json").unwrap();
+
+        let sess = PixivSession::with_persist(path);
+        assert!(sess.get_login().is_none(), "corrupt file must not surface as login");
+    }
+}
