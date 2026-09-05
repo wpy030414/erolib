@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { create } from 'zustand';
 
 export interface ToastMessage {
   id: number;
@@ -6,24 +6,20 @@ export interface ToastMessage {
   message: string;
 }
 
+interface ToastState {
+  toasts: ToastMessage[];
+  addToast: (kind: ToastMessage['kind'], message: string) => void;
+  dismiss: (id: number) => void;
+}
+
 let nextId = 1;
 
-const toasts = ref<ToastMessage[]>([]);
-
-export function useToastStore() {
-  function addToast(kind: ToastMessage['kind'], message: string) {
+export const useToastStore = create<ToastState>((set) => ({
+  toasts: [],
+  addToast: (kind, message) => {
     const id = nextId++;
-    toasts.value.push({ id, kind, message });
-    setTimeout(() => {
-      const idx = toasts.value.findIndex((t) => t.id === id);
-      if (idx !== -1) toasts.value.splice(idx, 1);
-    }, 4000);
-  }
-
-  function dismiss(id: number) {
-    const idx = toasts.value.findIndex((t) => t.id === id);
-    if (idx !== -1) toasts.value.splice(idx, 1);
-  }
-
-  return { toasts, addToast, dismiss };
-}
+    set((s) => ({ toasts: [...s.toasts, { id, kind, message }] }));
+    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 4000);
+  },
+  dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+}));

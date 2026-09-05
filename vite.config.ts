@@ -1,18 +1,10 @@
 import { defineConfig } from 'vite';
 import path from 'path';
-import vue from '@vitejs/plugin-vue';
+import react from '@vitejs/plugin-react';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [
-    vue({
-      template: {
-        compilerOptions: {
-          isCustomElement: (tag) => tag.startsWith('md-'),
-        },
-      },
-    }),
-  ],
+  plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -39,10 +31,10 @@ export default defineConfig({
       output: {
         manualChunks(id: string) {
           if (id.includes('node_modules')) {
-            if (id.includes('@material/web')) return 'vendor-material';
+            if (id.includes('@m3e/react')) return 'vendor-m3e';
             if (id.includes('@mdi/js')) return 'vendor-mdi';
             if (id.includes('@material/material-color-utilities')) return 'vendor-color';
-            if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router')) return 'vendor-vue';
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router') || id.includes('zustand')) return 'vendor-react';
             if (id.includes('idb')) return 'vendor-idb';
             if (id.includes('@tauri-apps')) return 'vendor-tauri';
           }

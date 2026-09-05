@@ -1,126 +1,101 @@
-import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { create } from 'zustand';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getThumb, setThumb } from '@/services/thumb-cache';
 import { api } from '@/services/api';
-import { useBrowseFeed } from '@/composables/useBrowseFeed';
 import type { GalleryListItem, EhentaiBrowseStatus } from '@/types';
 
-const EX_KEY = 'erolib.ehentai.ex';
-/** Default category path segment: Doujinshi. */
-const DEFAULT_CATEGORY = 'doujinshi';
-/** A short results page means we've reached the tail of the listing. */
+const BROWSE_PAGE_SIZE = 48;
 const PAGE_HINT = 25;
+const EX_KEY = 'erolib.ehentai.ex';
 
-function readEx(): boolean {
-  try {
-    return localStorage.getItem(EX_KEY) === '1';
-  } catch {
-    return false;
-  }
+interface EhentaiBrowseState {
+  feed: { items: GalleryListItem[]; loading: boolean; end: boolean };
+  coverMap: Record<string, string | null>;
+  statusMap: Record<string, EhentaiBrowseStatus>;
+  category: string | null;
+  keyword: string;
+  ex: boolean;
+  galleryUrlOf: (item: GalleryListItem) => string;
+  loadMore: () => Promise<void>;
+  reload: () => Promise<void>;
+  resetAll: () => void;
+  setStatus: (galleryUrl: string, status: EhentaiBrowseStatus) => void;
+  setEx: (v: boolean) => void;
+  selectCategory: (path: string | null) => void;
 }
 
-/**
- * EHentai browse store — one `useBrowseFeed` instance (search has a single
- * result list, paginated by a gid cursor). Source-specific bits (the gallery
- * URL builder that honours EX mode, category/keyword/EX preferences) live
- * here; pagination + covers + status + the progress listener come from the
- * composable. */
-export const useEhentaiBrowseStore = defineStore('ehentai-browse', () => {
-  /** Pagination cursor — gid of the last fetched gallery (null = first page).
-   *  e-hentai paginates with `?next={gid}`, not `?page=N` (page 0/1/2 return
-   *  identical results). */
-  /** Category path segment (e.g. "doujinshi"); null = all categories. */
-  const category = ref<string | null>(DEFAULT_CATEGORY);
-  const keyword = ref('');
-  /** EX mode (exhentai.org) — persisted, toggled from the view header. */
-  const ex = ref(readEx());
+let cursor: string | null = null;
+let sourceEnded = false;
+let loading = false;
+let seenKeys = new Set<string>();
+let buffer: GalleryListItem[] = [];
+let coverLoading = new Set<string>();
+let inFlight = 0;
+const gateQueue: Array<() => void> = [];
+let progressUnlisten: UnlistenFn | null = null;
+let deletedUnlisten: UnlistenFn | null = null;
 
-  /** Canonical gallery URL for an item, honouring the current EX mode. This is
-   *  the stable key used across statusMap and the task payload. (coverMap is
-   *  keyed by gid instead — see coverKeyOf — so covers survive an EX toggle.) */
-  function galleryUrlOf(item: GalleryListItem): string {
-    const host = ex.value ? 'exhentai' : 'e-hentai';
-    return `https://${host}.org/g/${item.gid}/${item.token}/`;
-  }
+function gateEnter(): Promise<void> {
+  if (inFlight < 6) { inFlight++; return Promise.resolve(); }
+  return new Promise((r) => { gateQueue.push(() => { inFlight++; r(); }); });
+}
+function gateLeave() { inFlight--; const n = gateQueue.shift(); if (n) n(); }
 
-  const inst = useBrowseFeed<GalleryListItem, string, EhentaiBrowseStatus, string | null>({
-    keyOf: galleryUrlOf,
-    statusKeyOf: (s) => s.galleryUrl,
-    // gid — stable across EX toggles, matches the IndexedDB key, shared with
-    // the library (source_post_id = gid).
-    coverKeyOf: (item) => item.gid,
-    coverUrlOf: (item) => item.thumbUrl,
-    fetchStatus: (urls) => api.ehentaiBrowseStatus(urls),
-    proxyCover: (url) => api.ehentaiProxyThumb(url),
-    initialCursor: null,
-    fetchPage: async (cursor) => {
-      const list = await api.ehentaiSearch(
-        keyword.value || null,
-        category.value,
-        cursor,
-        ex.value,
-      );
-      // e-hentai's next cursor is the gid of the last gallery on this page.
-      return {
-        items: list,
-        nextCursor: list.length ? list[list.length - 1].gid : null,
-        end: list.length < PAGE_HINT,
-      };
-    },
-  });
+async function loadCover(gid: string, thumbUrl: string | null, coverMap: Record<string, string | null>) {
+  if (coverMap[gid] !== undefined) return;
+  if (!thumbUrl) { coverMap[gid] = null; return; }
+  coverLoading.add(gid); coverMap[gid] = null;
+  try {
+    await gateEnter();
+    let blob = await getThumb(gid);
+    if (!blob) { const bytes = await api.ehentaiProxyThumb(thumbUrl); blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }); void setThumb(gid, blob); }
+    if (coverLoading.has(gid)) { const old = coverMap[gid]; if (old) URL.revokeObjectURL(old); coverMap[gid] = URL.createObjectURL(blob); coverLoading.delete(gid); }
+  } catch { coverMap[gid] = null; coverLoading.delete(gid); }
+  finally { gateLeave(); }
+}
 
-  function loadMore() {
-    return inst.loadMore();
-  }
-
-  /** Drop everything (items/covers-status) and fetch fresh. Used on search,
-   *  category, and EX-mode changes. Clears statusMap wholesale because an EX
-   *  toggle re-keys every gallery URL (stale entries would otherwise leak). */
-  async function reload() {
-    inst.clearStatusMap();
-    await inst.reload();
-  }
-
-  function setStatus(galleryUrl: string, status: EhentaiBrowseStatus) {
-    return inst.setStatus(galleryUrl, status);
-  }
-
-  /** Toggle EX mode and persist. The caller follows up with reload(). */
-  function setEx(v: boolean) {
-    ex.value = v;
+export const useEhentaiBrowseStore = create<EhentaiBrowseState>((set, get) => ({
+  feed: { items: [], loading: false, end: false }, coverMap: {}, statusMap: {}, category: 'doujinshi', keyword: '',
+  ex: (() => { try { return window.localStorage.getItem(EX_KEY) === '1'; } catch { return false; } })(),
+  galleryUrlOf: (item) => { const host = get().ex ? 'exhentai.org' : 'e-hentai.org'; return `https://${host}/g/${item.gid}/${item.token}/`; },
+  loadMore: async () => {
+    if (loading || sourceEnded) return;
+    loading = true; set((s) => ({ feed: { ...s.feed, loading: true } }));
     try {
-      localStorage.setItem(EX_KEY, v ? '1' : '0');
-    } catch {
-      // ignore storage errors
-    }
-  }
+      while (buffer.length < BROWSE_PAGE_SIZE && !sourceEnded) {
+        const { items, nextCursor, end } = await api.ehentaiSearch(get().keyword, get().category ?? undefined, cursor);
+        for (const item of items) { const key = get().galleryUrlOf(item); if (!seenKeys.has(key)) { seenKeys.add(key); buffer.push(item); } }
+        cursor = nextCursor;
+        if (end || items.length < PAGE_HINT) { sourceEnded = true; break; }
+      }
+      const pageItems = buffer.splice(0, BROWSE_PAGE_SIZE);
+      if (pageItems.length > 0) {
+        set((s) => { const newItems = [...s.feed.items, ...pageItems]; for (const item of pageItems) void loadCover(item.gid, item.thumbUrl, s.coverMap); return { feed: { items: newItems, loading: false, end: sourceEnded && buffer.length === 0 } }; });
+        const urls = pageItems.map((i) => get().galleryUrlOf(i));
+        void api.ehentaiBrowseStatus(urls).then((statuses) => { set((s) => { const sm = { ...s.statusMap }; for (const st of statuses) sm[st.galleryUrl] = st; return { statusMap: sm }; }); }).catch(() => {});
+      } else { set((s) => ({ feed: { ...s.feed, loading: false, end: true } })); }
+    } catch { set((s) => ({ feed: { ...s.feed, loading: false } })); }
+    finally { loading = false; }
+  },
+  reload: async () => { cursor = null; sourceEnded = false; seenKeys = new Set(); buffer = []; set((s) => ({ feed: { items: [], loading: false, end: false }, statusMap: {} })); await get().loadMore(); },
+  resetAll: () => { cursor = null; sourceEnded = false; seenKeys = new Set(); buffer = []; set((s) => ({ feed: { items: [], loading: false, end: false }, statusMap: {} })); },
+  setStatus: (galleryUrl, status) => { set((s) => ({ statusMap: { ...s.statusMap, [galleryUrl]: status } })); },
+  setEx: (v) => { try { window.localStorage.setItem(EX_KEY, v ? '1' : ''); } catch { /* ignore */ } set({ ex: v }); void get().reload(); },
+  selectCategory: (path) => { set({ category: path }); void get().reload(); },
+}));
 
-  /** Single-select a category path (null = all categories); reloads. */
-  function selectCategory(path: string | null) {
-    category.value = path;
-    void reload();
-  }
-
-  /** Log-out: drop items + browse status + pagination cursor (covers stay
-   *  cached in IndexedDB). Keyword/category/EX preference are kept so the next
-   *  login resumes with the same query. */
-  function resetAll() {
-    inst.resetFeed();
-    inst.clearStatusMap();
-  }
-
-  return {
-    feed: inst.feed,
-    coverMap: inst.coverMap,
-    statusMap: inst.statusMap,
-    category,
-    keyword,
-    ex,
-    galleryUrlOf,
-    loadMore,
-    reload,
-    setStatus,
-    setEx,
-    selectCategory,
-    resetAll,
-  };
-});
+void (async () => {
+  progressUnlisten = await listen<{ task_id: string; status: string; progress_current: number; progress_total: number }>('task://progress', (event) => {
+    const p = event.payload; const store = useEhentaiBrowseStore.getState();
+    let found: string | null = null;
+    for (const [key, s] of Object.entries(store.statusMap)) { if (s.taskId === p.task_id) { found = key; break; } }
+    if (found) { useEhentaiBrowseStore.setState((s) => ({ statusMap: { ...s.statusMap, [found!]: { ...s.statusMap[found!], taskStatus: p.status, progressCurrent: p.progress_current, progressTotal: p.progress_total } } })); }
+  });
+  deletedUnlisten = await listen<{ book_id: string }>('book://deleted', (event) => {
+    useEhentaiBrowseStore.setState((s) => {
+      const sm = { ...s.statusMap }; let changed = false;
+      for (const [key, st] of Object.entries(sm)) { if (st.localBookId === event.payload.book_id) { sm[key] = { ...st, localBookId: undefined }; changed = true; } }
+      return changed ? { statusMap: sm } : {};
+    });
+  });
+})();

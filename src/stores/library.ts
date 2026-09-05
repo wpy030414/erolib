@@ -1,179 +1,54 @@
-import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { create } from 'zustand';
 import { api } from '@/services/api';
-import type { Book, SearchQuery, SearchResult, TagCount } from '@/types';
-import { useSettingsStore } from './settings';
+import type { Book, TagCount, SearchQuery } from '@/types';
 
-/** Page size for the library grid's infinite scroll. The backend search clamps
- *  page_size to 1..200 and returns `total`, so the grid can tell when the
- *  current text+tag filter is exhausted. 48 matches the browse feeds' unified
- *  page size (useBrowseFeed) so local + Pixiv + EHentai all grow at the same
- *  cadence. */
 const PAGE_SIZE = 48;
 
-export const useLibraryStore = defineStore('library', () => {
-  const books = ref<Book[]>([]);
-  const isLoading = ref(false);
-  /** Loading a subsequent page (not the first) — drives the bottom "loading
-   *  more" indicator without flashing the empty state. */
-  const isLoadingMore = ref(false);
-  const error = ref<string | null>(null);
-  const query = ref('');
-  /** Tags currently selected in the chip row, by their (translated) display
-   *  `name` — union (OR) filter: any match. Filtering expands each selected
-   *  label to its folded raw spellings (`raw_names`) for the backend. */
-  const selectedTags = ref<string[]>([]);
-  /** Active collection name for filtering (null = "All" = no filter). */
-  const collectionFilter = ref<string | null>(null);
-  /** Tag usage counts that drive the chip row. When a text query is active
-   *  these are tallied only over the text-filtered book set (text dominates
-   *  the chips); otherwise over the full library. Top 30 by count. */
-  const allTags = ref<TagCount[]>([]);
-  /** Whether the initial load has happened. Keeps view-switches from
-   *  resetting the current search / filter state and results. */
-  const initialized = ref(false);
+interface LibraryState {
+  books: Book[]; isLoading: boolean; isLoadingMore: boolean; error: string | null;
+  query: string; selectedTags: string[]; collectionFilter: string | null;
+  allTags: TagCount[]; initialized: boolean; total: number; page: number; hasMore: boolean;
+  ensureLoaded: () => Promise<void>; refresh: () => Promise<void>; applySearch: () => Promise<void>;
+  reload: () => Promise<void>; loadMore: () => Promise<void>; loadTags: (text?: string) => Promise<void>;
+  toggleTag: (name: string) => void; importBook: (filePath: string) => Promise<void>; deleteBook: (id: string) => Promise<void>;
+}
 
-  /** Total matching books for the current text+tag filter (backend search
-   *  `total`), used to gate infinite scroll. */
-  const total = ref(0);
-  const page = ref(1);
-  const hasMore = computed(() => books.value.length < total.value);
+export const useLibraryStore = create<LibraryState>((set, get) => ({
+  books: [], isLoading: false, isLoadingMore: false, error: null,
+  query: '', selectedTags: [], collectionFilter: null, allTags: [], initialized: false, total: 0, page: 0, hasMore: false,
 
-  /** Re-tally tag usage counts. `text` restricts the count to books matching
-   *  that text (text dominates the chips); `collection` further scopes to a
-   *  collection. Capped to 30 by the backend. Silent on failure. */
-  async function loadTags(text?: string) {
+  ensureLoaded: async () => { if (get().initialized) return; await get().applySearch(); set({ initialized: true }); },
+  refresh: async () => { await Promise.all([get().reload(), get().loadTags()]); },
+  applySearch: async () => { await get().loadTags(get().query); const currentTags = get().allTags.map((t) => t.name); const stale = get().selectedTags.filter((t) => !currentTags.includes(t)); if (stale.length > 0) set((s) => ({ selectedTags: s.selectedTags.filter((t) => !stale.includes(t)) })); await get().reload(); },
+  loadTags: async (text) => { try { const tags = await api.getAllTags(text ?? '', get().collectionFilter ?? undefined); set({ allTags: tags }); } catch { /* ignore */ } },
+
+  reload: async () => {
+    set({ isLoading: true, error: null, page: 0 });
     try {
-      const col = collectionFilter.value || undefined;
-      allTags.value = await api.getAllTags(text, col);
-    } catch {
-      // keep the previous list on error
-    }
-  }
+      const { query, selectedTags, collectionFilter } = get();
+      const q: SearchQuery = { text: query || undefined, sort_by: 'date', sort_order: 'desc', page: 1, page_size: PAGE_SIZE };
+      if (collectionFilter) q.collections = [collectionFilter];
+      if (selectedTags.length > 0) q.tags_any = selectedTags;
+      const result = await api.searchBooks(q);
+      set({ books: result.books, total: result.total, page: 1, hasMore: result.books.length < result.total, isLoading: false });
+    } catch (e) { set({ error: String(e), isLoading: false }); }
+  },
 
-  /** Fetch one page of the current text+tag filter. `accumulate` appends
-   *  (infinite scroll) vs replaces (new search / filter change). */
-  async function fetchPage(p: number, accumulate: boolean) {
-    const text = query.value.trim();
-    // Selected chips are keyed by translated label; expand each to its folded
-    // raw spellings so the backend OR-matches every raw form of that concept.
-    const expanded = selectedTags.value.flatMap(
-      (name) => allTags.value.find((t) => t.name === name)?.raw_names ?? [name],
-    );
-    const tagsAny = expanded.length ? [...new Set(expanded)] : undefined;
-    const q: SearchQuery = {
-      text: text || undefined,
-      tags_any: tagsAny,
-      collections: collectionFilter.value ? [collectionFilter.value] : undefined,
-      sort_by: 'date',
-      sort_order: 'desc',
-      page: p,
-      page_size: PAGE_SIZE,
-    };
-    const res: SearchResult = await api.searchBooks(q);
-    books.value = accumulate ? [...books.value, ...res.books] : res.books;
-    total.value = res.total ?? 0;
-    page.value = p;
-  }
-
-  /** (Re)load page 1 — used on init, search, tag toggle, import, delete. */
-  async function reload() {
-    isLoading.value = true;
-    error.value = null;
+  loadMore: async () => {
+    const { hasMore, isLoading, isLoadingMore, page } = get();
+    if (!hasMore || isLoading || isLoadingMore) return;
+    set({ isLoadingMore: true });
     try {
-      await fetchPage(1, false);
-    } catch (e) {
-      error.value = String(e);
-    } finally {
-      isLoading.value = false;
-    }
-  }
+      const { query, selectedTags, collectionFilter } = get();
+      const q: SearchQuery = { text: query || undefined, sort_by: 'date', sort_order: 'desc', page: page + 1, page_size: PAGE_SIZE };
+      if (collectionFilter) q.collections = [collectionFilter];
+      if (selectedTags.length > 0) q.tags_any = selectedTags;
+      const result = await api.searchBooks(q);
+      set((s) => { const newBooks = [...s.books, ...result.books]; return { books: newBooks, page: s.page + 1, hasMore: newBooks.length < result.total, isLoadingMore: false }; });
+    } catch (e) { set({ error: String(e), isLoadingMore: false }); }
+  },
 
-  /** Load the next page, appending to the grid. No-op while busy or when the
-   *  current filter is exhausted. */
-  async function loadMore() {
-    if (isLoading.value || isLoadingMore.value || !hasMore.value) return;
-    isLoadingMore.value = true;
-    try {
-      await fetchPage(page.value + 1, true);
-    } catch (e) {
-      error.value = String(e);
-    } finally {
-      isLoadingMore.value = false;
-    }
-  }
-
-  /** Refresh books and tag counts together (full library, ignoring query). */
-  async function refresh() {
-    await Promise.all([reload(), loadTags()]);
-  }
-
-  /** Load the library once; later calls (e.g. after switching away and back
-   *  to the view) are no-ops, so search / filter state is preserved. */
-  async function ensureLoaded() {
-    if (initialized.value) return;
-    initialized.value = true;
-    await refresh();
-  }
-
-  /** Text changed: re-tally tags under the new text (so the chip counts and
-   *  the chip set reflect the text results), drop any selection whose tag
-   *  vanished from those results, then reload page 1. */
-  async function applySearch() {
-    const text = query.value.trim();
-    await loadTags(text || undefined);
-    if (selectedTags.value.length) {
-      const present = new Set(allTags.value.map((t) => t.name));
-      selectedTags.value = selectedTags.value.filter((n) => present.has(n));
-    }
-    await reload();
-  }
-
-  /** Toggle a tag, then reload page 1. Text is unchanged so tag counts are not
-   *  re-tallied (the OR filter never affects counts). */
-  function toggleTag(name: string) {
-    const i = selectedTags.value.indexOf(name);
-    if (i >= 0) {
-      selectedTags.value.splice(i, 1);
-    } else {
-      selectedTags.value.push(name);
-    }
-    void reload();
-  }
-
-  async function importBook(filePath: string) {
-    await api.importBook(filePath);
-    await applySearch();
-    // Local one-way sync picks up the new book (no-op unless enabled).
-    void useSettingsStore().syncIfEnabled();
-  }
-
-  async function deleteBook(id: string) {
-    await api.deleteBook(id);
-    await applySearch();
-    // Sync is add-only by design: deleting a book does NOT remove its synced
-    // copy from the target directory (user's local files are never deleted).
-  }
-
-  return {
-    books,
-    isLoading,
-    isLoadingMore,
-    error,
-    query,
-    selectedTags,
-    collectionFilter,
-    allTags,
-    total,
-    hasMore,
-    refresh,
-    ensureLoaded,
-    applySearch,
-    reload,
-    loadMore,
-    toggleTag,
-    loadTags,
-    importBook,
-    deleteBook,
-  };
-});
+  toggleTag: (name) => { set((s) => { const idx = s.selectedTags.indexOf(name); return { selectedTags: idx >= 0 ? s.selectedTags.filter((_, i) => i !== idx) : [...s.selectedTags, name] }; }); void get().reload(); },
+  importBook: async (filePath) => { await api.importBook(filePath); await get().applySearch(); },
+  deleteBook: async (id) => { await api.deleteBook(id); await get().applySearch(); },
+}));

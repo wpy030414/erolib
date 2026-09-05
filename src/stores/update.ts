@@ -1,97 +1,52 @@
-import { ref } from 'vue';
-import { defineStore } from 'pinia';
-import { listen } from '@tauri-apps/api/event';
-import { api } from '@/services/api';
-import type { UpdateInfo, UpdateProgress } from '@/services/api';
-import { useToastStore } from './toast';
-import { useI18n } from '@/i18n';
+import { create } from 'zustand';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { api, type UpdateInfo, type UpdateProgress } from '@/services/api';
 
+let progressUnlisten: UnlistenFn | null = null;
 let listenerInit = false;
 
-export const useUpdateStore = defineStore('update', () => {
-  const info = ref<UpdateInfo | null>(null);
-  const checking = ref(false);
-  const downloading = ref(false);
-  const downloadPath = ref<string | null>(null);
-  const progress = ref<UpdateProgress>({ percent: 0, speed: 0, completed: 0, total: 0 });
-  const error = ref<string | null>(null);
-  const toastStore = useToastStore();
-  const { t } = useI18n();
+async function initProgressListener() {
+  if (listenerInit) return;
+  listenerInit = true;
+  progressUnlisten = await listen<UpdateProgress>('update://progress', (event) => {
+    useUpdateStore.setState({ progress: event.payload });
+  });
+}
 
-  function initProgressListener() {
-    if (listenerInit) return;
-    listenerInit = true;
-    listen<UpdateProgress>('update://progress', (event) => {
-      progress.value = event.payload;
-    });
-  }
+interface UpdateState {
+  info: UpdateInfo | null; checking: boolean; downloading: boolean;
+  downloadPath: string | null; progress: UpdateProgress; error: string | null;
+  check: () => Promise<void>; download: () => Promise<void>;
+  install: () => void; quitAndInstall: () => void; clearDownload: () => void;
+}
 
-  async function check() {
-    checking.value = true;
-    error.value = null;
+export const useUpdateStore = create<UpdateState>((set, get) => ({
+  info: null, checking: false, downloading: false, downloadPath: null,
+  progress: { percent: 0, speed: 0, completed: 0, total: 0 }, error: null,
+
+  check: async () => {
+    set({ checking: true, error: null });
+    try { const info = await api.checkUpdate(); set({ info, checking: false }); }
+    catch (e) { set({ error: String(e), checking: false }); }
+  },
+  download: async () => {
+    const { info } = get(); if (!info?.asset) return;
+    await initProgressListener();
+    set({ downloading: true, error: null });
     try {
-      info.value = await api.checkUpdate();
+      const path = await api.downloadUpdate(info.asset.url, info.asset.name);
+      set({ downloadPath: path, downloading: false });
+      const { useToastStore } = await import('./toast');
+      const { t } = await import('@/i18n/index');
+      useToastStore.getState().addToast('success', t('settings.update.downloadComplete'));
     } catch (e) {
-      error.value = typeof e === 'string' ? e : String(e);
-      info.value = null;
-    } finally {
-      checking.value = false;
+      set({ error: String(e), downloading: false });
+      const { useToastStore } = await import('./toast');
+      const { t } = await import('@/i18n/index');
+      useToastStore.getState().addToast('error', t('settings.update.downloadFailed'));
     }
-  }
-
-  async function download() {
-    if (!info.value?.asset) return;
-    initProgressListener();
-
-    downloading.value = true;
-    downloadPath.value = null;
-    progress.value = { percent: 0, speed: 0, completed: 0, total: 0 };
-    error.value = null;
-
-    try {
-      downloadPath.value = await api.downloadUpdate(
-        info.value.asset.url,
-        info.value.asset.name,
-      );
-      toastStore.addToast('success', t('settings.update.downloadComplete'));
-    } catch (e) {
-      error.value = typeof e === 'string' ? e : String(e);
-      toastStore.addToast('error', t('settings.update.downloadFailed', { error: error.value! }));
-    } finally {
-      downloading.value = false;
-    }
-  }
-
-  function install() {
-    if (!downloadPath.value) return;
-    api.installUpdate(downloadPath.value).catch((e) => {
-      toastStore.addToast('error', String(e));
-    });
-  }
-
-  function quitAndInstall() {
-    if (!downloadPath.value) return;
-    api.quitAndInstall(downloadPath.value).catch((e) => {
-      toastStore.addToast('error', String(e));
-    });
-  }
-
-  function clearDownload() {
-    downloadPath.value = null;
-    progress.value = { percent: 0, speed: 0, completed: 0, total: 0 };
-  }
-
-  return {
-    info,
-    checking,
-    downloading,
-    downloadPath,
-    progress,
-    error,
-    check,
-    download,
-    install,
-    quitAndInstall,
-    clearDownload,
-  };
-})
+  },
+  install: () => { const p = get().downloadPath; if (p) void api.installUpdate(p); },
+  quitAndInstall: () => { const p = get().downloadPath; if (p) void api.quitAndInstall(p); },
+  clearDownload: () => set({ downloadPath: null, progress: { percent: 0, speed: 0, completed: 0, total: 0 } }),
+}));

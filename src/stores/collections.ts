@@ -1,130 +1,44 @@
-import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { create } from 'zustand';
 import { api } from '@/services/api';
 import type { Collection } from '@/types';
 
-export const useCollectionsStore = defineStore('collections', () => {
-  const collections = ref<Collection[]>([]);
-  /** null = "All" (the default, non-deletable pseudo-collection). Does NOT
-   *  persist across app restarts — always starts at "All". */
-  const activeCollectionId = ref<string | null>(null);
-  const initialized = ref(false);
+interface CollectionsState {
+  collections: Collection[]; activeCollectionId: string | null; initialized: boolean;
+  activeCollectionName: string; isAllActive: boolean;
+  ensureLoaded: () => Promise<void>; fetchCollections: () => Promise<void>; refresh: () => Promise<void>;
+  reorder: (positions: [string, number][]) => Promise<boolean>;
+  createCollection: (name: string) => Promise<Collection | null>;
+  renameCollection: (id: string, name: string) => Promise<boolean>;
+  deleteCollection: (id: string) => Promise<boolean>;
+  getBookCollections: (bookId: string) => Promise<string[]>;
+  addBookToCollection: (cId: string, bId: string) => Promise<boolean>;
+  removeBookFromCollection: (cId: string, bId: string) => Promise<boolean>;
+  setActiveCollection: (id: string | null) => void;
+}
 
-  const activeCollectionName = computed(() => {
-    if (activeCollectionId.value === null) return '';
-    return collections.value.find((c) => c.id === activeCollectionId.value)?.name ?? '';
-  });
+export const useCollectionsStore = create<CollectionsState>((set, get) => ({
+  collections: [], activeCollectionId: null, initialized: false, activeCollectionName: '', isAllActive: true,
 
-  const isAllActive = computed(() => activeCollectionId.value === null);
+  ensureLoaded: async () => { if (get().initialized) return; await get().fetchCollections(); set({ initialized: true }); },
+  fetchCollections: async () => { try { const cols = await api.listCollections(); set({ collections: cols }); } catch { /* ignore */ } },
+  refresh: async () => { await get().fetchCollections(); },
+  reorder: async (positions) => { try { await api.reorderCollections(positions); return true; } catch { return false; } },
 
-  async function ensureLoaded() {
-    if (initialized.value) return;
-    initialized.value = true;
-    await fetchCollections();
-  }
-
-  async function fetchCollections() {
-    try {
-      collections.value = await api.listCollections();
-    } catch {
-      // keep stale list on error
-    }
-  }
-
-  /** Re-fetch collections from the backend (e.g. after a book is added). */
-  async function refresh() {
-    await fetchCollections();
-  }
-
-  async function reorder(positions: [string, number][]): Promise<boolean> {
-    try {
-      await api.reorderCollections(positions);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function createCollection(name: string): Promise<Collection | null> {
-    try {
-      const c = await api.createCollection(name.trim());
-      collections.value.push(c);
-      return c;
-    } catch {
-      return null;
-    }
-  }
-
-  async function renameCollection(id: string, name: string): Promise<boolean> {
-    try {
-      await api.renameCollection(id, name.trim());
-      const c = collections.value.find((x) => x.id === id);
-      if (c) c.name = name.trim();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function deleteCollection(id: string): Promise<boolean> {
+  createCollection: async (name) => {
+    try { const col = await api.createCollection(name); set((s) => ({ collections: [...s.collections, col] })); return col; } catch { return null; }
+  },
+  renameCollection: async (id, name) => {
+    try { await api.renameCollection(id, name); set((s) => ({ collections: s.collections.map((c) => c.id === id ? { ...c, name } : c) })); return true; } catch { return false; }
+  },
+  deleteCollection: async (id) => {
     try {
       await api.deleteCollection(id);
-      collections.value = collections.value.filter((c) => c.id !== id);
-      if (activeCollectionId.value === id) {
-        activeCollectionId.value = null;
-      }
+      set((s) => ({ collections: s.collections.filter((c) => c.id !== id), activeCollectionId: s.activeCollectionId === id ? null : s.activeCollectionId, activeCollectionName: s.activeCollectionId === id ? '' : s.activeCollectionName, isAllActive: s.activeCollectionId === id }));
       return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function getBookCollections(bookId: string): Promise<string[]> {
-    try {
-      return await api.getBookCollections(bookId);
-    } catch {
-      return [];
-    }
-  }
-
-  async function addBookToCollection(collectionId: string, bookId: string): Promise<boolean> {
-    try {
-      await api.addBookToCollection(collectionId, bookId);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function removeBookFromCollection(collectionId: string, bookId: string): Promise<boolean> {
-    try {
-      await api.removeBookFromCollection(collectionId, bookId);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function setActiveCollection(id: string | null) {
-    activeCollectionId.value = id;
-  }
-
-  return {
-    collections,
-    activeCollectionId,
-    activeCollectionName,
-    isAllActive,
-    initialized,
-    ensureLoaded,
-    fetchCollections,
-    refresh,
-    reorder,
-    createCollection,
-    renameCollection,
-    deleteCollection,
-    getBookCollections,
-    addBookToCollection,
-    removeBookFromCollection,
-    setActiveCollection,
-  };
-});
+    } catch { return false; }
+  },
+  getBookCollections: async (bookId) => { try { return await api.getBookCollections(bookId); } catch { return []; } },
+  addBookToCollection: async (cId, bId) => { try { await api.addBookToCollection(cId, bId); return true; } catch { return false; } },
+  removeBookFromCollection: async (cId, bId) => { try { await api.removeBookFromCollection(cId, bId); return true; } catch { return false; } },
+  setActiveCollection: (id) => { const name = get().collections.find((c) => c.id === id)?.name ?? ''; set({ activeCollectionId: id, activeCollectionName: name, isAllActive: id === null }); },
+}));

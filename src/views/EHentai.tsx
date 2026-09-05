@@ -1,0 +1,1 @@
+export default function EHentai() { return <div className="pa-6"><h2 className="text-h5">E-Hentai</h2><p className="text-body-2 text-medium-emphasis mt-4">Coming soon...</p></div>; }

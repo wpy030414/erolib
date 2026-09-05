@@ -1,159 +1,70 @@
-import { defineStore } from 'pinia';
-import { reactive, ref } from 'vue';
+import { create } from 'zustand';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getThumb, setThumb } from '@/services/thumb-cache';
 import { api } from '@/services/api';
-import { useBrowseFeed, type BrowseFeedShared } from '@/composables/useBrowseFeed';
 import type { PixivWork, PixivBrowseStatus } from '@/types';
 
-export type PixivTab = 'recommend' | 'following' | 'bookmark';
-type FeedKey = PixivTab | 'search';
+const BROWSE_PAGE_SIZE = 48; const SOURCE_END_HINT = 30;
+const pages = { recommend: 1, following: 1, bookmark: 0, search: 1 };
+const cursors = { recommend: 1, following: 1, bookmark: 0, search: 1 };
+const sourceEnded = { recommend: false, following: false, bookmark: false, search: false };
+let loading = false; let seenKeys = new Set<string>(); let buffer: PixivWork[] = [];
+let coverLoading = new Set<string>(); let inFlight = 0;
+const gateQueue: Array<() => void> = [];
 
-// Following & search return a fixed per-page from Pixiv (~30 / ~60); this is
-// the end-of-feed heuristic for those (a short page ⇒ last page). The grid's
-// actual page size is 48 — see useBrowseFeed's BROWSE_PAGE_SIZE.
-const SOURCE_END_HINT = 30;
-// Bookmark limit is tunable, so fetch as much as Pixiv allows per request —
-// the 48/page buffer then needs fewer round-trips, and any surplus past a page
-// boundary stays buffered for the next loadMore. 100 is within Pixiv's range.
-const BOOKMARK_FETCH = 100;
+function gateEnter(): Promise<void> { if (inFlight < 6) { inFlight++; return Promise.resolve(); } return new Promise((r) => { gateQueue.push(() => { inFlight++; r(); }); }); }
+function gateLeave() { inFlight--; const n = gateQueue.shift(); if (n) n(); }
 
-/**
- * Pixiv browse store — a thin instantiation layer over `useBrowseFeed`.
- *
- * The four feeds (recommend / following / bookmark / search) each inject their
- * own `fetchPage` (that's where the per-tab pagination model lives: recommend
- * is one-shot, bookmark is offset/total, following & search are page-based),
- * but they SHARE one coverMap / statusMap / coverLoading — the same Pixiv work
- * routinely appears in several tabs, so a cover or download state resolved in
- * one must be visible in the others. Only the recommend instance arms the
- * progress listener for the group. */
-export const usePixivBrowseStore = defineStore('pixiv-browse', () => {
-  const searchKeyword = ref('');
+async function loadCover(workId: string, coverUrl: string | null, coverMap: Record<string, string | null>) {
+  if (coverMap[workId] !== undefined || !coverUrl) { if (!coverUrl) coverMap[workId] = null; return; }
+  coverLoading.add(workId); coverMap[workId] = null;
+  try { await gateEnter(); let blob = await getThumb(workId); if (!blob) { const bytes = await api.pixivProxyImage(coverUrl); blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }); void setThumb(workId, blob); } if (coverLoading.has(workId)) { const old = coverMap[workId]; if (old) URL.revokeObjectURL(old); coverMap[workId] = URL.createObjectURL(blob); coverLoading.delete(workId); } } catch { coverMap[workId] = null; coverLoading.delete(workId); } finally { gateLeave(); }
+}
 
-  // Shared across all four feeds: a work's cover/status is independent of
-  // which tab it was first seen in.
-  const shared: BrowseFeedShared<PixivBrowseStatus> = {
-    coverMap: reactive<Record<string, string | null>>({}),
-    statusMap: reactive<Record<string, PixivBrowseStatus>>({}),
-    coverLoading: new Set<string>(),
-  };
-
-  const common = {
-    keyOf: (w: PixivWork) => w.id,
-    statusKeyOf: (s: PixivBrowseStatus) => s.workId,
-    coverKeyOf: (w: PixivWork) => w.id,
-    coverUrlOf: (w: PixivWork) => w.coverUrl ?? null,
-    fetchStatus: (ids: string[]) => api.pixivBrowseStatus(ids),
-    proxyCover: (url: string) => api.pixivProxyImage(url),
-    shared,
-  };
-
-  // 推荐 (top/illust): one-shot — the landing batch comes back in full.
-  const recommend = useBrowseFeed<PixivWork, string, PixivBrowseStatus, number>({
-    ...common,
-    listen: true,
-    initialCursor: 1,
-    fetchPage: async (cursor) => ({
-      items: await api.listPixivRecommended(cursor),
-      // No further pages regardless of batch size.
-      nextCursor: cursor,
-      end: true,
-    }),
-  });
-
-  // 关注 feed: 1-based pages, ~30/页.
-  const following = useBrowseFeed<PixivWork, string, PixivBrowseStatus, number>({
-    ...common,
-    listen: false,
-    initialCursor: 1,
-    fetchPage: async (cursor) => {
-      const items = await api.listPixivFollowingFeed(cursor);
-      return { items, nextCursor: cursor + 1, end: items.length < SOURCE_END_HINT };
-    },
-  });
-
-  // 收藏: offset-paginated with a known total.
-  const bookmark = useBrowseFeed<PixivWork, string, PixivBrowseStatus, number>({
-    ...common,
-    listen: false,
-    initialCursor: 0,
-    fetchPage: async (cursor) => {
-      const pageRes = await api.listPixivBookmarks(cursor, BOOKMARK_FETCH);
-      const nextCursor = cursor + pageRes.items.length;
-      return { items: pageRes.items, nextCursor, end: nextCursor >= pageRes.total };
-    },
-  });
-
-  // 搜索: page-based like following, driven by `searchKeyword`.
-  const search = useBrowseFeed<PixivWork, string, PixivBrowseStatus, number>({
-    ...common,
-    listen: false,
-    initialCursor: 1,
-    fetchPage: async (cursor) => {
-      const kw = searchKeyword.value.trim();
-      if (!kw) return { items: [], nextCursor: cursor, end: true };
-      const items = await api.searchPixivIllusts(kw, cursor);
-      return { items, nextCursor: cursor + 1, end: items.length < SOURCE_END_HINT };
-    },
-  });
-
-  function instOf(target: FeedKey) {
-    if (target === 'search') return search;
-    if (target === 'recommend') return recommend;
-    if (target === 'following') return following;
-    return bookmark;
+async function fetchPageForTarget(target: string, state: any): Promise<{ items: PixivWork[]; end: boolean }> {
+  switch (target) {
+    case 'recommend': { const items = await api.listPixivRecommended(1); return { items, end: true }; }
+    case 'following': { const items = await api.listPixivFollowingFeed(pages.following); pages.following++; return { items, end: items.length < SOURCE_END_HINT }; }
+    case 'bookmark': { const offset = cursors.bookmark; const result = await api.listPixivBookmarks(offset, 100); cursors.bookmark = result.nextCursor ?? result.total; return { items: result.items, end: cursors.bookmark >= result.total }; }
+    case 'search': { if (!state.searchKeyword) return { items: [], end: true }; const items = await api.searchPixivIllusts(state.searchKeyword, pages.search); pages.search++; return { items, end: items.length < SOURCE_END_HINT }; }
+    default: return { items: [], end: true };
   }
+}
 
-  function loadMore(target: FeedKey) {
-    return instOf(target).loadMore();
-  }
+interface PixivBrowseState {
+  searchKeyword: string;
+  recommend: { items: PixivWork[]; loading: boolean; end: boolean };
+  following: { items: PixivWork[]; loading: boolean; end: boolean };
+  bookmark: { items: PixivWork[]; loading: boolean; end: boolean };
+  search: { items: PixivWork[]; loading: boolean; end: boolean };
+  coverMap: Record<string, string | null>; statusMap: Record<string, PixivBrowseStatus>;
+  loadMore: (target: string) => Promise<void>; reload: (target: string) => Promise<void>;
+  setStatus: (workId: string, status: PixivBrowseStatus) => void; setSearchKeyword: (kw: string) => void; resetAll: () => void;
+}
 
-  function reload(target: FeedKey) {
-    return instOf(target).reload();
-  }
+export const usePixivBrowseStore = create<PixivBrowseState>((set, get) => ({
+  searchKeyword: '',
+  recommend: { items: [], loading: false, end: false }, following: { items: [], loading: false, end: false },
+  bookmark: { items: [], loading: false, end: false }, search: { items: [], loading: false, end: false },
+  coverMap: {}, statusMap: {},
 
-  /** Optimistically mark a work as downloading (the view does this right after
-   *  enqueuing so the mask shows before the first progress tick). Writes to
-   *  the shared statusMap, so the state is visible on every tab that shows
-   *  this work. */
-  function setStatus(workId: string, status: PixivBrowseStatus) {
-    return recommend.setStatus(workId, status);
-  }
+  loadMore: async (target) => {
+    if (loading || sourceEnded[target as keyof typeof sourceEnded]) return; loading = true;
+    set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: true } } as any));
+    try {
+      while (buffer.length < BROWSE_PAGE_SIZE && !sourceEnded[target as keyof typeof sourceEnded]) { const result = await fetchPageForTarget(target, get()); for (const item of result.items) { if (!seenKeys.has(item.id)) { seenKeys.add(item.id); buffer.push(item); } } if (result.end) { sourceEnded[target as keyof typeof sourceEnded] = true; break; } }
+      const pageItems = buffer.splice(0, BROWSE_PAGE_SIZE);
+      if (pageItems.length > 0) { set((s) => { const newItems = [...(s[target as keyof typeof s] as any).items, ...pageItems]; for (const item of pageItems) void loadCover(item.id, item.coverUrl ?? null, s.coverMap); return { [target]: { items: newItems, loading: false, end: sourceEnded[target as keyof typeof sourceEnded] && buffer.length === 0 } } as any; }); void api.pixivBrowseStatus(pageItems.map((i) => i.id)).then((statuses) => { set((s) => { const sm = { ...s.statusMap }; for (const st of statuses) sm[st.workId] = st; return { statusMap: sm }; }); }).catch(() => {}); }
+      else set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: false, end: true } } as any));
+    } catch { set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: false } } as any)); } finally { loading = false; }
+  },
+  reload: async (target) => { pages[target as keyof typeof pages] = target === 'bookmark' ? 0 : 1; cursors[target as keyof typeof cursors] = target === 'bookmark' ? 0 : 1; sourceEnded[target as keyof typeof sourceEnded] = false; seenKeys = new Set(); buffer = []; set((s) => ({ [target]: { items: [], loading: false, end: false }, statusMap: {} } as any)); await get().loadMore(target); },
+  setStatus: (workId, status) => { set((s) => ({ statusMap: { ...s.statusMap, [workId]: status } })); },
+  setSearchKeyword: (kw) => { const trimmed = kw.trim(); set({ searchKeyword: trimmed }); if (trimmed) { pages.search = 1; sourceEnded.search = false; set((s) => ({ search: { items: [], loading: false, end: false } })); void get().loadMore('search'); } },
+  resetAll: () => { pages.recommend = 1; pages.following = 1; pages.bookmark = 0; pages.search = 1; cursors.recommend = 1; cursors.following = 1; cursors.bookmark = 0; cursors.search = 1; sourceEnded.recommend = false; sourceEnded.following = false; sourceEnded.bookmark = false; sourceEnded.search = false; seenKeys = new Set(); buffer = []; set({ recommend: { items: [], loading: false, end: false }, following: { items: [], loading: false, end: false }, bookmark: { items: [], loading: false, end: false }, search: { items: [], loading: false, end: false }, statusMap: {} }); },
+}));
 
-  /** Commit the search box text: reset the search feed and fire the first
-   *  page. An empty query clears the search (back to recommend). */
-  function setSearchKeyword(kw: string) {
-    const trimmed = kw.trim();
-    searchKeyword.value = trimmed;
-    search.resetFeed();
-    if (trimmed) void search.loadMore();
-  }
-
-  /** Log-out: drop every feed's items + cursor and clear the shared statusMap
-   *  (a different account may have different local state). coverMap is kept —
-   *  IndexedDB-backed covers survive across logins. */
-  function resetAll() {
-    searchKeyword.value = '';
-    recommend.resetFeed();
-    following.resetFeed();
-    bookmark.resetFeed();
-    search.resetFeed();
-    recommend.clearStatusMap();
-  }
-
-  return {
-    // Per-tab feed state (bind to <FeedList :feed="...">).
-    recommend: recommend.feed,
-    following: following.feed,
-    bookmark: bookmark.feed,
-    search: search.feed,
-    // Shared maps (read by SourceCard via the view).
-    coverMap: shared.coverMap,
-    statusMap: shared.statusMap,
-    searchKeyword,
-    loadMore,
-    reload,
-    setStatus,
-    setSearchKeyword,
-    resetAll,
-  };
-});
+void (async () => {
+  await listen<{ task_id: string; status: string; progress_current: number; progress_total: number }>('task://progress', (event) => { const p = event.payload; const store = usePixivBrowseStore.getState(); let found: string | null = null; for (const [key, s] of Object.entries(store.statusMap)) { if (s.taskId === p.task_id) { found = key; break; } } if (found) { usePixivBrowseStore.setState((s) => ({ statusMap: { ...s.statusMap, [found!]: { ...s.statusMap[found!], taskStatus: p.status, progressCurrent: p.progress_current, progressTotal: p.progress_total } } })); } });
+  await listen<{ book_id: string }>('book://deleted', (event) => { usePixivBrowseStore.setState((s) => { const sm = { ...s.statusMap }; let changed = false; for (const [key, st] of Object.entries(sm)) { if (st.localBookId === event.payload.book_id) { sm[key] = { ...st, localBookId: undefined }; changed = true; } } return changed ? { statusMap: sm } : {}; }); });
+})();
