@@ -49,8 +49,8 @@ export default function AHentai() {
           value={store.keyword}
           placeholder={t('ah.search.placeholder')}
           clearLabel={t('ah.search.clear')}
-          onChange={(v) => {}}
-          onCommit={(v) => { store.keyword = v; void store.reload(); }}
+          onChange={(v) => useAhentaiBrowseStore.setState({ keyword: v })}
+          onCommit={(v) => { useAhentaiBrowseStore.setState({ keyword: v }); void store.reload(); }}
         />
       </div>
       <FeedList

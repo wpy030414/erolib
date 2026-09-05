@@ -8,7 +8,8 @@ const BROWSE_PAGE_SIZE = 48; const SOURCE_END_HINT = 30;
 const pages = { recommend: 1, following: 1, bookmark: 0, search: 1 };
 const cursors = { recommend: 1, following: 1, bookmark: 0, search: 1 };
 const sourceEnded = { recommend: false, following: false, bookmark: false, search: false };
-let loading = false; let seenKeys = new Set<string>(); let buffer: PixivWork[] = [];
+const loading = { recommend: false, following: false, bookmark: false, search: false };
+let seenKeys = new Set<string>(); let buffer: PixivWork[] = [];
 let coverLoading = new Set<string>(); let inFlight = 0;
 const gateQueue: Array<() => void> = [];
 
@@ -49,14 +50,15 @@ export const usePixivBrowseStore = create<PixivBrowseState>((set, get) => ({
   coverMap: {}, statusMap: {},
 
   loadMore: async (target) => {
-    if (loading || sourceEnded[target as keyof typeof sourceEnded]) return; loading = true;
+    if (loading[target as keyof typeof loading] || sourceEnded[target as keyof typeof sourceEnded]) return;
+	    loading[target as keyof typeof loading] = true;
     set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: true } } as any));
     try {
       while (buffer.length < BROWSE_PAGE_SIZE && !sourceEnded[target as keyof typeof sourceEnded]) { const result = await fetchPageForTarget(target, get()); for (const item of result.items) { if (!seenKeys.has(item.id)) { seenKeys.add(item.id); buffer.push(item); } } if (result.end) { sourceEnded[target as keyof typeof sourceEnded] = true; break; } }
       const pageItems = buffer.splice(0, BROWSE_PAGE_SIZE);
       if (pageItems.length > 0) { set((s) => { const newItems = [...(s[target as keyof typeof s] as any).items, ...pageItems]; for (const item of pageItems) void loadCover(item.id, item.coverUrl ?? null, s.coverMap); return { [target]: { items: newItems, loading: false, end: sourceEnded[target as keyof typeof sourceEnded] && buffer.length === 0 } } as any; }); void api.pixivBrowseStatus(pageItems.map((i) => i.id)).then((statuses) => { set((s) => { const sm = { ...s.statusMap }; for (const st of statuses) sm[st.workId] = st; return { statusMap: sm }; }); }).catch(() => {}); }
       else set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: false, end: true } } as any));
-    } catch { set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: false } } as any)); } finally { loading = false; }
+    } catch { set((s) => ({ [target]: { ...s[target as keyof typeof s], loading: false } } as any)); } finally { loading[target as keyof typeof loading] = false; }
   },
   reload: async (target) => { pages[target as keyof typeof pages] = target === 'bookmark' ? 0 : 1; cursors[target as keyof typeof cursors] = target === 'bookmark' ? 0 : 1; sourceEnded[target as keyof typeof sourceEnded] = false; seenKeys = new Set(); buffer = []; set((s) => ({ [target]: { items: [], loading: false, end: false }, statusMap: {} } as any)); await get().loadMore(target); },
   setStatus: (workId, status) => { set((s) => ({ statusMap: { ...s.statusMap, [workId]: status } })); },

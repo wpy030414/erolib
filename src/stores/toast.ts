@@ -13,13 +13,22 @@ interface ToastState {
 }
 
 let nextId = 1;
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
 export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
   addToast: (kind, message) => {
     const id = nextId++;
     set((s) => ({ toasts: [...s.toasts, { id, kind, message }] }));
-    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 4000);
+    const timer = setTimeout(() => {
+      timers.delete(id);
+      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+    }, 4000);
+    timers.set(id, timer);
   },
-  dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismiss: (id) => {
+    const t = timers.get(id);
+    if (t) { clearTimeout(t); timers.delete(id); }
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+  },
 }));

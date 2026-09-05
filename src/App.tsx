@@ -7,6 +7,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { useLibraryStore } from '@/stores/library';
 import { AppShell } from '@/components/AppShell';
 import { AppToast } from '@/components/AppToast';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const Home = lazy(() => import('@/views/Home'));
 const Library = lazy(() => import('@/views/Library'));
@@ -118,7 +119,8 @@ function AppContent() {
       {!isReader && <AppShell />}
       <main ref={mainRef} className="app-main flex-grow-1" onScroll={scheduleSaveScroll}>
         <Suspense fallback={<LoadingFallback />}>
-          <Routes>
+          <ErrorBoundary>
+            <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/home" element={<Home />} />
             <Route path="/library" element={<Library />} />
@@ -136,6 +138,7 @@ function AppContent() {
               </div>
             } />
           </Routes>
+          </ErrorBoundary>
         </Suspense>
       </main>
       <AppToast />
