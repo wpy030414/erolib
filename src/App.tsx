@@ -43,14 +43,14 @@ function AppContent() {
   const scheduleSaveScroll = useCallback(() => {
     if (saveScheduled.current) return;
     saveScheduled.current = true;
+    const path = location.pathname; // capture current path at call time
     requestAnimationFrame(() => {
       saveScheduled.current = false;
       const el = mainRef.current;
-      const path = location.pathname;
       if (!el || !isScrollPersistable(path)) return;
       try { localStorage.setItem(scrollKey(path), String(el.scrollTop)); } catch { /* ignore */ }
     });
-  }, [location.pathname]);
+  }, []); // no deps needed — we capture path at call time
 
   const restoreScroll = useCallback((path: string) => {
     const el = mainRef.current;
@@ -129,6 +129,12 @@ function AppContent() {
             <Route path="/nicecat" element={<NiceCat />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={
+              <div className="text-center text-medium-emphasis mt-8" style={{ padding: 48 }}>
+                <h2 className="text-h4">404</h2>
+                <p className="text-body-1">Page not found</p>
+              </div>
+            } />
           </Routes>
         </Suspense>
       </main>

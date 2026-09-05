@@ -63,7 +63,7 @@ export const useEhentaiBrowseStore = create<EhentaiBrowseState>((set, get) => ({
     loading = true; set((s) => ({ feed: { ...s.feed, loading: true } }));
     try {
       while (buffer.length < BROWSE_PAGE_SIZE && !sourceEnded) {
-        const { items, nextCursor, end } = await api.ehentaiSearch(get().keyword, get().category ?? undefined, cursor);
+        const { items, nextCursor, end } = await api.ehentaiSearch(get().keyword, get().category ?? undefined, cursor, get().ex);
         for (const item of items) { const key = get().galleryUrlOf(item); if (!seenKeys.has(key)) { seenKeys.add(key); buffer.push(item); } }
         cursor = nextCursor;
         if (end || items.length < PAGE_HINT) { sourceEnded = true; break; }

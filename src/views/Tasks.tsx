@@ -22,6 +22,8 @@ export default function Tasks() {
   const toast = useToastStore();
   const collectionsStore = useCollectionsStore();
   const [redownloadingId, setRedownloadingId] = useState<string | null>(null);
+  const hasCompleted = taskStore.tasks.some((t) => t.status === 'completed');
+  const hasRetryable = taskStore.tasks.some((t) => t.status === 'failed' || t.status === 'paused');
 
   useEffect(() => { void taskStore.init(); }, []);
 
@@ -144,8 +146,10 @@ export default function Tasks() {
           </div>
         ))}
       </div>
-      <FabButton icon={mdiBroom} ariaLabel={t('tasks.actions.clearCompleted')} onClick={() => { void onClearCompleted(); }} />
-      <FabButton icon={mdiRestart} ariaLabel={t('tasks.actions.retryAll')} onClick={() => { void taskStore.retryAll(); }} />
+      <>
+      {hasCompleted && <FabButton icon={mdiBroom} ariaLabel={t('tasks.actions.clearCompleted')} onClick={() => { void onClearCompleted(); }} />}
+      {hasRetryable && <FabButton icon={mdiRestart} ariaLabel={t('tasks.actions.retryAll')} onClick={() => { void taskStore.retryAll(); }} style={hasCompleted ? { bottom: 96 } : undefined} />}
+      </>
     </div>
   );
 }

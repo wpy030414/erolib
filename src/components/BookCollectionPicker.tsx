@@ -14,7 +14,7 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
   const store = useCollectionsStore();
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const initialIds = useRef<Set<string>>(new Set());
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(!!bookId);
 
   useEffect(() => {
     void (async () => {
