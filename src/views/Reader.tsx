@@ -84,7 +84,7 @@ export default function Reader() {
 
   // ── Animation (ugoira) ──────────────────────────────────────────────
   const frameDelaysRef = useRef<number[]>([]);
-  const isAnimated = frameDelaysRef.current.length > 1;
+  const [isAnimated, setIsAnimated] = useState(false);
   const [animLoading, setAnimLoading] = useState(false);
   const animCanvasRef = useRef<HTMLCanvasElement>(null);
   const bitmapsRef = useRef<(ImageBitmap | null)[]>([]);
@@ -115,6 +115,7 @@ export default function Reader() {
   // ── Theme restore ───────────────────────────────────────────────────
   const prevModeRef = useRef(themeStore.mode);
   const prevSeedRef = useRef(themeStore.seed);
+  const prevBgRef = useRef(themeStore.themeBgImage);
 
   // ── Helpers ─────────────────────────────────────────────────────────
   const clamp = useCallback((v: number) => {
@@ -444,6 +445,7 @@ export default function Reader() {
         setTitle(book.title);
         setPageCount(count);
         try { frameDelaysRef.current = book.delays ? JSON.parse(book.delays) as number[] : []; } catch { frameDelaysRef.current = []; }
+        setIsAnimated(frameDelaysRef.current.length > 1);
         const start = frameDelaysRef.current.length > 1 ? 0 : Math.min(readProgress(id), Math.max(0, count - 1));
         setCurrent(start);
         setLoading(false);
@@ -497,8 +499,8 @@ export default function Reader() {
     prevSeedRef.current = themeStore.seed;
     themeStore.setMode('dark');
     return () => {
-      themeStore.setMode(prevModeRef.current);
       themeStore.setSeed(prevSeedRef.current);
+      themeStore.setMode(prevModeRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
