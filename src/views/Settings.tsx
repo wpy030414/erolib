@@ -182,7 +182,7 @@ export default function Settings() {
             <div className="d-flex gap-3 mb-4">
               {themeStore.SEEDS.map((s) => (
                 <button key={s.key} className={`theme-swatch${themeStore.seed === s.key ? ' theme-swatch--selected' : ''}`}
-                  style={{ backgroundColor: s.color }} onClick={() => themeStore.setSeed(s.key)} />
+                  aria-label={s.key} style={{ backgroundColor: s.color }} onClick={() => themeStore.setSeed(s.key)} />
               ))}
             </div>
             {customThemeList.length > 0 && (
@@ -215,7 +215,8 @@ export default function Settings() {
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiDatabaseOutline} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.reset.title')}</h3></div>
             <div className="d-flex gap-3">
               <M3eButton variant="outlined" disabled={clearingCache} onClick={onClearCache}><MdiIcon path={mdiBroom} size={20} /> {t('settings.reset.clearCache')}</M3eButton>
-              <M3eButton variant="filled" disabled={resetting} onClick={() => setShowClearAll(true)}><MdiIcon path={mdiDeleteForever} size={20} /> {resetting ? t('settings.reset.running') : t('settings.reset.clearAll')}</M3eButton>
+              <M3eButton variant="filled" disabled={resetting} onClick={() => { // 语义对齐 Vue：每次打开前重置输入（上次输入残留会让毁灭按钮提前解锁）
+                setConfirmInput(''); setShowClearAll(true); }}><MdiIcon path={mdiDeleteForever} size={20} /> {resetting ? t('settings.reset.running') : t('settings.reset.clearAll')}</M3eButton>
             </div>
             {resetError && <p className="mt-3 text-body-2 text-error">{resetError}</p>}
           </section>
@@ -294,12 +295,16 @@ export default function Settings() {
           <p className="text-body-2 text-error">{t('settings.reset.confirmWarn')}</p>
           <M3eFormField variant="outlined">
             <label slot="label">{t('settings.reset.typeConfirm', { phrase: confirmPhrase })}</label>
-            <input type="text" value={confirmInput} onChange={(e) => setConfirmInput(e.target.value)} style={bareInputStyle} />
+            <input type="text" value={confirmInput} onChange={(e) => setConfirmInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setShowClearAll(false); } }} style={bareInputStyle} />
           </M3eFormField>
         </div>
         <div slot="actions">
           <M3eButton variant="text" onClick={() => setShowClearAll(false)}>{t('common.cancel')}</M3eButton>
-          <M3eButton variant="filled" disabled={!confirmMatched} onClick={doClearAll}>{t('settings.reset.clearAll')}</M3eButton>
+          <M3eButton variant="filled" disabled={!confirmMatched || resetting}
+            onClick={() => { // 语义对齐 Vue：对话框先关、清理在页面上跑——失败时 resetError
+              // 可见（不再被模态遮住），成功路径本来就会 reload。
+              setShowClearAll(false); void doClearAll(); }}>{t('settings.reset.clearAll')}</M3eButton>
         </div>
       </M3eDialog>
     </div>

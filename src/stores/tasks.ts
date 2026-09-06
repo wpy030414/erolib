@@ -76,9 +76,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   retryTask: async (id) => { await api.taskRetry(id); await get().refresh(); },
   redownloadTask: async (id) => { const r = await api.taskRedownload(id); await get().refresh(); return r; },
   clearCompleted: async () => {
-    // Collapse the selection if the selected task is about to be cleared.
-    if (get().selectedTaskId && get().tasks.some((t) => t.id === get().selectedTaskId && t.status === 'completed')) set({ selectedTaskId: null });
     await api.tasksClearCompleted();
+    // 语义对齐 Vue：选中折叠发生在 API 成功之后——失败路径保留选中，
+    // 成功后 completed 任务已消失、选中自然作废。
+    set({ selectedTaskId: null });
     await get().refresh();
   },
   retryAll: async () => { await api.tasksRetryAll(); await get().refresh(); },

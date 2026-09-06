@@ -62,7 +62,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   startOpds: async () => {
     set({ opdsBusy: true, opdsError: null });
-    try { const url = await api.startOpdsServer(parseInt(get().opdsPort, 10)); set({ opdsRunning: true, opdsUrl: url, opdsBusy: false }); }
+    try { const url = await api.startOpdsServer(Number(get().opdsPort)); set({ opdsRunning: true, opdsUrl: url, opdsBusy: false }); }
     catch (e) { set({ opdsError: String(e), opdsBusy: false }); }
   },
   stopOpds: async () => {
@@ -74,7 +74,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   startRss: async () => {
     set({ rssBusy: true, rssError: null });
-    try { const url = await api.startRssServer(parseInt(get().rssPort, 10)); set({ rssRunning: true, rssUrl: url, rssBusy: false }); }
+    try { const url = await api.startRssServer(Number(get().rssPort)); set({ rssRunning: true, rssUrl: url, rssBusy: false }); }
     catch (e) { set({ rssError: String(e), rssBusy: false }); }
   },
   stopRss: async () => {

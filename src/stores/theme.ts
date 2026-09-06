@@ -49,7 +49,8 @@ export function readSavedTheme(): { seed: Seed; mode: ThemeMode } {
   const savedSeed = window.localStorage.getItem(SEED_KEY) as Seed | null;
   const savedMode = window.localStorage.getItem(THEME_KEY) as ThemeMode | null;
   const seed: Seed = savedSeed && (['pink', 'violet', 'blue', 'teal'].includes(savedSeed) || savedSeed.startsWith('custom:')) ? savedSeed : 'pink';
-  const mode: ThemeMode = savedMode === 'dark' ? 'dark' : 'light';
+  // 首次启动（无存储值）默认跟随系统偏好（Vue 同款）；已存 light/dark 原样生效。
+  const mode: ThemeMode = savedMode === 'dark' ? 'dark' : savedMode === 'light' ? 'light' : (systemDark() ? 'dark' : 'light');
   return { seed, mode };
 }
 
