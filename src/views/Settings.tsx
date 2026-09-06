@@ -11,6 +11,13 @@ import { api } from '@/services/api';
 import { MdiIcon } from '@/components/MdiIcon';
 import { BrandIcon } from '@/components/BrandIcon';
 import { UpdateDialog, type UpdateDialogHandle } from '@/components/UpdateDialog';
+import { M3eTabs, M3eTab } from '@m3e/react/tabs';
+import { M3eSwitch } from '@m3e/react/switch';
+import { M3eSelect } from '@m3e/react/select';
+import { M3eOption } from '@m3e/react/option';
+import { M3eFormField } from '@m3e/react/form-field';
+import { M3eButton } from '@m3e/react/button';
+import { M3eDialog } from '@m3e/react/dialog';
 import {
   mdiBroom, mdiCheckCircle, mdiDatabaseOutline, mdiDeleteForever,
   mdiFolderSyncOutline, mdiGithub, mdiPalette, mdiPlay, mdiRss, mdiStop,
@@ -23,13 +30,15 @@ const BILIBILI_URL = 'https://space.bilibili.com/92465406';
 const BILIBILI_PATH =
   'M4.977 3.561a1.31 1.31 0 111.818-1.884l2.828 2.728c.08.078.149.163.205.254h4.277a1.32 1.32 0 01.205-.254l2.828-2.728a1.31 1.31 0 011.818 1.884L17.82 4.66h.848A5.333 5.333 0 0124 9.992v7.34a5.333 5.333 0 01-5.333 5.334H5.333A5.333 5.333 0 010 17.333V9.992a5.333 5.333 0 015.333-5.333h.781L4.977 3.56zm.356 3.67a2.667 2.667 0 00-2.666 2.667v7.529a2.667 2.667 0 002.666 2.666h13.334a2.667 2.667 0 002.666-2.666v-7.53a2.667 2.667 0 00-2.666-2.666H5.333zm1.334 5.192a1.333 1.333 0 112.666 0v1.192a1.333 1.333 0 11-2.666 0v-1.192zM16 11.09c-.736 0-1.333.597-1.333 1.333v1.192a1.333 1.333 0 102.666 0v-1.192c0-.736-.597-1.333-1.333-1.333z';
 
-const inputStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  borderRadius: 'var(--md-sys-shape-corner-small)',
-  border: '1px solid var(--md-sys-color-outline)',
-  background: 'var(--md-sys-color-surface)',
-  color: 'var(--md-sys-color-on-surface)',
-  font: 'var(--md-sys-typescale-body-large)',
+/** md-outlined-text-field 语义对齐：字段外观由 M3eFormField 提供，内嵌原生 input 保持裸样式。 */
+const bareInputStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+  font: 'inherit',
+  color: 'inherit',
+  width: '100%',
+  padding: 0,
 } as const;
 
 export default function Settings() {
@@ -48,14 +57,7 @@ export default function Settings() {
   const [resetError, setResetError] = useState<string | null>(null);
   const [confirmInput, setConfirmInput] = useState('');
   const [showClearAll, setShowClearAll] = useState(false);
-  const clearAllDialogRef = useRef<HTMLDialogElement>(null);
   const updateDialogRef = useRef<UpdateDialogHandle>(null);
-
-  useEffect(() => {
-    if (showClearAll && clearAllDialogRef.current) {
-      clearAllDialogRef.current.showModal();
-    }
-  }, [showClearAll]);
 
   const confirmPhrase = t('settings.reset.confirmPhrase');
   const confirmMatched = confirmInput.trim() === confirmPhrase;
@@ -145,32 +147,33 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="mb-4" style={{ display: 'flex', gap: 0 }}>
-        {(['basic', 'sharing'] as const).map((tKey) => (
-          <button
-            key={tKey}
-            className="md3-btn md3-btn--text"
-            onClick={() => setTab(tKey)}
-            style={{
-              borderBottom: tab === tKey ? '2px solid var(--md-sys-color-primary)' : '2px solid transparent',
-              borderRadius: 0, padding: '8px 16px',
-              color: tab === tKey ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-on-surface-variant)',
-            }}
-          >
-            {t(`settings.tab.${tKey}`)}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — md-tabs 语义对齐：活动指示条滑动切换 */}
+      <M3eTabs
+        className="mb-4"
+        variant="primary"
+        onChange={(e) => {
+          const i = (e.currentTarget as unknown as { selectedIndex: number }).selectedIndex;
+          if (i === 0) setTab('basic'); else if (i === 1) setTab('sharing');
+        }}
+      >
+        <M3eTab selected={tab === 'basic'}>{t('settings.tab.basic')}</M3eTab>
+        <M3eTab selected={tab === 'sharing'}>{t('settings.tab.sharing')}</M3eTab>
+      </M3eTabs>
 
       {/* Basic tab */}
       {tab === 'basic' && (
         <>
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiTranslate} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.language')}</h3></div>
-            <select value={locale} aria-label={t('settings.language')} onChange={(e) => setLocale(e.target.value as Locale)} style={{ ...inputStyle, maxWidth: 240, width: '100%' }}>
-              {LOCALES.map((l) => <option key={l} value={l}>{LOCALE_LABELS[l]}</option>)}
-            </select>
+            <M3eFormField variant="outlined" style={{ maxWidth: 240 }}>
+              <label slot="label" htmlFor="settings-language">{t('settings.language')}</label>
+              <M3eSelect
+                id="settings-language"
+                onChange={(e) => setLocale((e.currentTarget as unknown as { value: string }).value as Locale)}
+              >
+                {LOCALES.map((l) => <M3eOption key={l} value={l} selected={locale === l}>{LOCALE_LABELS[l]}</M3eOption>)}
+              </M3eSelect>
+            </M3eFormField>
           </section>
 
           <section className="mb-6">
@@ -201,16 +204,18 @@ export default function Settings() {
             )}
             <div className="d-flex align-center">
               <span className="dark-mode-label">{t('settings.theme.dark')}</span>
-              <input type="checkbox" checked={themeStore.mode === 'dark'} onChange={(e) => themeStore.setMode(e.target.checked ? 'dark' : 'light')}
-                style={{ accentColor: 'var(--md-sys-color-primary)' }} />
+              <M3eSwitch
+                checked={themeStore.mode === 'dark'}
+                onChange={(e) => themeStore.setMode((e.currentTarget as unknown as { checked: boolean }).checked ? 'dark' : 'light')}
+              />
             </div>
           </section>
 
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiDatabaseOutline} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.reset.title')}</h3></div>
             <div className="d-flex gap-3">
-              <button className="md3-btn md3-btn--outlined" disabled={clearingCache} onClick={onClearCache}><MdiIcon path={mdiBroom} size={20} /> {t('settings.reset.clearCache')}</button>
-              <button className="md3-btn md3-btn--filled" disabled={resetting} onClick={() => setShowClearAll(true)}><MdiIcon path={mdiDeleteForever} size={20} /> {resetting ? t('settings.reset.running') : t('settings.reset.clearAll')}</button>
+              <M3eButton variant="outlined" disabled={clearingCache} onClick={onClearCache}><MdiIcon path={mdiBroom} size={20} /> {t('settings.reset.clearCache')}</M3eButton>
+              <M3eButton variant="filled" disabled={resetting} onClick={() => setShowClearAll(true)}><MdiIcon path={mdiDeleteForever} size={20} /> {resetting ? t('settings.reset.running') : t('settings.reset.clearAll')}</M3eButton>
             </div>
             {resetError && <p className="mt-3 text-body-2 text-error">{resetError}</p>}
           </section>
@@ -222,12 +227,19 @@ export default function Settings() {
         <>
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiFolderSyncOutline} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.localSync')}</h3>
-              <input type="checkbox" aria-label={t('settings.localSync')} checked={settingsStore.syncEnabled} onChange={(e) => { settingsStore.setSyncEnabled(e.target.checked); if (e.target.checked && settingsStore.syncDir) void settingsStore.syncNow(); }}
-                style={{ marginLeft: 'auto', accentColor: 'var(--md-sys-color-primary)' }} />
+              <M3eSwitch
+                style={{ marginLeft: 'auto' }}
+                aria-label={t('settings.localSync')}
+                checked={settingsStore.syncEnabled}
+                onChange={(e) => { const on = (e.currentTarget as unknown as { checked: boolean }).checked; settingsStore.setSyncEnabled(on); if (on && settingsStore.syncDir) void settingsStore.syncNow(); }}
+              />
             </div>
-            <input type="text" value={syncDirName} placeholder={t('settings.localSync.pathHint')} title={settingsStore.syncDir} aria-label={t('settings.localSync.path')}
-              readOnly disabled={!settingsStore.syncEnabled || settingsStore.syncBusy} onClick={pickSyncDir}
-              style={{ ...inputStyle, width: 280, cursor: 'pointer' }} />
+            <M3eFormField variant="outlined" style={{ width: 280 }}>
+              <label slot="label" htmlFor="sync-path">{t('settings.localSync.path')}</label>
+              <input id="sync-path" type="text" value={syncDirName} placeholder={t('settings.localSync.pathHint')} title={settingsStore.syncDir}
+                readOnly disabled={!settingsStore.syncEnabled || settingsStore.syncBusy} onClick={pickSyncDir}
+                style={{ ...bareInputStyle, cursor: 'pointer' }} />
+            </M3eFormField>
             {settingsStore.syncStats && (<p className="mt-3 text-body-2 text-success d-flex align-center"><MdiIcon path={mdiCheckCircle} size={16} /> {t('settings.localSync.stats', settingsStore.syncStats)}</p>)}
             {settingsStore.syncBusy && <p className="mt-3 text-body-2 text-medium-emphasis">{t('settings.localSync.syncing')}</p>}
             {settingsStore.syncError && <p className="mt-3 text-body-2 text-error">{settingsStore.syncError}</p>}
@@ -235,13 +247,16 @@ export default function Settings() {
 
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiWeb} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.opds')}</h3></div>
-            <div className="d-flex gap-4 flex-wrap">
-              <input type="number" value={settingsStore.opdsPort} disabled={settingsStore.opdsRunning || settingsStore.opdsBusy}
-                onChange={(e) => settingsStore.saveOpdsPort(e.target.value)} style={{ ...inputStyle, width: 140 }} />
+            <div className="d-flex align-start gap-4 flex-wrap">
+              <M3eFormField variant="outlined" style={{ width: 140 }}>
+                <label slot="label" htmlFor="opds-port">{t('settings.port')}</label>
+                <input id="opds-port" type="number" value={settingsStore.opdsPort} disabled={settingsStore.opdsRunning || settingsStore.opdsBusy}
+                  onChange={(e) => settingsStore.saveOpdsPort(e.target.value)} style={bareInputStyle} />
+              </M3eFormField>
               {!settingsStore.opdsRunning ? (
-                <button className="md3-btn md3-btn--filled" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiPlay} size={20} /> {t('settings.start')}</button>
+                <M3eButton variant="filled" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiPlay} size={20} /> {t('settings.start')}</M3eButton>
               ) : (
-                <button className="md3-btn md3-btn--outlined" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiStop} size={20} /> {t('settings.stop')}</button>
+                <M3eButton variant="outlined" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiStop} size={20} /> {t('settings.stop')}</M3eButton>
               )}
             </div>
             {settingsStore.opdsRunning && settingsStore.opdsUrl && (<p className="mt-3 text-body-2 text-success"><a href={`${settingsStore.opdsUrl}/opds`} target="_blank" rel="noreferrer">{settingsStore.opdsUrl}/opds</a></p>)}
@@ -250,13 +265,16 @@ export default function Settings() {
 
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiRss} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.rss')}</h3></div>
-            <div className="d-flex gap-4 flex-wrap">
-              <input type="number" value={settingsStore.rssPort} disabled={settingsStore.rssRunning || settingsStore.rssBusy}
-                onChange={(e) => settingsStore.saveRssPort(e.target.value)} style={{ ...inputStyle, width: 140 }} />
+            <div className="d-flex align-start gap-4 flex-wrap">
+              <M3eFormField variant="outlined" style={{ width: 140 }}>
+                <label slot="label" htmlFor="rss-port">{t('settings.port')}</label>
+                <input id="rss-port" type="number" value={settingsStore.rssPort} disabled={settingsStore.rssRunning || settingsStore.rssBusy}
+                  onChange={(e) => settingsStore.saveRssPort(e.target.value)} style={bareInputStyle} />
+              </M3eFormField>
               {!settingsStore.rssRunning ? (
-                <button className="md3-btn md3-btn--filled" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiPlay} size={20} /> {t('settings.start')}</button>
+                <M3eButton variant="filled" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiPlay} size={20} /> {t('settings.start')}</M3eButton>
               ) : (
-                <button className="md3-btn md3-btn--outlined" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiStop} size={20} /> {t('settings.stop')}</button>
+                <M3eButton variant="outlined" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiStop} size={20} /> {t('settings.stop')}</M3eButton>
               )}
             </div>
             {settingsStore.rssRunning && settingsStore.rssUrl && (<p className="mt-3 text-body-2 text-success"><a href={`${settingsStore.rssUrl}/rss`} target="_blank" rel="noreferrer">{settingsStore.rssUrl}/rss</a></p>)}
@@ -268,26 +286,22 @@ export default function Settings() {
       {/* Update check / download / install flow (opened from the badge). */}
       <UpdateDialog ref={updateDialogRef} />
 
-      {/* Clear all confirmation dialog */}
-      {showClearAll && (
-        <dialog ref={clearAllDialogRef} className="export-dialog" onClose={() => setShowClearAll(false)}>
-          <div className="export-dialog__panel">
-            <div className="export-dialog__header">
-              <span className="export-dialog__title">{t('settings.reset.clearAll')}</span>
-            </div>
-            <div className="clear-all-dialog__content" style={{ padding: '8px 20px 20px' }}>
-              <p className="text-body-2 text-error">{t('settings.reset.confirmWarn')}</p>
-              <input type="text" value={confirmInput} onChange={(e) => setConfirmInput(e.target.value)}
-                placeholder={t('settings.reset.typeConfirm', { phrase: confirmPhrase })}
-                style={{ ...inputStyle, width: '100%' }} />
-            </div>
-            <div className="export-dialog__actions">
-              <button className="md3-btn md3-btn--text" onClick={() => setShowClearAll(false)}>{t('common.cancel')}</button>
-              <button className="md3-btn md3-btn--filled" disabled={!confirmMatched} onClick={doClearAll}>{t('settings.reset.clearAll')}</button>
-            </div>
-          </div>
-        </dialog>
-      )}
+      {/* Clear all confirmation dialog — md-dialog 语义对齐：常驻挂载 + open 切换，
+          开/合动画由 m3e-dialog 内置（含 Esc/cancel 路径）。 */}
+      <M3eDialog open={showClearAll} onClosed={() => setShowClearAll(false)}>
+        <div slot="headline">{t('settings.reset.clearAll')}</div>
+        <div slot="content">
+          <p className="text-body-2 text-error">{t('settings.reset.confirmWarn')}</p>
+          <M3eFormField variant="outlined">
+            <label slot="label">{t('settings.reset.typeConfirm', { phrase: confirmPhrase })}</label>
+            <input type="text" value={confirmInput} onChange={(e) => setConfirmInput(e.target.value)} style={bareInputStyle} />
+          </M3eFormField>
+        </div>
+        <div slot="actions">
+          <M3eButton variant="text" onClick={() => setShowClearAll(false)}>{t('common.cancel')}</M3eButton>
+          <M3eButton variant="filled" disabled={!confirmMatched} onClick={doClearAll}>{t('settings.reset.clearAll')}</M3eButton>
+        </div>
+      </M3eDialog>
     </div>
   );
 }
