@@ -33,7 +33,8 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   download: async () => {
     const { info } = get(); if (!info?.asset) return;
     await initProgressListener();
-    set({ downloading: true, error: null });
+    // Fresh download: clear any previous path/progress first.
+    set({ downloading: true, error: null, downloadPath: null, progress: { percent: 0, speed: 0, completed: 0, total: 0 } });
     try {
       const path = await api.downloadUpdate(info.asset.url, info.asset.name);
       set({ downloadPath: path, downloading: false });

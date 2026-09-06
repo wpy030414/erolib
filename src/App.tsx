@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { I18nProvider, onLocaleChange, getLocale } from '@/hooks/useI18n';
+import { I18nProvider, onLocaleChange, getLocale, applyWindowTitle } from '@/hooks/useI18n';
 import { api } from '@/services/api';
 import { useThemeStore } from '@/stores/theme';
 import { useSettingsStore } from '@/stores/settings';
@@ -99,6 +99,8 @@ function AppContent() {
 
   useEffect(() => {
     void useSettingsStore.getState().autoStartAll();
+    // Localize the window title for the persisted locale right at startup.
+    void applyWindowTitle().catch(() => {});
     // Push the persisted locale to the backend on startup so SQL renders tags
     // in the right language from the first query (frontend localStorage is
     // the source of truth). Then, on locale change, refresh the library grid
