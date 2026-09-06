@@ -41,15 +41,16 @@ export const UpdateDialog = forwardRef<UpdateDialogHandle>((_, ref) => {
           </div>
         )}
 
-        {/* Error */}
-        {store.error && !store.checking && !hasUpdate && (
+        {/* Error — v-else-if 链语义对齐：错误优先于结果展示（下载失败后
+            hasUpdate 仍为 true，重开对话框也必须看到错误详情而非版本信息） */}
+        {!store.checking && store.error && (
           <p className="text-body-2 text-error">
             {t('settings.update.checkFailed', { error: store.error })}
           </p>
         )}
 
         {/* Result */}
-        {info && !store.checking && (
+        {!store.checking && !store.error && info && (
           <>
             <p className="text-body-2 mb-1">
               {t('settings.update.current')} <b>v{info.current}</b>

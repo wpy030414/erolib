@@ -47,19 +47,17 @@ function AppContent() {
   const isReader = location.pathname.startsWith('/reader');
   const themeBgImage = useThemeStore((s) => s.themeBgImage);
   const mainRef = useRef<HTMLElement>(null);
-  const saveScheduled = useRef(false);
 
-  const scheduleSaveScroll = useCallback(() => {
-    if (saveScheduled.current) return;
-    saveScheduled.current = true;
-    const path = location.pathname; // capture current path at call time
-    requestAnimationFrame(() => {
-      saveScheduled.current = false;
-      const el = mainRef.current;
-      if (!el || !isScrollPersistable(path)) return;
-      try { localStorage.setItem(scrollKey(path), String(el.scrollTop)); } catch { /* ignore */ }
-    });
-  }, []); // no deps needed — we capture path at call time
+  // 滚动持久化语义对齐 Vue：Vue 在 route watch（pre-flush）里同步保存旧路径
+  // 的 scrollTop。这里同样同步写盘（scroll 事件每帧至多一次，localStorage
+  // 足够便宜）——若用 rAF 延迟保存，「滚动与导航落在同一帧」时延迟回调会在
+  // DOM 已切换后读到被钳制的 0，写坏旧路径的恢复位置。
+  const handleScroll = useCallback(() => {
+    const el = mainRef.current;
+    const path = location.pathname;
+    if (!el || !isScrollPersistable(path)) return;
+    try { localStorage.setItem(scrollKey(path), String(el.scrollTop)); } catch { /* ignore */ }
+  }, [location.pathname]);
 
   const restoreScroll = useCallback((path: string) => {
     const el = mainRef.current;
@@ -77,8 +75,8 @@ function AppContent() {
     requestAnimationFrame(trySet);
   }, []);
 
-  // Scrolling is persisted continuously by onScroll → scheduleSaveScroll (the
-  // freshest outgoing value is already on disk by the time the route swaps).
+  // Scrolling is persisted synchronously by onScroll → handleScroll, so the
+  // freshest outgoing value is already on disk by the time the route swaps.
   // Do NOT save here: by the time an effect runs, the new (shorter) route's
   // DOM has clamped scrollTop, and saving it would clobber the real position.
   useEffect(() => {
@@ -132,7 +130,7 @@ function AppContent() {
     <div id="erolib-app" className="erolib-app d-flex fill-height">
       {themeBgImage && !isReader && <div className="theme-bg-overlay" />}
       {!isReader && <AppShell />}
-      <main ref={mainRef} className="app-main flex-grow-1" onScroll={scheduleSaveScroll}>
+      <main ref={mainRef} className="app-main flex-grow-1" onScroll={handleScroll}>
         <Suspense fallback={<LoadingFallback />}>
           <ErrorBoundary>
             <Routes>

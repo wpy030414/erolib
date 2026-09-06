@@ -105,22 +105,24 @@ export default function Tasks() {
     failed: 'var(--md-sys-color-error-container)', cancelled: 'var(--md-sys-color-surface-container-highest)',
   };
 
-  if (taskStore.loading) return <div className="pa-6"><div className="empty-state"><FeedLoading /></div></div>;
-  // empty-state 语义对齐：200px 垂直居中
-  if (taskStore.tasks.length === 0) return <div className="pa-6"><div className="empty-state"><p className="text-body-1 text-medium-emphasis">{t('tasks.empty')}</p></div></div>;
-
   return (
     <div className="pa-6">
+      {/* tasks-header 语义对齐：Vue 中标题在 v-if 链之外，loading/空态也常驻 */}
       <div className="d-flex align-center gap-4 mb-6">
         <h2 className="text-h5" style={{ margin: 0 }}>{t('tasks.title')}</h2>
       </div>
+      {taskStore.loading ? (
+        <div className="empty-state"><FeedLoading /></div>
+      ) : taskStore.tasks.length === 0 ? (
+        // empty-state 语义对齐：200px 垂直居中
+        <div className="empty-state"><p className="text-body-1 text-medium-emphasis">{t('tasks.empty')}</p></div>
+      ) : (
       <div className="task-list">
         {taskStore.tasks.map((item) => (
           <div
             key={item.id}
             className={`md3-card md3-card--outlined task-card${taskStore.selectedTaskId === item.id ? ' task-card--selected' : ''}`}
             onClick={() => taskStore.selectTask(item.id)}
-            style={{ padding: 16, marginBottom: 12, borderRadius: 'var(--md-sys-shape-corner-medium)', border: '1px solid var(--md-sys-color-outline-variant)', cursor: 'pointer' }}
           >
             <div className="d-flex align-center" style={{ gap: 8, marginBottom: 8 }}>
               <span className="text-truncate" style={{ flex: 1, fontWeight: 500 }}>{item.title}</span>
@@ -140,56 +142,58 @@ export default function Tasks() {
                 {item.logs.length > 0 ? item.logs.map((line, i) => <div key={i}>{line}</div>) : <div>{t('tasks.detail.noLogs')}</div>}
               </div>
             )}
-            <div className="d-flex align-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {item.status === 'completed' && item.book_id && (
-                <M3eButton variant="filled" onClick={(e) => { e.stopPropagation(); viewInLibrary(item.title); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiMagnify} size={18} /> {t('tasks.actions.view')}
-                </M3eButton>
-              )}
+            {/* task-footer 语义对齐：按钮行 + 右侧速度/摘要同行（space-between） */}
+            <div className="task-footer">
+              <div className="task-actions">
+                {item.status === 'completed' && item.book_id && (
+                  <M3eButton variant="filled" onClick={(e) => { e.stopPropagation(); viewInLibrary(item.title); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiMagnify} size={18} /> {t('tasks.actions.view')}
+                  </M3eButton>
+                )}
+                {item.status === 'running' && (
+                  <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.pauseTask(item.id); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiPause} size={18} /> {t('tasks.actions.pause')}
+                  </M3eButton>
+                )}
+                {item.status === 'paused' && (
+                  <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.resumeTask(item.id); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiPlay} size={18} /> {t('tasks.actions.resume')}
+                  </M3eButton>
+                )}
+                {(item.status === 'running' || item.status === 'paused') && (
+                  <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.cancelTask(item.id); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiClose} size={18} /> {t('tasks.actions.cancel')}
+                  </M3eButton>
+                )}
+                {item.status === 'failed' && (
+                  <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.retryTask(item.id); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiRefresh} size={18} /> {t('tasks.actions.retry')}
+                  </M3eButton>
+                )}
+                {item.status === 'completed' && (
+                  <M3eButton variant="outlined" disabled={redownloadingId === item.id} onClick={(e) => { e.stopPropagation(); void onRedownload(item); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiDownload} size={18} /> {t('tasks.actions.redownload')}
+                  </M3eButton>
+                )}
+                {(item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled') && (
+                  <M3eButton variant="outlined" onClick={(e) => { e.stopPropagation(); void taskStore.deleteTask(item.id); }} style={{ fontSize: 13 }}>
+                    <MdiIcon path={mdiDelete} size={18} /> {t('tasks.actions.remove')}
+                  </M3eButton>
+                )}
+              </div>
               {item.status === 'running' && (
-                <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.pauseTask(item.id); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiPause} size={18} /> {t('tasks.actions.pause')}
-                </M3eButton>
-              )}
-              {item.status === 'paused' && (
-                <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.resumeTask(item.id); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiPlay} size={18} /> {t('tasks.actions.resume')}
-                </M3eButton>
-              )}
-              {(item.status === 'running' || item.status === 'paused') && (
-                <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.cancelTask(item.id); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiClose} size={18} /> {t('tasks.actions.cancel')}
-                </M3eButton>
-              )}
-              {item.status === 'failed' && (
-                <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.retryTask(item.id); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiRefresh} size={18} /> {t('tasks.actions.retry')}
-                </M3eButton>
+                <span className="task-speed">{formatSpeed(item.speed, t)}</span>
               )}
               {item.status === 'completed' && (
-                <M3eButton variant="outlined" disabled={redownloadingId === item.id} onClick={(e) => { e.stopPropagation(); void onRedownload(item); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiDownload} size={18} /> {t('tasks.actions.redownload')}
-                </M3eButton>
-              )}
-              {(item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled') && (
-                <M3eButton variant="outlined" onClick={(e) => { e.stopPropagation(); void taskStore.deleteTask(item.id); }} style={{ fontSize: 13 }}>
-                  <MdiIcon path={mdiDelete} size={18} /> {t('tasks.actions.remove')}
-                </M3eButton>
+                <span className="task-speed">
+                  {t('tasks.summary', { size: formatBytes(item.total_bytes, t), time: formatDuration(item.elapsed_ms, t) })}
+                </span>
               )}
             </div>
-            {item.status === 'running' && (
-              <span className="task-speed" style={{ fontSize: 12, color: 'var(--md-sys-color-on-surface-variant)' }}>
-                {formatSpeed(item.speed, t)}
-              </span>
-            )}
-            {item.status === 'completed' && (
-              <span className="task-speed" style={{ fontSize: 12, color: 'var(--md-sys-color-on-surface-variant)' }}>
-                {t('tasks.summary', { size: formatBytes(item.total_bytes, t), time: formatDuration(item.elapsed_ms, t) })}
-              </span>
-            )}
           </div>
         ))}
       </div>
+      )}
       <>
       {hasRetryable && <FabButton icon={mdiRestart} ariaLabel={t('tasks.actions.retryAll')} disabled={retrying} style={{ bottom: 96 }} onClick={() => { void onRetryAll(); }} />}
       {hasCompleted && <FabButton icon={mdiBroom} ariaLabel={t('tasks.actions.clearCompleted')} disabled={clearing} onClick={() => { void onClearCompleted(); }} />}
