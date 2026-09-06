@@ -731,6 +731,8 @@ img {
 .context-menu--exit {
   opacity: 0;
   transform: scale(0.9);
+  /* 离场动画期间不再接收交互，防止重复触发菜单项 */
+  pointer-events: none;
   transition: opacity 0.1s var(--md-sys-motion-easing-emphasized-accelerate), transform 0.1s var(--md-sys-motion-easing-emphasized-accelerate);
 }
 @keyframes menu-in {
@@ -755,7 +757,6 @@ img {
 /* ── 集合抽屉微动效/层级（对齐 Vue CollectionDialog scoped styles）── */
 .drawer-item--active:hover { background: color-mix(in srgb, var(--md-sys-color-on-secondary-container) 12%, var(--md-sys-color-secondary-container)); }
 .drawer-item--renaming { z-index: 3; background: var(--md-sys-color-surface-container-low); border-radius: var(--md-sys-shape-corner-medium); }
-.drawer-item--dimmed { opacity: 0.4; pointer-events: none; }
 .drawer-item__input:focus { caret-color: var(--md-sys-color-primary); }
 .drawer-fab-wrap--elevated { z-index: 101; }
 .delete-dialog__content {
@@ -763,9 +764,16 @@ img {
     var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font);
 }
 
+/* ── 任务空/加载状态（对齐 Vue Tasks scoped styles：200px 垂直居中）── */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
 /* ── 任务速度（对齐 Vue Tasks scoped styles）── */
-.task-speed {
-  font: 500 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-sys-typescale-font);
+.task-speed {  font: 500 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-sys-typescale-font);
   font-variant-numeric: tabular-nums;
   color: var(--md-sys-color-on-surface-variant);
   flex-shrink: 0;

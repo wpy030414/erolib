@@ -40,9 +40,10 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
     });
   }
 
-  /** Dialog 的 closed 事件（关闭动画播完）触发：对齐 Vue @close —— 先播
-   *  关闭动画，动画结束后才做 store 同步并通知父级卸载。确认、Esc、遮罩
-   *  三条关闭路径在此汇合。 */
+  /** Dialog 的 closed 事件触发：对齐 Vue @close —— 关闭时同步 store 增量，
+   *  确认、Esc、遮罩三条关闭路径在此汇合。m3e 的 closed 在 close() 同一 tick
+   *  派发（离场过渡 ≈150ms 尚未播完），因此同步与保底等待并行完成后再通知
+   *  父级卸载，保证关闭动画完整播放。 */
   async function handleClosed() {
     const added: string[] = [];
     const removed: string[] = [];
@@ -53,8 +54,11 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
       if (!checkedIds.has(id)) removed.push(id);
     }
     await Promise.all([
-      ...added.map((cid) => store.addBookToCollection(cid, bookId)),
-      ...removed.map((cid) => store.removeBookFromCollection(cid, bookId)),
+      Promise.all([
+        ...added.map((cid) => store.addBookToCollection(cid, bookId)),
+        ...removed.map((cid) => store.removeBookFromCollection(cid, bookId)),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, 200)),
     ]);
     onClose();
   }

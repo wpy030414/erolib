@@ -54,7 +54,7 @@ export function MenuSurface({ open, onClose, x, y, transformOrigin = 'top left',
         role="menu"
         tabIndex={-1}
         autoFocus
-        className={`context-menu${open ? '' : ' context-menu--exit'}`}
+        className={`context-menu ${open ? 'context-menu--enter' : 'context-menu--exit'}`}
         style={{ left: x, top: y, minWidth, transformOrigin }}
         onKeyDown={(e) => {
           const nodes = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
