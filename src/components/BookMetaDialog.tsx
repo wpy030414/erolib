@@ -46,11 +46,13 @@ export const BookMetaDialog = forwardRef<BookMetaDialogHandle>((_, ref) => {
     return m ? m[0] : iso;
   }
 
-  if (!book) return null;
-
+  // The <dialog> element stays mounted (mirroring the Vue template) so
+  // showModal() in open() always finds it — conditionally returning null here
+  // meant the first open after mount/close was a silent no-op.
   return (
     <dialog ref={dialogRef} className="meta-dialog" onClick={onBackdrop}>
-      <div className="meta-dialog__panel">
+      {book && (
+        <div className="meta-dialog__panel">
         <div className="meta-dialog__header">
           <span className="meta-dialog__title">{t('lib.viewMeta')}</span>
           <button className="icon-btn" aria-label={t('common.dismiss')} onClick={close}>
@@ -98,6 +100,7 @@ export const BookMetaDialog = forwardRef<BookMetaDialogHandle>((_, ref) => {
           <dd>{formatDate(book.scraped_at) || '—'}</dd>
         </dl>
       </div>
+      )}
     </dialog>
   );
 });

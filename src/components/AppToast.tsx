@@ -27,7 +27,7 @@ export function AppToast() {
           role="status"
           onClick={() => dismiss(msg.id)}
         >
-          <MdiIcon path={iconFor(msg.kind)} size={18} />
+          <MdiIcon className="toast-icon" path={iconFor(msg.kind)} size={18} />
           <span className="toast-message">{msg.message}</span>
         </div>
       ))}

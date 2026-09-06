@@ -112,8 +112,8 @@ export const useThemeStore = create<ThemeState>((set, get) => {
 
     setMode: (value) => {
       persistMode(value);
-      applyTheme(get().seed, value, get().customThemes);
-      set({ mode: value });
+      const bgImage = applyTheme(get().seed, value, get().customThemes);
+      set({ mode: value, themeBgImage: bgImage });
     },
 
     addCustomTheme: (seedHex, imageB64, thumbnailB64, page, bookId, title) => {
@@ -156,4 +156,8 @@ export const useThemeStore = create<ThemeState>((set, get) => {
   };
 });
 
-applyTheme(initialTheme.seed, initialTheme.mode, useThemeStore.getState().customThemes);
+// Apply the persisted theme at module load (pre-mount), and write the
+// resulting custom-wallpaper state back into the store so the overlay
+// renders right after a restart with a custom theme active.
+const initialBgImage = applyTheme(initialTheme.seed, initialTheme.mode, useThemeStore.getState().customThemes);
+useThemeStore.setState({ themeBgImage: initialBgImage });

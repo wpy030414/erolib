@@ -1,10 +1,19 @@
 import { useEffect, useRef, useCallback, lazy, Suspense } from 'react';
-import { HashRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { I18nProvider, onLocaleChange } from '@/hooks/useI18n';
+import { I18nProvider, onLocaleChange, getLocale } from '@/hooks/useI18n';
+import { api } from '@/services/api';
 import { useThemeStore } from '@/stores/theme';
 import { useSettingsStore } from '@/stores/settings';
 import { useLibraryStore } from '@/stores/library';
+// Instantiate the browse stores at app start so their task://progress
+// listeners are armed immediately — a download that finishes on any page
+// flips the corresponding card in every source, not just a mounted view.
+// (Module-level zustand stores initialize on import.)
+import '@/stores/ehentai-browse';
+import '@/stores/pixiv-browse';
+import '@/stores/nicecat-browse';
+import '@/stores/ahentai-browse';
 import { AppShell } from '@/components/AppShell';
 import { AppToast } from '@/components/AppToast';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -39,7 +48,6 @@ function AppContent() {
   const themeBgImage = useThemeStore((s) => s.themeBgImage);
   const mainRef = useRef<HTMLElement>(null);
   const saveScheduled = useRef(false);
-  const oldPath = useRef(location.pathname);
 
   const scheduleSaveScroll = useCallback(() => {
     if (saveScheduled.current) return;
@@ -69,13 +77,13 @@ function AppContent() {
     requestAnimationFrame(trySet);
   }, []);
 
+  // Scrolling is persisted continuously by onScroll → scheduleSaveScroll (the
+  // freshest outgoing value is already on disk by the time the route swaps).
+  // Do NOT save here: by the time an effect runs, the new (shorter) route's
+  // DOM has clamped scrollTop, and saving it would clobber the real position.
   useEffect(() => {
-    const el = mainRef.current;
-    if (el && oldPath.current && isScrollPersistable(oldPath.current)) {
-      try { localStorage.setItem(scrollKey(oldPath.current), String(el.scrollTop)); } catch { /* ignore */ }
-    }
-    oldPath.current = location.pathname;
-    requestAnimationFrame(() => restoreScroll(location.pathname));
+    const raf = requestAnimationFrame(() => restoreScroll(location.pathname));
+    return () => cancelAnimationFrame(raf);
   }, [location.pathname, restoreScroll]);
 
   useEffect(() => {
@@ -91,6 +99,11 @@ function AppContent() {
 
   useEffect(() => {
     void useSettingsStore.getState().autoStartAll();
+    // Push the persisted locale to the backend on startup so SQL renders tags
+    // in the right language from the first query (frontend localStorage is
+    // the source of truth). Then, on locale change, refresh the library grid
+    // + tag chips so every tag-bearing view re-renders in the new language.
+    void api.setLocale(getLocale()).catch(() => {});
     const unsub = onLocaleChange(() => { void useLibraryStore.getState().refresh(); });
     return unsub;
   }, []);
@@ -121,7 +134,7 @@ function AppContent() {
         <Suspense fallback={<LoadingFallback />}>
           <ErrorBoundary>
             <Routes>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<Navigate to="/home" replace />} />
             <Route path="/home" element={<Home />} />
             <Route path="/library" element={<Library />} />
             <Route path="/reader/:id" element={<Reader />} />

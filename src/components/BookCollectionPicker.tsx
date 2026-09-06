@@ -14,7 +14,9 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
   const store = useCollectionsStore();
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const initialIds = useRef<Set<string>>(new Set());
-  const [open, setOpen] = useState(!!bookId);
+  // Opens only after the checked state is loaded, so the dialog never shows
+  // an all-unchecked list that then snaps to the real state.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -22,6 +24,7 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
       const ids = await store.getBookCollections(bookId);
       setCheckedIds(new Set(ids));
       initialIds.current = new Set(ids);
+      setOpen(true);
     })();
   }, [bookId, store]);
 

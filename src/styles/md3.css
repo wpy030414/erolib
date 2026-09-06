@@ -687,3 +687,20 @@ img {
 .md3-btn--tonal { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
 .md3-btn--tonal:hover { box-shadow: var(--md-sys-elevation-level1); }
 .md3-btn--tonal:disabled { opacity: 0.38; cursor: default; }
+
+/* ── Toast icon + motion (MD3 snackbar: fade + slide up from below) ── */
+.toast-icon {
+  flex-shrink: 0;
+  /* `inverse-primary` is the M3 emphasis colour on an inverse surface (the
+   * same role the action label plays on a snackbar). */
+  color: var(--md-sys-color-inverse-primary);
+}
+
+.toast {
+  animation: toast-in 0.2s ease;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}

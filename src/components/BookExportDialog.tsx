@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useState, useCallback } from 'react';
+import { forwardRef, useImperativeHandle, useRef, useState, useCallback, useEffect } from 'react';
 import { save as dialogSave } from '@tauri-apps/plugin-dialog';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
@@ -60,8 +60,8 @@ export const BookExportDialog = forwardRef<BookExportDialogHandle>((_, ref) => {
     activeBookId.current = '';
   }
 
-  function onEscape(e: React.KeyboardEvent) {
-    if (busy && e.key === 'Escape') e.preventDefault();
+  function onEscape(e: React.SyntheticEvent) {
+    if (busy && e.cancelable !== false) e.preventDefault();
   }
 
   function onBackdrop(e: React.MouseEvent) {
@@ -107,11 +107,19 @@ export const BookExportDialog = forwardRef<BookExportDialogHandle>((_, ref) => {
     }
   }
 
-  if (!book) return null;
+  // Unmount cleanup for the progress listener (mirrors Vue's onUnmounted).
+  useEffect(() => () => { unlistenRef.current?.(); unlistenRef.current = null; }, []);
 
+  // The <dialog> element stays mounted (mirroring the Vue template) so
+  // showModal() in open() always finds it — conditionally returning null here
+  // meant the first open after mount/close was a silent no-op.
   return (
-    <dialog ref={dialogRef} className="export-dialog" onClick={onBackdrop} onKeyDown={onEscape}>
-      <div className="export-dialog__panel">
+    // Native cancel event: fires on Escape regardless of where focus sits,
+    // so the swallow-guard works even while the progress view has no
+    // focusable elements.
+    <dialog ref={dialogRef} className="export-dialog" onClick={onBackdrop} onCancel={onEscape}>
+      {book && (
+        <div className="export-dialog__panel">
         <div className="export-dialog__header">
           <span className="export-dialog__title">
             {exporting ? t('lib.save.exporting') : t('lib.save.format')}
@@ -158,6 +166,7 @@ export const BookExportDialog = forwardRef<BookExportDialogHandle>((_, ref) => {
           </div>
         )}
       </div>
+      )}
     </dialog>
   );
 });

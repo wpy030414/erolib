@@ -27,7 +27,8 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   check: async () => {
     set({ checking: true, error: null });
     try { const info = await api.checkUpdate(); set({ info, checking: false }); }
-    catch (e) { set({ error: String(e), checking: false }); }
+    // A failed check invalidates the previous result.
+    catch (e) { set({ error: String(e), checking: false, info: null }); }
   },
   download: async () => {
     const { info } = get(); if (!info?.asset) return;
@@ -43,10 +44,24 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       set({ error: String(e), downloading: false });
       const { useToastStore } = await import('./toast');
       const { t } = await import('@/i18n/index');
-      useToastStore.getState().addToast('error', t('settings.update.downloadFailed'));
+      useToastStore.getState().addToast('error', t('settings.update.downloadFailed', { error: String(e) }));
     }
   },
-  install: () => { const p = get().downloadPath; if (p) void api.installUpdate(p); },
-  quitAndInstall: () => { const p = get().downloadPath; if (p) void api.quitAndInstall(p); },
+  install: () => {
+    const p = get().downloadPath;
+    if (!p) return;
+    api.installUpdate(p).catch(async (e) => {
+      const { useToastStore } = await import('./toast');
+      useToastStore.getState().addToast('error', String(e));
+    });
+  },
+  quitAndInstall: () => {
+    const p = get().downloadPath;
+    if (!p) return;
+    api.quitAndInstall(p).catch(async (e) => {
+      const { useToastStore } = await import('./toast');
+      useToastStore.getState().addToast('error', String(e));
+    });
+  },
   clearDownload: () => set({ downloadPath: null, progress: { percent: 0, speed: 0, completed: 0, total: 0 } }),
 }));
