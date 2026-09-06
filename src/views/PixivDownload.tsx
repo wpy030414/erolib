@@ -10,6 +10,7 @@ import { FeedList } from '@/components/FeedList';
 import { SearchBox } from '@/components/SearchBox';
 import { FabButton } from '@/components/FabButton';
 import { MdiIcon } from '@/components/MdiIcon';
+import { M3eTabs, M3eTab } from '@m3e/react/tabs';
 import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import type { PixivWork } from '@/types';
 
@@ -155,14 +156,19 @@ export default function PixivDownload() {
         <div className="text-center text-medium-emphasis mt-8">{t('pixiv.browse.loginRequired')}</div>
       ) : (
         <>
-          <div className="mb-4" style={{ display: 'flex', gap: 0 }}>
+          {/* md-tabs 语义对齐：M3 tab 条，活动指示条在 tab 间滑动 */}
+          <M3eTabs
+            className="mb-4"
+            variant="primary"
+            onChange={(e) => {
+              const i = (e.currentTarget as unknown as { selectedIndex: number }).selectedIndex;
+              if (i >= 0 && i < TABS.length) onTabChange(TABS[i]);
+            }}
+          >
             {TABS.map((tKey) => (
-              <button key={tKey} className="md3-btn md3-btn--text" onClick={() => onTabChange(tKey)}
-                style={{ borderBottom: tab === tKey ? '2px solid var(--md-sys-color-primary)' : '2px solid transparent', borderRadius: 0, padding: '8px 16px', color: tab === tKey ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-on-surface-variant)' }}>
-                {t(`pixiv.tab.${tKey}`)}
-              </button>
+              <M3eTab key={tKey} selected={tab === tKey}>{t(`pixiv.tab.${tKey}`)}</M3eTab>
             ))}
-          </div>
+          </M3eTabs>
 
           {/* Feeds stay mounted across tab switches (v-show semantics) so each
               keeps its scroll position; the sentinel re-arms on visibility. */}

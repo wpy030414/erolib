@@ -10,6 +10,7 @@ import { FeedList } from '@/components/FeedList';
 import { SearchBox } from '@/components/SearchBox';
 import { FabButton } from '@/components/FabButton';
 import { MdiIcon } from '@/components/MdiIcon';
+import { M3eSwitch } from '@m3e/react/switch';
 import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import type { GalleryListItem } from '@/types';
 
@@ -94,10 +95,12 @@ export default function EHentai() {
       <div className="d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
         <h2 className="text-h5" style={{ margin: 0, whiteSpace: 'nowrap' }}>{title}</h2>
         <span className="spacer" />
-        <label className="d-flex align-center gap-2" style={{ fontSize: 14, color: 'var(--md-sys-color-on-surface-variant)' }}>
-          <span>{t('eh.exLabel')}</span>
-          <input type="checkbox" checked={store.ex} onChange={(e) => { store.setEx(e.target.checked); void store.reload(); }} style={{ accentColor: 'var(--md-sys-color-primary)' }} />
-        </label>
+        {/* md-switch 语义对齐：裸开关 + aria-label，滑块弹性滑动 */}
+        <M3eSwitch
+          checked={store.ex}
+          aria-label={t('eh.exLabel')}
+          onChange={(e) => { store.setEx((e.currentTarget as unknown as { checked: boolean }).checked); void store.reload(); }}
+        />
         <SearchBox value={store.keyword} placeholder={t('eh.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={onSearchCommit} />
         <button className="md3-btn md3-btn--tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('eh.login.relogin')}</button>
       </div>
