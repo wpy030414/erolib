@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/api';
 import { useI18n } from '@/hooks/useI18n';
@@ -18,20 +18,34 @@ export default function NiceCat() {
   const toast = useToastStore();
   const store = useNicecatBrowseStore();
 
-  useEffect(() => {
-    if (!store.loaded && !store.homeLoading && !store.isSearching) void store.loadHomepage();
-  }, []);
+  // Initial load (the store no-ops while loading / already loaded).
+  useEffect(() => { void store.loadHomepage(); }, []);
 
-  function onCardClick(item: NicecatComicItem) {
-    const status = store.statusMap[item.uid];
-    if (status?.localBookId) { navigate(`/reader/${status.localBookId}`); }
-    else if (status?.taskId && ['pending', 'running', 'paused'].includes(status.taskStatus ?? '')) { return; }
-    else {
-      void api.taskEnqueueNicecatGallery(item.uid, item.name).then(() => {
-        store.setStatus(item.uid, { comicId: item.uid, taskId: '', taskStatus: 'pending', progressCurrent: 0, progressTotal: 0 });
-        toast.addToast('success', t('tasks.toast.enqueued', { title: item.name }));
-      }).catch((e) => { toast.addToast('error', t('common.error', { message: String(e) })); });
+  /** Enqueue download via the task system, optimistically marking the card as
+   *  downloading so the progress mask shows immediately. */
+  async function onDownload(it: NicecatComicItem) {
+    try {
+      const taskId = await api.taskEnqueueNicecatGallery(it.uid, it.name);
+      store.setStatus(it.uid, { comicId: it.uid, taskId, taskStatus: 'pending', progressCurrent: 0, progressTotal: 1 });
+      toast.addToast('info', t('nc.browse.queued', { title: it.name }));
+    } catch (e) {
+      toast.addToast('error', t('common.error', { message: String(e) }));
     }
+  }
+
+  /** Card click dispatches by state: downloaded → reader, downloading →
+   *  ignore, new → enqueue download. */
+  function onCardClick(it: NicecatComicItem) {
+    const st = store.statusMap[it.uid];
+    if (st?.localBookId) { navigate(`/reader/${st.localBookId}`); return; }
+    if (store.isBusy(it.uid)) return;
+    void onDownload(it);
+  }
+
+  /** SearchBox commit: push keyword into store and reload. */
+  function onSearchCommit(v: string) {
+    store.setKeyword(v);
+    void store.reload();
   }
 
   if (!store.isSearching) {
@@ -40,11 +54,15 @@ export default function NiceCat() {
         <div className="d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
           <h2 className="text-h5" style={{ margin: 0, whiteSpace: 'nowrap' }}>{t('nav.nicecat')}</h2>
           <span className="spacer" />
-          <SearchBox value={store.keyword} placeholder={t('nc.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={() => {}} />
+          <SearchBox value={store.keyword} placeholder={t('nc.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={onSearchCommit} />
         </div>
-        {store.homeError && <div className="error-state mb-4"><p className="error-state__msg">{store.homeError}</p></div>}
+        {/* Mutually exclusive: error → empty → loading (Vue v-if/else-if chain). */}
+        {store.homeError && !store.homeLoading ? (
+          <div className="error-state"><p className="error-state__msg">{store.homeError}</p></div>
+        ) : !store.homeLoading && store.sections.length === 0 ? (
+          <div className="text-center text-medium-emphasis mt-8">{t('nc.browse.empty')}</div>
+        ) : null}
         {store.homeLoading && <FeedLoading>{t('nc.browse.loadingMore')}</FeedLoading>}
-        {!store.homeLoading && store.sections.length === 0 && !store.homeError && <div className="text-center text-medium-emphasis mt-8">{t('nc.browse.empty')}</div>}
         {store.sections.map((section) => (
           <div key={section.name} className="md3-card md3-card--outlined mb-4" style={{ overflow: 'hidden' }}>
             <div className="md3-card__content" style={{ padding: '12px 16px' }}><h3 style={{ font: 'var(--md-sys-typescale-title-medium)', margin: 0 }}>{section.name}</h3></div>
@@ -52,14 +70,14 @@ export default function NiceCat() {
               <div style={{ display: 'flex', gap: 12 }}>
                 {section.comics.map((comic) => (
                   <div key={comic.uid} style={{ flex: '0 0 160px' }}>
-                    <SourceCard title={comic.name} pageCount={0} subtitle={comic.categories} cover={store.coverMap[comic.uid] ?? null} status={store.statusMap[comic.uid]} onClick={() => onCardClick(comic)} />
+                    <SourceCard title={comic.name} pageCount={0} cover={store.coverMap[comic.uid] ?? null} status={store.statusMap[comic.uid]} onClick={() => onCardClick(comic)} />
                   </div>
                 ))}
               </div>
             </div>
           </div>
         ))}
-        <FabButton icon={mdiRefresh} ariaLabel={t('common.refresh')} disabled={store.homeLoading} onClick={() => store.reload(true)} />
+        <FabButton icon={mdiRefresh} ariaLabel={t('nc.home.refresh')} disabled={store.homeLoading} onClick={() => store.reload(true)} />
       </div>
     );
   }
@@ -69,14 +87,17 @@ export default function NiceCat() {
       <div className="d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
         <h2 className="text-h5" style={{ margin: 0, whiteSpace: 'nowrap' }}>{t('nav.nicecat')}</h2>
         <span className="spacer" />
-        <SearchBox value={store.keyword} placeholder={t('nc.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={() => {}} />
+        <SearchBox value={store.keyword} placeholder={t('nc.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={onSearchCommit} />
       </div>
-      <FeedList feed={store.feed} texts={{ empty: t('nc.search.empty'), end: t('nc.browse.end'), loadingMore: t('nc.browse.loadingMore') }} onLoadMore={() => store.reload()}>
+      {store.homeError && !store.feed.loading && store.feed.items.length === 0 && (
+        <div className="error-state mb-4"><p className="error-state__msg">{store.homeError}</p></div>
+      )}
+      <FeedList feed={store.feed} texts={{ empty: t('nc.browse.empty'), end: t('nc.browse.end'), loadingMore: t('nc.browse.loadingMore') }} onLoadMore={() => store.searchMore()}>
         {store.feed.items.map((item) => (
-          <SourceCard key={item.uid} title={item.name} pageCount={0} subtitle={item.categories} cover={store.coverMap[item.uid] ?? null} status={store.statusMap[item.uid]} onClick={() => onCardClick(item)} />
+          <SourceCard key={item.uid} title={item.name} pageCount={0} cover={store.coverMap[item.uid] ?? null} status={store.statusMap[item.uid]} onClick={() => onCardClick(item)} />
         ))}
       </FeedList>
-      <FabButton icon={mdiRefresh} ariaLabel={t('common.refresh')} disabled={store.feed.loading} onClick={() => store.reload(true)} />
+      <FabButton icon={mdiRefresh} ariaLabel={t('nc.home.refresh')} disabled={store.feed.loading} onClick={() => store.reload(true)} />
     </div>
   );
 }

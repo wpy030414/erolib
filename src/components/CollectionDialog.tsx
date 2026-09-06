@@ -136,10 +136,10 @@ export function CollectionDialog({ onClose }: CollectionDialogProps) {
   return createPortal(
     <>
       <div
-        className={`drawer-overlay${visible ? ' drawer-overlay--visible' : ''}`}
+        className="drawer-overlay drawer-overlay--visible"
         onClick={onClose}
       />
-      <aside className={`collection-drawer${visible ? ' collection-drawer--open' : ''}`}>
+      <aside className="collection-drawer collection-drawer--open">
         <h2 className="drawer-title">{t('lib.collections.title')}</h2>
 
         <div className={`drawer-list${renamingId ? ' drawer-list--masked' : ''}`}>

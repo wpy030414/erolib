@@ -15,6 +15,9 @@ import type { GalleryListItem } from '@/types';
 
 const CATEGORIES = ['doujinshi', 'manga', 'artistcg', 'gamecg', 'western', 'non-h', 'imageset', 'cosplay', 'asianporn', 'misc'];
 
+/** Statuses in which a card is "busy" — repeated clicks are ignored. */
+const ACTIVE_STATUSES = ['pending', 'running', 'paused'];
+
 export default function EHentai() {
   const navigate = useNavigate();
   const { t } = useI18n();
@@ -27,23 +30,48 @@ export default function EHentai() {
   useEffect(() => { void api.getEHentaiLogin().then((c) => { if (c) { setLoggedIn(true); setCookie(c); } }).catch(() => {}); }, []);
   useEffect(() => {
     const unlisten: UnlistenFn[] = [];
-    void (async () => { const u = await listen<{ cookie: string }>('ehentai://login', (event) => { setLoggedIn(true); setCookie(event.payload.cookie); setLoggingIn(false); }); unlisten.push(u); })();
+    void (async () => { const u = await listen<{ cookie: string }>('ehentai://login', (event) => { setLoggedIn(true); setCookie(event.payload.cookie); setLoggingIn(false); toast.addToast('success', t('eh.login.loggedInToast')); }); unlisten.push(u); })();
     return () => { unlisten.forEach((fn) => fn()); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function startLogin() { setLoggingIn(true); await api.openEHentaiLoginWindow(); }
-  async function onLogout() { await api.ehentaiLogout(); setLoggedIn(false); setCookie(null); store.resetAll(); }
+  async function startLogin() {
+    setLoggingIn(true);
+    try { await api.openEHentaiLoginWindow(); }
+    catch (e) {
+      setLoggingIn(false);
+      toast.addToast('error', t('eh.login.loginFailed', { error: String(e) }));
+    }
+  }
+  async function onLogout() {
+    try {
+      await api.ehentaiLogout();
+      toast.addToast('info', t('eh.login.loggedOut'));
+    } catch (e) {
+      toast.addToast('error', t('eh.login.logoutFailed', { error: String(e) }));
+    } finally {
+      setLoggedIn(false);
+      setCookie(null);
+      store.resetAll();
+    }
+  }
 
-  function onCardClick(item: GalleryListItem) {
+  function onSearchCommit(v: string) {
+    store.setKeyword(v);
+    void store.reload();
+  }
+
+  async function onCardClick(item: GalleryListItem) {
     const url = store.galleryUrlOf(item);
     const status = store.statusMap[url];
     if (status?.localBookId) { navigate(`/reader/${status.localBookId}`); }
-    else if (status?.taskId && ['pending', 'running', 'paused'].includes(status.taskStatus ?? '')) { return; }
+    else if (status?.taskId && ACTIVE_STATUSES.includes(status.taskStatus ?? '')) { return; }
     else {
-      void api.taskEnqueueEhentaiGallery(url, item.title).then(() => {
-        store.setStatus(url, { galleryUrl: url, taskId: '', taskStatus: 'pending', progressCurrent: 0, progressTotal: 0 });
-        toast.addToast('success', t('tasks.toast.enqueued', { title: item.title }));
-      }).catch((e) => { toast.addToast('error', t('common.error', { message: String(e) })); });
+      try {
+        const taskId = await api.taskEnqueueEhentaiGallery(cookie ?? '', url, item.title);
+        store.setStatus(url, { galleryUrl: url, taskId, taskStatus: 'pending', progressCurrent: 0, progressTotal: 1 });
+        toast.addToast('success', t('eh.browse.queued', { title: item.title }));
+      } catch (e) { toast.addToast('error', t('common.error', { message: String(e) })); }
     }
   }
 
@@ -54,7 +82,7 @@ export default function EHentai() {
       <div className="pa-6">
         <div className="d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
           <h2 className="text-h5" style={{ margin: 0 }}>{title}</h2><span className="spacer" />
-          <button className="md3-btn md3-btn--filled" disabled={loggingIn} onClick={startLogin}><MdiIcon path={mdiArrowTopRight} size={18} /> {t('eh.login.title')}</button>
+          <button className="md3-btn md3-btn--filled" disabled={loggingIn} onClick={startLogin}><MdiIcon path={mdiArrowTopRight} size={18} /> {t('eh.login.login')}</button>
         </div>
         <div className="text-center text-medium-emphasis mt-8">{t('eh.browse.loginRequired')}</div>
       </div>
@@ -67,10 +95,10 @@ export default function EHentai() {
         <h2 className="text-h5" style={{ margin: 0, whiteSpace: 'nowrap' }}>{title}</h2>
         <span className="spacer" />
         <label className="d-flex align-center gap-2" style={{ fontSize: 14, color: 'var(--md-sys-color-on-surface-variant)' }}>
-          <span>{t('eh.ex')}</span>
-          <input type="checkbox" checked={store.ex} onChange={(e) => store.setEx(e.target.checked)} style={{ accentColor: 'var(--md-sys-color-primary)' }} />
+          <span>{t('eh.exLabel')}</span>
+          <input type="checkbox" checked={store.ex} onChange={(e) => { store.setEx(e.target.checked); void store.reload(); }} style={{ accentColor: 'var(--md-sys-color-primary)' }} />
         </label>
-        <SearchBox value={store.keyword} placeholder={t('eh.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={() => store.reload()} />
+        <SearchBox value={store.keyword} placeholder={t('eh.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={onSearchCommit} />
         <button className="md3-btn md3-btn--tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('eh.login.relogin')}</button>
       </div>
 
@@ -88,7 +116,7 @@ export default function EHentai() {
         ))}
       </FeedList>
 
-      <FabButton icon={mdiRefresh} ariaLabel={t('common.refresh')} disabled={store.feed.loading} onClick={() => store.reload()} />
+      <FabButton icon={mdiRefresh} ariaLabel={t('lib.refresh')} disabled={store.feed.loading} onClick={() => store.reload()} />
     </div>
   );
 }
