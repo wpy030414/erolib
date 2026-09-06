@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { useInfiniteSentinel } from '@/hooks/useInfiniteSentinel';
 import { FeedLoading } from './FeedLoading';
 
@@ -10,9 +9,7 @@ interface FeedListProps {
 }
 
 export function FeedList({ feed, texts, onLoadMore, children }: FeedListProps) {
-  const sentinel = useRef<HTMLDivElement>(null);
-
-  useInfiniteSentinel(sentinel, onLoadMore, {
+  const sentinelRef = useInfiniteSentinel(() => onLoadMore(), {
     feedState: feed,
   });
 
@@ -28,7 +25,7 @@ export function FeedList({ feed, texts, onLoadMore, children }: FeedListProps) {
         <div className="feed-end text-center text-medium-emphasis">{texts.end}</div>
       )}
       {feed.loading && <FeedLoading>{texts.loadingMore}</FeedLoading>}
-      <div ref={sentinel} className="feed-sentinel" />
+      <div ref={sentinelRef} className="feed-sentinel" />
     </div>
   );
 }

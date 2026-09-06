@@ -1,56 +1,21 @@
-import { useState, useRef, useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
-export type MdMenuElement = HTMLElement & { show: () => void; close: () => void; open: boolean };
-
+/** Context-menu state shared by the Home and Library grids: which book's
+ *  menu is open (one at a time) and which book's collection picker is
+ *  showing. Menu items render through the shared <BookMenu> component. */
 export function useBookMenu() {
-  const [menuOpen, setMenuOpen] = useState<Record<string, boolean>>({});
-  const menuRefs = useRef<Map<string, MdMenuElement | null>>(new Map());
+  const [openBookId, setOpenBookId] = useState<string | null>(null);
   const [pickerBookId, setPickerBookId] = useState<string | null>(null);
 
-  const setMenuRef = useCallback((bookId: string, el: MdMenuElement | null) => {
-    menuRefs.current.set(bookId, el);
-  }, []);
+  const openMenu = useCallback((bookId: string) => setOpenBookId(bookId), []);
+  const closeMenu = useCallback(() => setOpenBookId(null), []);
 
-  const openMenu = useCallback((bookId: string) => {
-    setMenuOpen((prev) => ({ ...prev, [bookId]: true }));
-    const el = menuRefs.current.get(bookId);
-    if (el) el.show();
-  }, []);
-
-  const closeMenu = useCallback((bookId: string) => {
-    setMenuOpen((prev) => ({ ...prev, [bookId]: false }));
-    const el = menuRefs.current.get(bookId);
-    if (el?.close) el.close();
-  }, []);
-
+  /** Open the picker for a book (closing the menu); an empty id closes the
+   *  picker — views pass '' from the picker's onClose. */
   const openCollectionPicker = useCallback((bookId: string) => {
-    closeMenu(bookId);
-    setPickerBookId(bookId);
-  }, [closeMenu]);
-
-  const cleanupBook = useCallback((bookId: string) => {
-    menuRefs.current.delete(bookId);
-    setMenuOpen((prev) => {
-      const next = { ...prev };
-      delete next[bookId];
-      return next;
-    });
+    setOpenBookId(null);
+    setPickerBookId(bookId || null);
   }, []);
 
-  const clearAll = useCallback(() => {
-    menuRefs.current.clear();
-    setMenuOpen({});
-  }, []);
-
-  return {
-    menuOpen,
-    menuRefs,
-    pickerBookId,
-    setMenuRef,
-    openMenu,
-    closeMenu,
-    openCollectionPicker,
-    cleanupBook,
-    clearAll,
-  };
+  return { openBookId, pickerBookId, openMenu, closeMenu, openCollectionPicker };
 }

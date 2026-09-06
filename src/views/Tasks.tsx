@@ -22,18 +22,26 @@ export default function Tasks() {
   const toast = useToastStore();
   const collectionsStore = useCollectionsStore();
   const [redownloadingId, setRedownloadingId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const hasCompleted = taskStore.tasks.some((t) => t.status === 'completed');
   const hasRetryable = taskStore.tasks.some((t) => t.status === 'failed' || t.status === 'paused');
 
   useEffect(() => { void taskStore.init(); }, []);
 
   function progressPercent(item: TaskItem): number {
-    if (item.progress_total <= 0) return 0;
-    return Math.round((item.progress_current / item.progress_total) * 100);
+    // Unknown total counts as complete; never exceed 100%.
+    if (item.progress_total <= 0) return 100;
+    return Math.min(100, Math.round((item.progress_current / item.progress_total) * 100));
   }
 
+  /**
+   * Task titles are formatted as "{Source}: {actual book title}" (e.g.
+   * "ASMHentai: ある作品"). Strip the first "Prefix: " segment so the search
+   * matches the bare book title registered in the library.
+   */
   function extractBookTitle(taskTitle: string): string {
-    return taskTitle.replace(/^(Pixiv|EHentai|AHentai|NiceCat):\s*/, '');
+    return taskTitle.replace(/^[A-Za-z]+:\s*/, '');
   }
 
   async function viewInLibrary(taskTitle: string) {
@@ -43,23 +51,52 @@ export default function Tasks() {
   }
 
   async function onClearCompleted() {
-    const count = await taskStore.clearCompleted();
+    setClearing(true);
+    try {
+      const before = taskStore.tasks.filter((tk) => tk.status === 'completed').length;
+      await taskStore.clearCompleted();
+      toast.addToast('info', t('tasks.toast.cleared', { count: before }));
+    } catch (e) {
+      toast.addToast('error', t('common.error', { message: String(e) }));
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  async function onRetryAll() {
+    setRetrying(true);
+    try {
+      await taskStore.retryAll();
+      toast.addToast('info', t('tasks.toast.retried'));
+    } catch (e) {
+      toast.addToast('error', t('common.error', { message: String(e) }));
+    } finally {
+      setRetrying(false);
+    }
   }
 
   async function onRedownload(item: TaskItem) {
+    // Global debounce: only one re-download at a time.
     if (redownloadingId) return;
     setRedownloadingId(item.id);
     try {
       const action = await taskStore.redownloadTask(item.id);
-      if (action === 'already_complete') toast.addToast('info', t('tasks.toast.alreadyComplete'));
-      else toast.addToast('success', t('tasks.toast.redownloaded'));
-    } catch (e) { toast.addToast('error', String(e)); }
+      const title = extractBookTitle(item.title);
+      if (action === 'already_complete') toast.addToast('info', t('tasks.toast.alreadyComplete', { title }));
+      else toast.addToast('success', t('tasks.toast.redownloadStarted', { title }));
+    } catch (e) { toast.addToast('error', t('tasks.toast.redownloadFailed', { message: String(e) })); }
     finally { setRedownloadingId(null); }
   }
 
   async function copyLogs(item: TaskItem) {
-    try { await writeText(item.logs.join('\n')); }
-    catch { /* ignore */ }
+    if (!item.logs.length) return;
+    try {
+      await writeText(item.logs.join('\n'));
+      toast.addToast('success', t('tasks.logs.copied'));
+    } catch (e) {
+      console.error('[Tasks] copyLogs failed:', e);
+      toast.addToast('error', t('tasks.logs.copyFailed'));
+    }
   }
 
   const statusColor: Record<string, string> = {
@@ -128,7 +165,7 @@ export default function Tasks() {
                 </M3eButton>
               )}
               {item.status === 'completed' && (
-                <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void onRedownload(item); }} style={{ fontSize: 13 }}>
+                <M3eButton variant="tonal" disabled={redownloadingId === item.id} onClick={(e) => { e.stopPropagation(); void onRedownload(item); }} style={{ fontSize: 13 }}>
                   <MdiIcon path={mdiDownload} size={18} /> {t('tasks.actions.redownload')}
                 </M3eButton>
               )}
@@ -137,18 +174,23 @@ export default function Tasks() {
                   <MdiIcon path={mdiDelete} size={18} /> {t('tasks.actions.remove')}
                 </M3eButton>
               )}
-              {(item.status === 'running' || item.status === 'paused') && item.speed > 0 && (
-                <span style={{ fontSize: 12, marginLeft: 'auto', color: 'var(--md-sys-color-on-surface-variant)' }}>
-                  {formatSpeed(item.speed, t)} · {formatBytes(item.total_bytes, t)}
-                </span>
-              )}
             </div>
+            {item.status === 'running' && (
+              <span className="task-speed" style={{ fontSize: 12, color: 'var(--md-sys-color-on-surface-variant)' }}>
+                {formatSpeed(item.speed, t)}
+              </span>
+            )}
+            {item.status === 'completed' && (
+              <span className="task-speed" style={{ fontSize: 12, color: 'var(--md-sys-color-on-surface-variant)' }}>
+                {t('tasks.summary', { size: formatBytes(item.total_bytes, t), time: formatDuration(item.elapsed_ms, t) })}
+              </span>
+            )}
           </div>
         ))}
       </div>
       <>
-      {hasCompleted && <FabButton icon={mdiBroom} ariaLabel={t('tasks.actions.clearCompleted')} onClick={() => { void onClearCompleted(); }} />}
-      {hasRetryable && <FabButton icon={mdiRestart} ariaLabel={t('tasks.actions.retryAll')} onClick={() => { void taskStore.retryAll(); }} style={hasCompleted ? { bottom: 96 } : undefined} />}
+      {hasRetryable && <FabButton icon={mdiRestart} ariaLabel={t('tasks.actions.retryAll')} disabled={retrying} style={{ bottom: 96 }} onClick={() => { void onRetryAll(); }} />}
+      {hasCompleted && <FabButton icon={mdiBroom} ariaLabel={t('tasks.actions.clearCompleted')} disabled={clearing} onClick={() => { void onClearCompleted(); }} />}
       </>
     </div>
   );

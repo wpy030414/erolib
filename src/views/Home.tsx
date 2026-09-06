@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '@/hooks/useI18n';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/services/api';
@@ -8,6 +8,7 @@ import { useBookMenu } from '@/hooks/useBookMenu';
 import { MdiIcon } from '@/components/MdiIcon';
 import { SourceCard } from '@/components/SourceCard';
 import { WallCover } from '@/components/WallCover';
+import { BookMenu } from '@/components/BookMenu';
 import {
   mdiContentSave, mdiDelete, mdiInformationOutline, mdiPlaylistPlus,
 } from '@mdi/js';
@@ -25,9 +26,9 @@ export default function Home() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToastStore();
-  const { menuOpen, closeMenu, openMenu, openCollectionPicker, pickerBookId, clearAll } = useBookMenu();
-  const metaDialogRef = useRef<{ open: (b: Book) => void }>(null);
-  const exportDialogRef = useRef<{ open: (b: Book) => void }>(null);
+  const { openBookId, pickerBookId, openMenu, closeMenu, openCollectionPicker } = useBookMenu();
+  const metaDialogRef = useRef<BookMetaDialogHandle>(null);
+  const exportDialogRef = useRef<BookExportDialogHandle>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +36,7 @@ export default function Home() {
   const [recent, setRecent] = useState<Book[]>([]);
   const [library, setLibrary] = useState<Book[]>([]);
   const [coverMap, setCoverMap] = useState<Record<string, string | null>>({});
-  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const pendingCovers = useRef(new Set<string>());
   const disposalsRef = useRef<Array<() => void>>([]);
 
   const totalMinutes = totalMs / 60000;
@@ -47,43 +48,41 @@ export default function Home() {
   const wallBooks = shuffledLibrary.slice(0, WALL_SLOTS);
 
   async function loadCover(book: Book): Promise<void> {
-    if (book.id in coverMap) return;
+    if (book.id in coverMap || pendingCovers.current.has(book.id)) return;
+    pendingCovers.current.add(book.id);
     setCoverMap((prev) => ({ ...prev, [book.id]: null }));
-    let alive = true; let url: string | null = null;
+    let url: string | null = null;
     try {
       const key = book.source_post_id || book.id;
       let blob = await getThumb(key);
-      if (!blob) { const bytes = await api.getBookCoverThumb(book.id); if (!alive) return; blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }); void setThumb(key, blob); }
-      if (!alive) return; url = URL.createObjectURL(blob);
-      if (alive) setCoverMap((prev) => ({ ...prev, [book.id]: url }));
+      if (!blob) { const bytes = await api.getBookCoverThumb(book.id); blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }); void setThumb(key, blob); }
+      url = URL.createObjectURL(blob);
+      setCoverMap((prev) => ({ ...prev, [book.id]: url }));
     } catch { /* leave null */ }
-    disposalsRef.current.push(() => { alive = false; if (url) URL.revokeObjectURL(url); });
+    finally {
+      pendingCovers.current.delete(book.id);
+      disposalsRef.current.push(() => { if (url) URL.revokeObjectURL(url); });
+    }
   }
 
-  // Fix: use lib directly from promise result, not wallBooks from state (which is stale)
   useEffect(() => {
     void (async () => {
       try {
         const [ms, rec, lib] = await Promise.all([api.getWeeklyReadingMs(), api.listRecentBooks(12), api.listBooks()]);
         setTotalMs(ms); setRecent(rec); setLibrary(lib);
-        // Load covers using the fresh lib/recent, not the stale state
-        for (const b of rec) await loadCover(b);
+        // Load covers concurrently using the fresh lists (same wall sampling
+        // as the render: hash sort → first 21).
         const shuffled = [...lib].sort((a, b) => hashU32(a.id) - hashU32(b.id));
-        for (const b of shuffled.slice(0, WALL_SLOTS)) await loadCover(b);
+        await Promise.all([...rec, ...shuffled.slice(0, WALL_SLOTS)].map((b) => loadCover(b)));
       } catch (e) { setError(t('common.error', { message: String(e) })); }
       finally { setLoading(false); }
     })();
-    return () => { disposalsRef.current.forEach((d) => d()); clearAll(); };
+    return () => { disposalsRef.current.forEach((d) => d()); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const openContextMenu = useCallback((bookId: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    setMenuPos({ x: e.clientX, y: e.clientY });
-    openMenu(bookId);
-  }, [openMenu]);
-
   async function deleteBookItem(book: Book) {
-    closeMenu(book.id);
+    closeMenu();
     try {
       await api.deleteBook(book.id); void deleteThumb(book.id);
       setCoverMap((prev) => { const next = { ...prev }; delete next[book.id]; return next; });
@@ -91,22 +90,31 @@ export default function Home() {
       const oldIds = new Set(recent.map((b) => b.id));
       const newcomers = fresh.filter((b) => !oldIds.has(b.id));
       setRecent(fresh);
-      for (const b of newcomers) await loadCover(b);
+      await Promise.all(newcomers.map((b) => loadCover(b)));
       toast.addToast('success', t('lib.deleted', { title: book.title }));
     } catch (e) { toast.addToast('error', t('lib.deleteFailed', { error: String(e) })); }
   }
 
-  if (loading) return (
-    <div className="pa-6"><div className="home-loading"><svg className="spinner" style={{ color: 'var(--md-sys-color-primary)' }} viewBox="0 0 50 50"><circle className="spinner-track" cx="25" cy="25" r="20" /><circle className="spinner-arc" cx="25" cy="25" r="20" /></svg></div></div>
+  // Header stays rendered through loading / error so the page chrome never
+  // flashes away (Vue template keeps it outside the v-if/v-else-if chain).
+  const header = (
+    <div className="home-header d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
+      <h2 className="text-h5 home-header__title" style={{ margin: 0 }}>{t('nav.home')}</h2>
+      <span className="spacer" />
+    </div>
   );
-  if (error) return <div className="pa-6"><div className="error-state"><p className="error-state__msg">{error}</p></div></div>;
+
+  if (loading) return (
+    <div className="pa-6">
+      {header}
+      <div className="home-loading"><svg className="spinner" style={{ color: 'var(--md-sys-color-primary)' }} viewBox="0 0 50 50"><circle className="spinner-track" cx="25" cy="25" r="20" /><circle className="spinner-arc" cx="25" cy="25" r="20" /></svg></div>
+    </div>
+  );
+  if (error) return <div className="pa-6">{header}<div className="error-state"><p className="error-state__msg">{error}</p></div></div>;
 
   return (
     <div className="pa-6">
-      <div className="home-header d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
-        <h2 className="text-h5 home-header__title" style={{ margin: 0 }}>{t('nav.home')}</h2>
-        <span className="spacer" />
-      </div>
+      {header}
       <section className="hero">
         <div className="hero__text">
           <div className="hero__icon" aria-hidden="true">⏱</div>
@@ -124,24 +132,18 @@ export default function Home() {
             {recent.map((book) => (
               <div key={book.id}>
                 <SourceCard id={`home-recent-${book.id}`} title={book.title} pageCount={book.page_count} subtitle={book.author} cover={coverMap[book.id] ?? null}
-                  onClick={() => navigate(`/reader/${book.id}`)} onContextMenu={(e) => openContextMenu(book.id, e)} />
-                {menuOpen[book.id] && (
-                  <div style={{ position: 'fixed', left: menuPos.x, top: menuPos.y, zIndex: 1000, background: 'var(--md-sys-color-surface-container)', borderRadius: 'var(--md-sys-shape-corner-medium)', boxShadow: 'var(--md-sys-elevation-level3)', padding: '8px 0', minWidth: 180 }}>
-                    {[
-                      { icon: mdiPlaylistPlus, label: t('lib.collections.addTo'), action: () => openCollectionPicker(book.id) },
-                      { icon: mdiInformationOutline, label: t('lib.viewMeta'), action: () => { closeMenu(book.id); metaDialogRef.current?.open(book); } },
-                      { icon: mdiContentSave, label: t('lib.save'), action: () => { closeMenu(book.id); exportDialogRef.current?.open(book); } },
-                      { icon: mdiDelete, label: t('lib.delete'), action: () => deleteBookItem(book) },
-                    ].map((item, i) => (
-                      <div key={i} onClick={item.action} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', cursor: 'pointer', fontSize: 14 }}
-                        onMouseOver={(e) => (e.currentTarget.style.background = 'var(--md-sys-color-surface-container-highest)')} onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}>
-                        <MdiIcon path={item.icon} size={18} /><span>{item.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {/* Click-away backdrop */}
-                {menuOpen[book.id] && <div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onClick={() => closeMenu(book.id)} onContextMenu={(e) => { e.preventDefault(); closeMenu(book.id); }} />}
+                  onClick={() => navigate(`/reader/${book.id}`)} onContextMenu={(e) => { e.preventDefault(); openMenu(book.id); }} />
+                <BookMenu
+                  anchorId={`home-recent-${book.id}`}
+                  open={openBookId === book.id}
+                  onClose={closeMenu}
+                  items={[
+                    { icon: mdiPlaylistPlus, label: t('lib.collections.addTo'), action: () => openCollectionPicker(book.id) },
+                    { icon: mdiInformationOutline, label: t('lib.viewMeta'), action: () => metaDialogRef.current?.open(book) },
+                    { icon: mdiContentSave, label: t('lib.save'), action: () => exportDialogRef.current?.open(book) },
+                    { icon: mdiDelete, label: t('lib.delete'), action: () => void deleteBookItem(book) },
+                  ]}
+                />
               </div>
             ))}
           </div>

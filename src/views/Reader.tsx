@@ -241,7 +241,7 @@ export default function Reader() {
     }
     warnedNoSessionRef.current = false;
     const delta = Math.max(0, Math.round((readAccRef.current - readSessionBaselineRef.current) * 1000));
-    void api.recordReading(bookId, delta).catch(() => {});
+    void api.recordReading(bookId, readSessionIdRef.current!, delta).catch(() => {});
   }, []);
 
   const startReadTime = useCallback((bookId: string) => {
