@@ -8,6 +8,8 @@ import { useI18n } from '@/hooks/useI18n';
 import { useThemeStore } from '@/stores/theme';
 import { useToastStore } from '@/stores/toast';
 import { MdiIcon } from '@/components/MdiIcon';
+import { MenuSurface, type MenuSurfaceItem } from '@/components/MenuSurface';
+import { M3eSlider, M3eSliderThumb } from '@m3e/react/slider';
 import {
   mdiArrowLeft, mdiImageSizeSelectActual, mdiImageSizeSelectLarge,
   mdiPalette, mdiContentSave, mdiDelete,
@@ -309,13 +311,11 @@ export default function Reader() {
     setMenuOpen(true);
   }, []);
 
-  // Escape closes the menu (md-menu semantics).
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [menuOpen]);
+  // md-slider 语义对齐：拖动与键盘都从 input/change 双事件回读（对齐 Vue bindSlider）。
+  const onSliderValue = useCallback((e: { currentTarget: unknown }) => {
+    const v = (e.currentTarget as { thumb?: { value: number | null } }).thumb?.value;
+    if (v != null && !Number.isNaN(v)) goTo(v);
+  }, [goTo]);
 
   const onSetAsTheme = useCallback(async () => {
     setMenuOpen(false);
@@ -589,41 +589,32 @@ export default function Reader() {
       {!isAnimated && (
         <div className="reader-footer d-flex align-center ga-3 px-4 py-2">
           <span className="reader-page-label text-body-2">{current + 1}</span>
-          <input
-            type="range" className="flex-grow-1" style={{ accentColor: 'var(--md-sys-color-primary)' }}
-            min={0} max={pageCount != null ? Math.max(0, pageCount - 1) : 0} step={1}
-            value={current} onChange={(e) => goTo(Number(e.target.value))}
-          />
+          {pageCount != null && (
+            <M3eSlider
+              className="flex-grow-1"
+              min={0} max={Math.max(0, pageCount - 1)} step={1} discrete
+              onInput={onSliderValue} onChange={onSliderValue}
+            >
+              <M3eSliderThumb value={current} />
+            </M3eSlider>
+          )}
           <span className="reader-page-label text-body-2">{pageCount ?? '?'}</span>
         </div>
       )}
 
-      {/* Context menu */}
-      {menuOpen && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setMenuOpen(false)} onContextMenu={(e) => { e.preventDefault(); setMenuOpen(false); }} />
-          <div style={{
-            position: 'fixed', left: menuPos.x, top: menuPos.y, zIndex: 9999,
-            background: 'var(--md-sys-color-surface-container-high)',
-            borderRadius: 'var(--md-sys-shape-corner-small)', boxShadow: 'var(--md-sys-elevation-level3)',
-            minWidth: 180, padding: '4px 0',
-          }}>
-            <button className="icon-btn" onClick={onSetAsTheme} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '10px 16px', border: 'none', background: 'transparent', color: 'var(--md-sys-color-on-surface)', cursor: 'pointer', fontSize: 14, borderRadius: 0 }}>
-              <MdiIcon path={mdiPalette} size={18} /> {t('reader.menu.setAsTheme')}
-            </button>
-            {!isAnimated && (
-              <button className="icon-btn" onClick={onSaveImage} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '10px 16px', border: 'none', background: 'transparent', color: 'var(--md-sys-color-on-surface)', cursor: 'pointer', fontSize: 14, borderRadius: 0 }}>
-                <MdiIcon path={mdiContentSave} size={18} /> {t('reader.menu.saveImage')}
-              </button>
-            )}
-            {!isAnimated && (
-              <button className="icon-btn" onClick={onDeletePage} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '10px 16px', border: 'none', background: 'transparent', color: 'var(--md-sys-color-error)', cursor: 'pointer', fontSize: 14, borderRadius: 0 }}>
-                <MdiIcon path={mdiDelete} size={18} /> {t('reader.menu.deletePage')}
-              </button>
-            )}
-          </div>
-        </>
-      )}
+      {/* Context menu — md-menu 语义对齐，进出场动画由 MenuSurface 内置 */}
+      <MenuSurface
+        open={menuOpen} onClose={() => setMenuOpen(false)}
+        x={menuPos.x} y={menuPos.y} transformOrigin="top left" minWidth={180}
+        items={(() => {
+          const items: MenuSurfaceItem[] = [{ icon: mdiPalette, label: t('reader.menu.setAsTheme'), action: () => { void onSetAsTheme(); } }];
+          if (!isAnimated) {
+            items.push({ icon: mdiContentSave, label: t('reader.menu.saveImage'), action: () => { void onSaveImage(); } });
+            items.push({ icon: mdiDelete, label: t('reader.menu.deletePage'), danger: true, action: () => { void onDeletePage(); } });
+          }
+          return items;
+        })()}
+      />
     </div>
   );
 }

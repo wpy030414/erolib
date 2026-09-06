@@ -489,7 +489,7 @@ img {
 
 /* ---- WallCover ---- */
 .wall { --tile: calc(100cqw / 3); position: absolute; right: 0; top: 50%; width: 100%; aspect-ratio: 1/1; transform: translateY(-50%); }
-.wall__cols { position: absolute; right: 0; top: 50%; height: 0; transform-origin: right center; transform: rotate(45deg); display: flex; flex-direction: row; }
+.wall__cols { position: absolute; right: 0; top: 50%; height: 0; transform-origin: right center; transform: rotate(45deg); display: flex; flex-direction: row; align-items: flex-start; gap: 0; }
 .wall__col { flex: 0 0 auto; width: var(--tile); height: calc(var(--tile) * 7); overflow: hidden; }
 .wall__track { display: flex; flex-direction: column; gap: 0; height: calc(var(--tile) * 14); width: var(--tile); }
 .wall__col--down .wall__track { animation: wall-down 40s linear infinite; }
@@ -512,7 +512,8 @@ img {
 .export-dialog__subtitle { margin: 0; padding: 12px 20px 4px; color: var(--md-sys-color-on-surface-variant); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .export-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 20px 20px; }
 .format-options { display: flex; flex-direction: column; gap: 8px; padding: 8px 20px 16px; }
-.format-option { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-medium); background: transparent; color: var(--md-sys-color-on-surface); cursor: pointer; text-align: left; }
+.format-option { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-medium); background: transparent; color: var(--md-sys-color-on-surface); cursor: pointer; text-align: left; transition: border-color 0.15s ease, background-color 0.15s ease; }
+.format-option:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); }
 .format-option--selected { border-color: var(--md-sys-color-primary); background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent); }
 .export-progress { display: flex; flex-direction: column; gap: 10px; padding: 16px 20px 24px; }
 .export-progress__label { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
@@ -568,7 +569,7 @@ img {
 .drawer-item__input { flex: 1; padding: 0; margin: 0; border: none; border-radius: 0; background: transparent; color: inherit; font: var(--md-sys-typescale-body-large-weight) var(--md-sys-typescale-body-large-size) / var(--md-sys-typescale-body-large-line-height) var(--md-sys-typescale-font); outline: none; min-width: 0; }
 .drawer-empty { padding: 24px 12px; text-align: center; color: var(--md-sys-color-on-surface-variant); font: var(--md-sys-typescale-body-medium-weight) var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font); }
 .drawer-fab-wrap { display: flex; justify-content: center; padding: 16px 20px 20px; flex-shrink: 0; position: relative; z-index: 1; }
-.drawer-fab { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border: none; border-radius: var(--md-sys-shape-corner-full); background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); box-shadow: var(--md-sys-elevation-level3); cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease; }
+.drawer-fab { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border: none; border-radius: var(--md-sys-shape-corner-full); background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); box-shadow: var(--md-sys-elevation-level3); cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease, background-color 0.2s ease; }
 .drawer-fab:hover { box-shadow: var(--md-sys-elevation-level4); transform: scale(1.05); }
 .drawer-fab--delete { background: var(--md-sys-color-error); color: var(--md-sys-color-on-error); }
 
@@ -700,7 +701,104 @@ img {
   animation: toast-in 0.2s ease;
 }
 
+/* Vue <TransitionGroup> 语义：离场 0.15s 淡出下滑，期间保持占位避免兄弟跳位。 */
+.toast--leaving {
+  animation: toast-out 0.15s ease forwards;
+}
+
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(16px); }
+}
+
+/* ── 弹出菜单（md-menu 语义对齐：进出场动效 + 项 state-layer 渐变）── */
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--md-sys-color-surface-container);
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-level3);
+  padding: 8px 0;
+  min-width: 200px;
+  outline: none;
+}
+.context-menu--enter { animation: menu-in 0.15s var(--md-sys-motion-easing-emphasized-decelerate) both; }
+.context-menu--exit {
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.1s var(--md-sys-motion-easing-emphasized-accelerate), transform 0.1s var(--md-sys-motion-easing-emphasized-accelerate);
+}
+@keyframes menu-in {
+  from { opacity: 0; transform: scale(0.9); }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--md-sys-color-on-surface);
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+.menu-item:hover {
+  background: var(--md-sys-color-surface-container-highest);
+}
+
+/* ── 集合抽屉微动效/层级（对齐 Vue CollectionDialog scoped styles）── */
+.drawer-item--active:hover { background: color-mix(in srgb, var(--md-sys-color-on-secondary-container) 12%, var(--md-sys-color-secondary-container)); }
+.drawer-item--renaming { z-index: 3; background: var(--md-sys-color-surface-container-low); border-radius: var(--md-sys-shape-corner-medium); }
+.drawer-item--dimmed { opacity: 0.4; pointer-events: none; }
+.drawer-item__input:focus { caret-color: var(--md-sys-color-primary); }
+.drawer-fab-wrap--elevated { z-index: 101; }
+.delete-dialog__content {
+  font: var(--md-sys-typescale-body-medium-weight) var(--md-sys-typescale-body-medium-size) /
+    var(--md-sys-typescale-body-medium-line-height) var(--md-sys-typescale-font);
+}
+
+/* ── 任务速度（对齐 Vue Tasks scoped styles）── */
+.task-speed {
+  font: 500 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-sys-typescale-font);
+  font-variant-numeric: tabular-nums;
+  color: var(--md-sys-color-on-surface-variant);
+  flex-shrink: 0;
+  min-width: 78px;
+  text-align: right;
+}
+
+/* ── 任务日志展开淡入（对齐 Vue <details> 展开时的 0.2s opacity 过渡）── */
+.task-logs-body { animation: logs-in 0.2s ease; }
+@keyframes logs-in {
+  from { opacity: 0; }
+}
+
+/* ── 自定义主题壁纸（对齐 Vue App.vue：右下角图片向左上淡出）──
+   Reader 页强制自身暗色主题，与半透明叠加冲突，故仅非 Reader 页显示。 */
+.erolib-app {
+  min-height: 100vh;
+  background: var(--md-sys-color-surface);
+}
+.app-main {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.theme-bg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--theme-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.02) 80%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0.02) 80%);
 }

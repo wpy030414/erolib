@@ -40,7 +40,10 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
     });
   }
 
-  async function handleClose() {
+  /** Dialog 的 closed 事件（关闭动画播完）触发：对齐 Vue @close —— 先播
+   *  关闭动画，动画结束后才做 store 同步并通知父级卸载。确认、Esc、遮罩
+   *  三条关闭路径在此汇合。 */
+  async function handleClosed() {
     const added: string[] = [];
     const removed: string[] = [];
     for (const id of checkedIds) {
@@ -53,12 +56,11 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
       ...added.map((cid) => store.addBookToCollection(cid, bookId)),
       ...removed.map((cid) => store.removeBookFromCollection(cid, bookId)),
     ]);
-    setOpen(false);
     onClose();
   }
 
   return (
-    <M3eDialog open={open} onClosed={handleClose}>
+    <M3eDialog open={open} onClosed={handleClosed}>
       <div slot="headline">{t('lib.collections.addToTitle')}</div>
       <div slot="content" className="picker__content">
         {!store.collections.length ? (
@@ -78,7 +80,8 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
         )}
       </div>
       <div slot="actions">
-        <M3eButton variant="filled" onClick={handleClose}>
+        {/* 先关闭（播放内置关闭动画），closed 事件里再做同步 */}
+        <M3eButton variant="filled" onClick={() => setOpen(false)}>
           {t('common.confirm')}
         </M3eButton>
       </div>

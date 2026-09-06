@@ -133,8 +133,9 @@ export default function Tasks() {
               </div>
               <span style={{ fontSize: 12, minWidth: 36, textAlign: 'right' }}>{progressPercent(item)}%</span>
             </div>
+            {/* task-logs-wrap 语义对齐：选中展开时 0.2s 淡入 */}
             {taskStore.selectedTaskId === item.id && (
-              <div onContextMenu={(e) => { e.preventDefault(); copyLogs(item); }} style={{ maxHeight: 200, overflowY: 'auto', fontSize: 12, padding: 8, borderRadius: 8, background: 'var(--md-sys-color-surface-container)', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>
+              <div className="task-logs-body" onContextMenu={(e) => { e.preventDefault(); copyLogs(item); }} style={{ maxHeight: 200, overflowY: 'auto', fontSize: 12, padding: 8, borderRadius: 8, background: 'var(--md-sys-color-surface-container)', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>
                 {item.logs.length > 0 ? item.logs.map((line, i) => <div key={i}>{line}</div>) : <div>{t('tasks.detail.noLogs')}</div>}
               </div>
             )}

@@ -14,10 +14,11 @@ import { M3eDialog } from '@m3e/react/dialog';
 import { M3eButton } from '@m3e/react/button';
 
 interface CollectionDialogProps {
+  open: boolean;
   onClose: () => void;
 }
 
-export function CollectionDialog({ onClose }: CollectionDialogProps) {
+export function CollectionDialog({ open, onClose }: CollectionDialogProps) {
   const { t } = useI18n();
   const store = useCollectionsStore();
   const toast = useToastStore();
@@ -31,10 +32,14 @@ export function CollectionDialog({ onClose }: CollectionDialogProps) {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteTargetName, setDeleteTargetName] = useState('');
 
+  // Vue watch(modelValue) 语义对齐：打开时加载集合并刷新计数（组件常驻挂载，
+  // 不在挂载时预取）。
   useEffect(() => {
+    if (!open) return;
     store.ensureLoaded();
     refreshCounts();
-  }, [store]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   async function refreshCounts() {
     api.searchBooks({ sort_by: 'date', sort_order: 'desc', page: 1, page_size: 1 })
@@ -135,11 +140,12 @@ export function CollectionDialog({ onClose }: CollectionDialogProps) {
 
   return createPortal(
     <>
+      {/* 抽屉 0.25s 滑入/滑出 + 遮罩淡入/淡出：类名随 open 切换，组件保持挂载。 */}
       <div
-        className="drawer-overlay drawer-overlay--visible"
+        className={`drawer-overlay${open ? ' drawer-overlay--visible' : ''}`}
         onClick={onClose}
       />
-      <aside className="collection-drawer collection-drawer--open">
+      <aside className={`collection-drawer${open ? ' collection-drawer--open' : ''}`}>
         <h2 className="drawer-title">{t('lib.collections.title')}</h2>
 
         <div className={`drawer-list${renamingId ? ' drawer-list--masked' : ''}`}>

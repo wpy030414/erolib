@@ -183,7 +183,8 @@ export default function Library() {
       )}
 
       <FabButton icon={mdiPlaylistPlay} ariaLabel={t('lib.collections.manage')} onClick={() => setShowCollectionDialog(true)} />
-      {showCollectionDialog && <CollectionDialog onClose={() => setShowCollectionDialog(false)} />}
+      {/* 抽屉常驻挂载，open 驱动滑入/滑出（Vue 语义） */}
+      <CollectionDialog open={showCollectionDialog} onClose={() => setShowCollectionDialog(false)} />
       {pickerBookId && <BookCollectionPicker bookId={pickerBookId} onClose={() => openCollectionPicker('')} />}
       <BookMetaDialog ref={metaDialogRef} />
       <BookExportDialog ref={exportDialogRef} />
