@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 use crate::commands::cookies::{capture_all_cookies, has_ehentai_session};
 use crate::services::{EhentaiClient, GalleryListItem};
@@ -138,28 +138,9 @@ pub async fn ehentai_open_login_window(
     app_handle: AppHandle,
     session: State<'_, Arc<EhentaiSession>>,
 ) -> Result<(), String> {
-    let login_url: Url = "https://forums.e-hentai.org/index.php?act=Login"
-        .parse()
-        .map_err(|e| format!("bad login url: {e}"))?;
-
-    let builder = tauri::WebviewWindowBuilder::new(
-        &app_handle,
-        "ehentai-login",
-        WebviewUrl::External(login_url),
-    )
-    .title("Login to e-hentai")
-    .inner_size(560.0, 760.0)
-    .center()
-    .resizable(true);
-
-    // Only apply the spellcheck script on macOS where the NSCorrectionPanel bug exists.
-    // On Windows, this can cause rendering issues or white screen.
-    #[cfg(target_os = "macos")]
-    let builder = builder.initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#);
-
-    let window = builder
-        .build()
-        .map_err(|e| format!("open login window: {e}"))?;
+    let window = crate::commands::cookies::adapter::EHENTAI
+        .open_login_window(&app_handle)
+        .map_err(|e| format!("open ehentai login window: {e}"))?;
 
     let win_label = window.label().to_string();
     let app_for_poll = app_handle.clone();
@@ -185,27 +166,17 @@ pub async fn ehentai_open_login_window(
                 Ok(u) => u,
                 Err(_) => continue,
             };
-            let host = url.host_str().unwrap_or("");
-            let on_eh =
-                host == "e-hentai.org" || host.ends_with(".e-hentai.org") || host == "exhentai.org"
-                    || host.ends_with(".exhentai.org");
-            // Never attempt cookie capture while the page is on
-            // forums.e-hentai.org (the login form is served from a Cloudflare-
-            // protected domain). Even after the Cloudflare challenge clears,
-            // the page may remove act=Login from the query via replaceState,
-            // which would let us fall through to capture_all_cookies and its
-            // JS eval redirect — blowing away the login form on Windows.
-            // Wait until the user has been redirected back to e-hentai.org or
-            // exhentai.org after a successful login before trying to capture.
-            if !on_eh || host == "forums.e-hentai.org" {
+            // The adapter predicate already excludes the Cloudflare-protected
+            // forums.e-hentai.org login-form host (see adapter::is_post_login).
+            if !crate::commands::cookies::adapter::EHENTAI.is_post_login(&url) {
                 continue;
             }
 
             // Try native cookie capture from the webview's own data store
             // (captures HttpOnly cookies too, though EHentai's are not HttpOnly).
             let app_clone = app_for_poll.clone();
-            if let Ok(Some(c)) = tauri::async_runtime::spawn_blocking(move || {
-                capture_all_cookies(&app_clone)
+            if let Ok(Some(c)) = tauri::async_runtime::spawn(async move {
+                capture_all_cookies(&app_clone).await
             })
             .await
             {
@@ -235,8 +206,8 @@ pub async fn ehentai_open_login_window(
             }
             tauri::async_runtime::spawn(async move {
                 let app_clone = app.clone();
-                if let Ok(Some(cookie)) = tauri::async_runtime::spawn_blocking(move || {
-                    capture_all_cookies(&app_clone)
+                if let Ok(Some(cookie)) = tauri::async_runtime::spawn(async move {
+                    capture_all_cookies(&app_clone).await
                 })
                 .await
                 {

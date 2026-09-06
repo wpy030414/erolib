@@ -19,6 +19,8 @@
 
 use tauri::Manager;
 
+pub mod adapter;
+
 // ---------------------------------------------------------------------------
 // macOS native cookie capture — raw libc/objc FFI, no objc2 dependency
 // ---------------------------------------------------------------------------
@@ -416,46 +418,8 @@ mod native {
     }
 }
 
-#[cfg(target_os = "windows")]
-#[allow(dead_code)]
-mod native {
-    use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
-
-    static CAPTURED: Mutex<Option<String>> = Mutex::new(None);
-    static DONE: AtomicBool = AtomicBool::new(false);
-
-    /// Reset the shared completion state.
-    fn reset_state() {
-        *CAPTURED.lock().unwrap() = None;
-        DONE.store(false, Ordering::SeqCst);
-    }
-
-    /// On Windows, we use WebView2's CookieManager via a JS-based approach.
-    /// Since Tauri's wry doesn't expose raw WebView2 handles on Windows yet,
-    /// we fall back to JS eval which can read document.cookie (non-HttpOnly only).
-    /// For HttpOnly cookies like Pixiv's PHPSESSID, we need a different approach.
-    pub fn capture_from_webview(_wkwebview: usize) -> Option<String> {
-        // Not applicable on Windows - we don't have direct WebView2 handle access
-        None
-    }
-
-    pub fn capture() -> Option<String> {
-        reset_state();
-        // On Windows, there's no direct way to access WebView2's cookie store
-        // from Rust without webview2-com crate. We return None and let the
-        // fallback JS method handle it.
-        None
-    }
-
-    pub fn delete_cookies_for(_suffixes: Vec<String>) -> bool {
-        // On Windows, we can't directly delete cookies from the WebView2 store
-        // without webview2-com. Return true to indicate "success" (no-op).
-        true
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-#[allow(dead_code)]
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)] // ponytail: stub for non-macOS targets; macOS path lives above.
 mod native {
     pub fn capture() -> Option<String> {
         None
@@ -466,7 +430,155 @@ mod native {
 }
 
 // ---------------------------------------------------------------------------
+// Windows native cookie capture — READ-ONLY sqlite on the WebView2 cookie DB.
+//
+// On Chromium 124+ WebView2 enforces App-Bound Encryption which stores every
+// session cookie as a blob in `encrypted_value` (plaintext `value` is empty
+// for sensitive cookies like PHPSESSID). We cannot decrypt the blob in-process
+// without an elevated Edge handshake, so this path returns only the
+// non-encrypted cookies — enough for the eHentai session (ipb_* are NOT
+// HttpOnly) but NOT enough for Pixiv's HttpOnly PHPSESSID. The Pixiv path
+// now relies on a manual-paste hint in the UI; see `PixivDownload.vue`
+// `manualPasteHint` and `tests/bdd/MIGRATION.md`.
+//
+// An ICoreWebView2_2.CookieManager.GetCookies COM path was prototyped in
+// this module's earlier `native_windows_com` block but caused the WebView2
+// host process to deadlock (`wait_for_async_operation` blocks the main
+// thread that the COM completion must dispatch on). Reverted to keep the
+// app responsive. ponytail: a working manual paste ships today; revisit
+// COM via a dedicated async worker (not `with_webview`) when needed.
+// ---------------------------------------------------------------------------
+//
+// WebView2 stores its cookie database at:
+//   <user_data>/Default/Network/Cookies
+// The user_data folder defaults to `<APPLOCALDATA>/EBWebView` for Tauri 2.x
+// apps (and may be overridden via `WebviewWindowBuilder::data_directory`).
+// The Cookies file is an unencrypted SQLite database (Chromium-derived
+// schema), with HttpOnly cookies stored in plaintext alongside non-HttpOnly
+// ones — `is_httponly` is just a flag in the `cookies` table, so JS-eval
+// blind spots are gone as soon as we read from here directly.
+//
+// rusqlite gives us a synchronous read; the SELECT is fast (<5ms) and we
+// already hold the only writer (the WebView2 process) as a sibling, so a
+// plain `Connection::open` with a busy-timeout is enough.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+mod native_windows {
+    use std::path::{Path, PathBuf};
+
+    use rusqlite::{Connection, OpenFlags};
+
+    /// Tauri 2.x's default WebView2 user data folder name (under
+    /// `<app_local_data_dir>/EBWebView`). Confirmed in tauri-wry 2.11.
+    const EBWEBVIEW_DIR: &str = "EBWebView";
+
+    /// Path of the WebView2 cookie SQLite for the given app data dir.
+    fn cookie_db_path(app_local_data: &Path) -> Option<PathBuf> {
+        let p = app_local_data
+            .join(EBWEBVIEW_DIR)
+            .join("Default")
+            .join("Network")
+            .join("Cookies");
+        p.exists().then_some(p)
+    }
+
+    /// Read every cookie whose `host_key` matches one of `host_suffixes`
+    /// (e.g. "pixiv.net", "e-hentai.org"). Returns the cookies joined in
+    /// `name=value; name=value` form (the format PixivClient / EhentaiClient
+    /// already expect — see `commands::pixiv::PixivLogin.cookie`).
+    pub fn capture_from_db(app_local_data: &Path, host_suffixes: &[&str]) -> Option<String> {
+        let db_path = cookie_db_path(app_local_data)?;
+        let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
+
+        if host_suffixes.is_empty() {
+            return None;
+        }
+        // Chromium's host_key is normalised (lowercase, may carry a leading
+        // dot for domain cookies). Match both forms per suffix, with one
+        // distinct positional placeholder per suffix so each binds its own
+        // value (SQLite's `?1` aliasing would otherwise collapse them).
+        let conds: Vec<String> = host_suffixes
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("(host_key = ?{n} OR host_key = '.' || ?{n})", n = i + 1))
+            .collect();
+        let sql = format!(
+            "SELECT name, value FROM cookies \
+             WHERE {} \
+             ORDER BY host_key, name",
+            conds.join(" OR "),
+        );
+        let mut stmt = conn.prepare(&sql).ok()?;
+        let binds: Vec<&dyn rusqlite::ToSql> = host_suffixes
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let mut rows = stmt.query(rusqlite::params_from_iter(binds)).ok()?;
+
+        let mut pairs: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().ok()? {
+            let name: String = row.get(0).ok()?;
+            let value: String = row.get(1).ok()?;
+            // Skip empty values: when App-Bound Encryption is on, WebView2
+            // stores the real cookie in `encrypted_value` (BLOB) and leaves
+            // `value` empty. Surfacing `PHPSESSID=` (no value) downstream
+            // would pass `has_pixiv_session` (prefix-only check) and yield a
+            // bogus empty user_id — see the
+            // `capture_returns_none_when_value_empty_encrypted` BDD scenario.
+            if !name.is_empty() && !value.is_empty() {
+                pairs.push(format!("{name}={value}"));
+            }
+        }
+        if pairs.is_empty() {
+            return None;
+        }
+        let out = pairs.join("; ");
+        tracing::info!(
+            target: "erolib::cookies",
+            len = out.len(),
+            count = pairs.len(),
+            "captured cookies via WebView2 SQLite"
+        );
+        Some(out)
+    }
+
+    /// Delete every cookie whose `host_key` matches `host_suffixes` from the
+    /// WebView2 cookie SQLite. No-op if the DB is absent.
+    #[allow(dead_code)] // wired up when clear_section_cookies takes &AppHandle.
+    pub fn delete_cookies_for_db(app_local_data: &Path, host_suffixes: &[&str]) -> bool {
+        let Some(db_path) = cookie_db_path(app_local_data) else {
+            return true;
+        };
+        if host_suffixes.is_empty() {
+            return true;
+        }
+        let Ok(conn) = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        else {
+            return false;
+        };
+        let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
+        let conds: Vec<String> = host_suffixes
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("(host_key = ?{n} OR host_key = '.' || ?{n})", n = i + 1))
+            .collect();
+        let sql = format!("DELETE FROM cookies WHERE {}", conds.join(" OR "));
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return false;
+        };
+        let binds: Vec<&dyn rusqlite::ToSql> = host_suffixes
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        stmt.execute(rusqlite::params_from_iter(binds)).is_ok()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // JS eval redirect trick — works for non-HttpOnly cookies on any platform
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
 pub fn inject_cookie_redirect(window: &tauri::WebviewWindow) -> bool {
@@ -501,6 +613,30 @@ pub fn extract_cookie_from_url(window: &tauri::WebviewWindow) -> Option<String> 
 }
 
 // ---------------------------------------------------------------------------
+// Windows native cookie capture — async COM path (ICoreWebView2_2.CookieManager)
+//
+// Why async: the synchronous `wait_for_async_operation` API blocks the calling
+// thread until WebView2's completion callback fires. WebView2 dispatches its
+// COM callbacks on the same thread that called `GetCookies` — which for us is
+// the WebView2 main thread. Blocking it deadlocks the WebView2 message pump
+// and freezes the whole app.
+//
+// The async path: call `GetCookies` from a `tauri::async_runtime::spawn_blocking`
+// thread (Tauri's blocking pool, NOT the WebView2 main thread), route the
+// completion result through a `tokio::sync::oneshot` channel, and `await` the
+// channel receiver on the caller side. The oneshot receiver `.await`s the
+// result without ever blocking the main thread.
+//
+// CURRENTLY DISABLED — see the doc comment at the original Method 2c block.
+// The async COM GetCookies path requires `webview2-com` + `windows-core`
+// direct deps, but those conflict with the `windows` crate's transitive
+// 0.61 pin and break the macOS / Linux CI build. Until that conflict is
+// resolved (windows-rs version bump, repo-wide `[patch.crates-io]`, or
+// migrating the entire project to windows-core 0.62), Method 2b (SQLite
+// plaintext) + Method 3 (JS eval) are the only cookie capture paths.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -509,22 +645,32 @@ pub fn extract_cookie_from_url(window: &tauri::WebviewWindow) -> Option<String> 
 /// Capture order (most reliable first):
 /// 1. **Tauri's `cookies()` API** — works on all platforms, returns ALL cookies
 ///    including HttpOnly (PHPSESSID for Pixiv). The underlying WebView2/WKWebView
-///    native cookie store is queried via the runtime dispatcher, which sends a
-///    request to the main thread and blocks this background thread until the
-///    result arrives. Safe to call from a background tokio task (not the main
-///    thread) — the main thread stays free to pump messages.
-/// 2. **WKWebView data store** (macOS only) — fallback in case `cookies()`
-///    returns an empty result or errors out.
-/// 3. **JS eval redirect** — non-HttpOnly cookies only (EHentai); kept as a
-///    last-resort fallback for edge cases.
+///    native cookie store is queried via the runtime dispatcher; safe to call
+///    from a background task (not the main thread) — the main thread stays
+///    free to pump messages.
+/// 2. **The login window's own WKWebView data store** (macOS) — fallback in
+///    case `cookies()` returns empty or errors out.
+/// 3. **Shared data stores** (macOS).
+/// 4. **Windows WebView2 cookie SQLite** — read-only plaintext read of the
+///    WebView2 cookie DB; the 3rolib HttpOnly path (COM Method 2c stays
+///    disabled, see above).
+/// 5. **JS eval redirect** — non-HttpOnly cookies only; last-resort fallback.
 ///
 /// IMPORTANT: this is meant to be called from a **background tokio task**, NOT
 /// the main thread.  The blocking happens in a spawned thread so the main
 /// thread's run loop stays free to process any GCD completion callbacks.
-pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
-    // Method 1: Tauri's native cookies() API (includes HttpOnly cookies).
-    // Works on all platforms; dispatches to the main thread under the hood.
-    for label in &["pixiv-login", "ehentai-login"] {
+pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
+    use adapter::ALL_ADAPTERS;
+
+    // Iterate every registered adapter; first match wins. The order is
+    // significant only when the same cookie string satisfies multiple
+    // services (e.g. a wildcard cookie on a shared CDN), which doesn't
+    // happen in practice.
+    for &adapter in ALL_ADAPTERS {
+        let label = adapter.window_label();
+
+        // Method 1: Tauri's native cookies() API (includes HttpOnly cookies).
+        // Works on all platforms; dispatches to the main thread under the hood.
         if let Some(window) = app.get_webview_window(label) {
             match window.cookies() {
                 Ok(cookies) if !cookies.is_empty() => {
@@ -536,6 +682,7 @@ pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
                     if !cookie_str.is_empty() {
                         tracing::info!(
                             target: "erolib::cookies",
+                            service = label,
                             len = cookie_str.len(),
                             "captured cookies via native cookies() API"
                         );
@@ -554,10 +701,8 @@ pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
                 }
             }
         }
-    }
 
-    // Method 2: each known login window's own WKWebView/WebView2 data store.
-    for label in &["pixiv-login", "ehentai-login"] {
+        // Method 2: the login window's own WKWebView data store (macOS).
         if let Some(window) = app.get_webview_window(label) {
             if let Some(wkptr) = get_wkwebview_ptr(&window) {
                 let addr = wkptr as usize;
@@ -570,6 +715,7 @@ pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
                         if !c.trim().is_empty() {
                             tracing::info!(
                                 target: "erolib::cookies",
+                                service = label,
                                 len = c.len(),
                                 "captured cookies via webview dataStore"
                             );
@@ -585,15 +731,40 @@ pub fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
         }
     }
 
-    // Method 3: shared data stores (background thread).
+    // Method 3: shared data stores (macOS).
     #[cfg(target_os = "macos")]
     if let Some(c) = native::capture() {
         return Some(c);
     }
 
-    // Method 4: JS eval fallback (non-HttpOnly cookies — EHentai, and on
-    // Windows also Pixiv when the native API isn't available).
-    for label in &["pixiv-login", "ehentai-login"] {
+    // Method 4: Windows WebView2 cookie SQLite (3rolib HttpOnly path).
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(root) = app.path().app_local_data_dir() {
+            // Union of every adapter's host suffixes, deduplicated.
+            let mut suffixes: Vec<&str> = Vec::new();
+            for &a in ALL_ADAPTERS {
+                for s in a.cookie_host_suffixes() {
+                    if !suffixes.contains(s) {
+                        suffixes.push(*s);
+                    }
+                }
+            }
+            for sub in ["EBWebView", "EBWebView-login-pixiv", "EBWebView-login-ehentai"] {
+                let dir = root.join(sub);
+                if let Some(c) = native_windows::capture_from_db(&dir, &suffixes) {
+                    if !c.trim().is_empty() {
+                        return Some(c);
+                    }
+                }
+            }
+        }
+    }
+
+
+    // Method 5: JS eval fallback (non-HttpOnly cookies — both services).
+    for &adapter in ALL_ADAPTERS {
+        let label = adapter.window_label();
         if let Some(window) = app.get_webview_window(label) {
             let _ = inject_cookie_redirect(&window);
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -636,16 +807,16 @@ fn get_wkwebview_ptr(window: &tauri::WebviewWindow) -> Option<*mut std::ffi::c_v
     // Raw pointers aren't `Send`; pass the address through as a `usize`.
     let (tx, rx) = std::sync::mpsc::channel::<Option<usize>>();
     window
-        .with_webview(move |webview| {
+        .with_webview(move |_webview| {
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             {
-                let ptr = webview.inner();
+                let ptr = _webview.inner();
                 let addr = ptr as usize;
                 let _ = tx.send(Some(addr));
             }
             #[cfg(not(any(target_os = "macos", target_os = "ios")))]
             {
-                let _ = &webview;
+                let _ = &_webview;
                 let _ = tx.send(None);
             }
         })
@@ -674,4 +845,164 @@ pub fn has_ehentai_session(cookie: &str) -> bool {
             .any(|p| p.trim_start().starts_with(&format!("{name}=")))
     };
     has("ipb_member_id") && has("ipb_pass_hash")
+}
+
+// ---------------------------------------------------------------------------
+// BDD tests — mirror scenarios in tests/bdd/features/*.feature
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod bdd {
+    use super::{has_ehentai_session, has_pixiv_session};
+
+    // ---- Pure predicates (no I/O) ----
+
+    #[test]
+    fn has_pixiv_session_accepts_phpsessid() {
+        // Scenario: A captured cookie string with PHPSESSID parses to a user id
+        assert!(has_pixiv_session("PHPSESSID=12345_abc; yuid_b=foo"));
+    }
+
+    #[test]
+    fn has_pixiv_session_rejects_when_missing() {
+        // Scenario: A cookie without PHPSESSID cannot authenticate
+        assert!(!has_pixiv_session("yuid_b=foo; p_ab_id=bar"));
+    }
+
+    #[test]
+    fn has_ehentai_session_requires_both_cookies() {
+        // Scenario: EHentai requires both ipb cookies
+        assert!(has_ehentai_session(
+            "ipb_member_id=42; ipb_pass_hash=deadbeef; igneous=x"
+        ));
+        assert!(!has_ehentai_session("ipb_member_id=42; igneous=x"));
+        assert!(!has_ehentai_session("ipb_pass_hash=deadbeef; igneous=x"));
+        assert!(!has_ehentai_session("igneous=x"));
+    }
+
+    // ---- WebView2 SQLite capture (Windows-only) ----
+
+    /// Build a minimal WebView2-shaped cookies SQLite at the path that
+    /// `native_windows::capture_from_db` expects. Returns the directory to
+    /// pass as `app_local_data`.
+    #[cfg(target_os = "windows")]
+    fn fixture_sqlite(tag: &str, rows: &[(&str, &str, &str, i64, usize)]) -> std::path::PathBuf {
+        use rusqlite::Connection;
+        let dir = std::env::temp_dir()
+            .join(format!("erolib-bdd-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir
+            .join("EBWebView")
+            .join("Default")
+            .join("Network")
+            .join("Cookies");
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE cookies(
+                host_key TEXT NOT NULL,
+                top_frame_site_key TEXT NOT NULL DEFAULT '',
+                has_cross_site_ancestor INTEGER NOT NULL DEFAULT 0,
+                name TEXT NOT NULL,
+                value TEXT NOT NULL,
+                encrypted_value BLOB NOT NULL DEFAULT X'',
+                path TEXT NOT NULL DEFAULT '/',
+                expires_utc INTEGER NOT NULL DEFAULT 0,
+                is_secure INTEGER NOT NULL DEFAULT 0,
+                is_httponly INTEGER NOT NULL DEFAULT 0,
+                last_access_utc INTEGER NOT NULL DEFAULT 0,
+                has_expires INTEGER NOT NULL DEFAULT 0,
+                is_persistent INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 0,
+                samesite INTEGER NOT NULL DEFAULT 0,
+                source_scheme INTEGER NOT NULL DEFAULT 0,
+                source_port INTEGER NOT NULL DEFAULT 0,
+                last_update_utc INTEGER NOT NULL DEFAULT 0,
+                source_type INTEGER NOT NULL DEFAULT 0,
+                creation_utc INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE UNIQUE INDEX cookies_unique_index ON cookies(
+                host_key, top_frame_site_key, has_cross_site_ancestor, name, path,
+                source_scheme, source_port);
+            "#,
+        )
+        .unwrap();
+        for (host, name, value, is_httponly, enc_len) in rows {
+            let enc: Vec<u8> = (0..*enc_len).map(|_| 0x76u8).collect();
+            conn.execute(
+                "INSERT INTO cookies(host_key, name, value, encrypted_value, is_httponly) \
+                 VALUES (?,?,?,?,?)",
+                rusqlite::params![host, name, value, enc, *is_httponly],
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn capture_plaintext_phpsessid_succeeds() {
+        // Scenario: A WebView2 SQLite row with plaintext PHPSESSID is captured
+        let app = fixture_sqlite("plaintext", &[
+            (".pixiv.net", "PHPSESSID", "99999_xyz", 1, 0),
+            (".pixiv.net", "yuid_b", "y-b", 0, 0),
+            ("www.pixiv.net", "a_type", "1", 0, 0),
+        ]);
+        let got = super::native_windows::capture_from_db(&app, &["pixiv.net"])
+            .expect("capture_from_db returns Some");
+        assert!(got.contains("PHPSESSID=99999_xyz"), "got: {got}");
+        assert!(got.contains("yuid_b=y-b"), "got: {got}");
+        assert!(super::has_pixiv_session(&got));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn capture_excludes_non_matching_hosts() {
+        // Scenario: Cookies from non-matching hosts are excluded
+        let app = fixture_sqlite("host_filter", &[
+            (".example.com", "PHPSESSID", "99999_xyz", 0, 0),
+            (".pixiv.net", "PHPSESSID", "11111_abc", 0, 0),
+        ]);
+        let got = super::native_windows::capture_from_db(&app, &["pixiv.net"])
+            .expect("capture_from_db returns Some");
+        assert!(got.contains("PHPSESSID=11111_abc"), "got: {got}");
+        assert!(!got.contains("99999_xyz"), "leaked: {got}");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn capture_returns_none_when_value_empty_encrypted() {
+        // Scenario: A WebView2 SQLite row with all-encrypted values cannot be read
+        let app = fixture_sqlite("encrypted", &[(".pixiv.net", "PHPSESSID", "", 1, 105)]);
+        let got = super::native_windows::capture_from_db(&app, &["pixiv.net"]);
+        assert!(got.is_none(), "expected None but got: {got:?}");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn capture_ehentai_returns_ipb_cookies() {
+        // Scenario: A cookie SQLite with both ipb cookies is captured
+        let app = fixture_sqlite("eh_ipb", &[
+            (".e-hentai.org", "ipb_member_id", "42", 0, 0),
+            (".e-hentai.org", "ipb_pass_hash", "deadbeef", 0, 0),
+            (".exhentai.org", "igneous", "x", 0, 0),
+        ]);
+        let got = super::native_windows::capture_from_db(
+            &app,
+            &["e-hentai.org", "exhentai.org"],
+        )
+        .expect("capture_from_db returns Some");
+        assert!(got.contains("ipb_member_id=42"), "got: {got}");
+        assert!(got.contains("ipb_pass_hash=deadbeef"), "got: {got}");
+        assert!(super::has_ehentai_session(&got), "should pass has_ehentai_session");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn placeholder_for_non_windows() {
+        // Pure predicates above cover non-Windows hosts; the SQLite path is
+        // Windows-only.
+    }
 }

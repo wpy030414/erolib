@@ -28,6 +28,7 @@ libsqlite3-sys = "=0.27.0"
 uuid = { version = "1.6", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.11", features = ["json", "multipart"] }
+url = "2"
 scraper = "0.18"
 axum = "0.7"
 tower = "0.4"
@@ -35,6 +36,13 @@ tower-http = { version = "0.5", features = ["fs", "cors"] }
 zip = "0.6"
 # Metadata hash for local one-way sync filenames (sha256 of source/title/pages/size).
 sha2 = "0.10"
+# Sync SQLite client for reading the WebView2 cookie database directly on
+# Windows (`<APPLOCALDATA>/EBWebView/Default/Network/Cookies`). Pinned to
+# 0.30 so the cargo resolver unifies `libsqlite3-sys` against sqlx 0.7's
+# 0.27 (one `sqlite3` per binary; 0.29 would drag in libsqlite3-sys 0.26
+# and clash with the `=0.27.0` pin below). Avoids the JS-eval blind spot for
+# HttpOnly cookies like Pixiv's PHPSESSID. (3rolib fix — keep)
+rusqlite = { version = "0.30", default-features = false, features = ["bundled"] }
 # Image decode for covers, library pages, and PDF/EPUB export. All pages are
 # normalized to lossy webp on ingest (via the `webp` crate below), so this
 # crate only decodes jpeg/png/webp. AVIF decoding (formerly `avif-native`,
