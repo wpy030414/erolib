@@ -105,8 +105,9 @@ export default function Tasks() {
     failed: 'var(--md-sys-color-error-container)', cancelled: 'var(--md-sys-color-surface-container-highest)',
   };
 
-  if (taskStore.loading) return <div className="pa-6"><FeedLoading /></div>;
-  if (taskStore.tasks.length === 0) return <div className="pa-6 text-center text-medium-emphasis mt-8">{t('tasks.empty')}</div>;
+  if (taskStore.loading) return <div className="pa-6"><div className="empty-state"><FeedLoading /></div></div>;
+  // empty-state 语义对齐：200px 垂直居中
+  if (taskStore.tasks.length === 0) return <div className="pa-6"><div className="empty-state"><p className="text-body-1 text-medium-emphasis">{t('tasks.empty')}</p></div></div>;
 
   return (
     <div className="pa-6">
@@ -166,12 +167,12 @@ export default function Tasks() {
                 </M3eButton>
               )}
               {item.status === 'completed' && (
-                <M3eButton variant="tonal" disabled={redownloadingId === item.id} onClick={(e) => { e.stopPropagation(); void onRedownload(item); }} style={{ fontSize: 13 }}>
+                <M3eButton variant="outlined" disabled={redownloadingId === item.id} onClick={(e) => { e.stopPropagation(); void onRedownload(item); }} style={{ fontSize: 13 }}>
                   <MdiIcon path={mdiDownload} size={18} /> {t('tasks.actions.redownload')}
                 </M3eButton>
               )}
               {(item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled') && (
-                <M3eButton variant="tonal" onClick={(e) => { e.stopPropagation(); void taskStore.deleteTask(item.id); }} style={{ fontSize: 13 }}>
+                <M3eButton variant="outlined" onClick={(e) => { e.stopPropagation(); void taskStore.deleteTask(item.id); }} style={{ fontSize: 13 }}>
                   <MdiIcon path={mdiDelete} size={18} /> {t('tasks.actions.remove')}
                 </M3eButton>
               )}

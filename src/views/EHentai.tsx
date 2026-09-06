@@ -11,6 +11,7 @@ import { SearchBox } from '@/components/SearchBox';
 import { FabButton } from '@/components/FabButton';
 import { MdiIcon } from '@/components/MdiIcon';
 import { M3eSwitch } from '@m3e/react/switch';
+import { M3eButton } from '@m3e/react/button';
 import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import type { GalleryListItem } from '@/types';
 
@@ -83,7 +84,7 @@ export default function EHentai() {
       <div className="pa-6">
         <div className="d-flex align-center gap-4 mb-6" style={{ minHeight: 40 }}>
           <h2 className="text-h5" style={{ margin: 0 }}>{title}</h2><span className="spacer" />
-          <button className="md3-btn md3-btn--filled" disabled={loggingIn} onClick={startLogin}><MdiIcon path={mdiArrowTopRight} size={18} /> {t('eh.login.login')}</button>
+          <M3eButton variant="filled" disabled={loggingIn} onClick={startLogin}><MdiIcon path={mdiArrowTopRight} size={18} /> {t('eh.login.login')}</M3eButton>
         </div>
         <div className="text-center text-medium-emphasis mt-8">{t('eh.browse.loginRequired')}</div>
       </div>
@@ -102,7 +103,7 @@ export default function EHentai() {
           onChange={(e) => { store.setEx((e.currentTarget as unknown as { checked: boolean }).checked); void store.reload(); }}
         />
         <SearchBox value={store.keyword} placeholder={t('eh.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={onSearchCommit} />
-        <button className="md3-btn md3-btn--tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('eh.login.relogin')}</button>
+        <M3eButton variant="tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('eh.login.relogin')}</M3eButton>
       </div>
 
       <div className="tag-chips mb-6">

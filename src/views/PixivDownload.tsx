@@ -11,6 +11,7 @@ import { SearchBox } from '@/components/SearchBox';
 import { FabButton } from '@/components/FabButton';
 import { MdiIcon } from '@/components/MdiIcon';
 import { M3eTabs, M3eTab } from '@m3e/react/tabs';
+import { M3eButton } from '@m3e/react/button';
 import { mdiArrowTopRight, mdiRefresh, mdiExitToApp } from '@mdi/js';
 import type { PixivWork } from '@/types';
 
@@ -148,8 +149,8 @@ export default function PixivDownload() {
           <SearchBox value={store.searchKeyword} placeholder={t('pixiv.search.placeholder')} clearLabel={t('pixiv.search.clear')} onChange={() => {}} onCommit={(v) => store.setSearchKeyword(v)} />
         )}
         {!login
-          ? <button className="md3-btn md3-btn--filled" disabled={loggingIn} onClick={startLogin}><MdiIcon path={mdiArrowTopRight} size={18} /> {t('pixiv.login.login')}</button>
-          : <button className="md3-btn md3-btn--tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('pixiv.login.relogin')}</button>}
+          ? <M3eButton variant="filled" disabled={loggingIn} onClick={startLogin}><MdiIcon path={mdiArrowTopRight} size={18} /> {t('pixiv.login.login')}</M3eButton>
+          : <M3eButton variant="tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('pixiv.login.relogin')}</M3eButton>}
       </div>
 
       {!login ? (

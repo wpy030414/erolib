@@ -25,6 +25,7 @@ import { BookMetaDialog, type BookMetaDialogHandle } from '@/components/BookMeta
 import { BookExportDialog, type BookExportDialogHandle } from '@/components/BookExportDialog';
 import { BookCollectionPicker } from '@/components/BookCollectionPicker';
 import { CollectionDialog } from '@/components/CollectionDialog';
+import { M3eButton } from '@m3e/react/button';
 import type { Book } from '@/types';
 
 const TAG_DISPLAY_LIMIT = 30;
@@ -138,7 +139,7 @@ export default function Library() {
         <h2 className="text-h5" style={{ margin: 0, whiteSpace: 'nowrap' }}>{title}</h2>
         <span className="spacer" />
         <SearchBox value={libraryStore.query} placeholder={t('lib.search.placeholder')} clearLabel={t('common.clear')} onChange={(v) => useLibraryStore.setState({ query: v })} onCommit={() => libraryStore.applySearch()} />
-        <button className="md3-btn md3-btn--filled" onClick={onImport}><MdiIcon path={mdiFolderOpen} size={20} /> {t('lib.import')}</button>
+        <M3eButton variant="filled" onClick={onImport}><MdiIcon path={mdiFolderOpen} size={20} /> {t('lib.import')}</M3eButton>
         {libraryStore.isLoading && <svg className="spinner" style={{ color: 'var(--md-sys-color-primary)', width: 24, height: 24 }} viewBox="0 0 50 50"><circle className="spinner-track" cx="25" cy="25" r="20" /><circle className="spinner-arc" cx="25" cy="25" r="20" /></svg>}
       </div>
 
