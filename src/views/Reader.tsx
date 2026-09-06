@@ -77,6 +77,8 @@ export default function Reader() {
   const [zoomMode, setZoomMode] = useState<'fill' | 'contain'>(readZoom);
   const [uiHidden, setUiHidden] = useState(false);
   const [src, setSrc] = useState<string | null>(null);
+  /** src 所属页——blob 未就绪时立即让位给 spinner，不残留上一页残影。 */
+  const [srcPage, setSrcPage] = useState(-1);
   const [loading, setLoading] = useState(true);
 
   const blobsRef = useRef<Record<number, string>>({});
@@ -90,7 +92,6 @@ export default function Reader() {
   const [animLoading, setAnimLoading] = useState(false);
   const animCanvasRef = useRef<HTMLCanvasElement>(null);
   const bitmapsRef = useRef<(ImageBitmap | null)[]>([]);
-  const animFrameRef = useRef(0);
   const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resizeObsRef = useRef<ResizeObserver | null>(null);
   const framesInFlightRef = useRef(false);
@@ -139,31 +140,48 @@ export default function Reader() {
   }, [navigate]);
 
   // ── Animation rendering ─────────────────────────────────────────────
+  // Vue 语义对齐：动画帧游标就是共享的 current（watch(current) → 重绘当前帧
+  // + 重置帧定时器），键盘 go(±1) 因此天然翻帧。zoomMode/current 走
+  // latest-ref：帧链定时器闭包自我续期，直接捕获 state 会让缩放切换在下一
+  // 帧被旧值弹回（动画书缩放失效）。
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  const zoomModeRef = useRef(zoomMode);
+  zoomModeRef.current = zoomMode;
+
   const drawCurrentFrame = useCallback(() => {
     const canvas = animCanvasRef.current;
-    const bmp = bitmapsRef.current[animFrameRef.current];
+    const bmp = bitmapsRef.current[currentRef.current];
     if (!canvas || !bmp) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const cw = canvas.width, ch = canvas.height;
     ctx.clearRect(0, 0, cw, ch);
-    const scale = zoomMode === 'fill'
+    const scale = zoomModeRef.current === 'fill'
       ? Math.max(cw / bmp.width, ch / bmp.height)
       : Math.min(cw / bmp.width, ch / bmp.height);
     const dw = bmp.width * scale, dh = bmp.height * scale;
     ctx.drawImage(bmp, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
-  }, [zoomMode]);
+  }, []);
 
   const scheduleNextFrame = useCallback(() => {
     if (animTimerRef.current) clearTimeout(animTimerRef.current);
     if (!isAnimated || pageCount == null) return;
-    const delay = frameDelaysRef.current[animFrameRef.current] ?? 100;
+    const delay = frameDelaysRef.current[currentRef.current] ?? 100;
     animTimerRef.current = setTimeout(() => {
-      animFrameRef.current = (animFrameRef.current + 1) % (pageCount ?? 1);
-      drawCurrentFrame();
-      scheduleNextFrame();
+      // 帧游标循环推进（Vue：current = (current + 1) % pageCount）。
+      setCurrent((prev) => (prev + 1) % (pageCount || 1));
     }, Math.max(16, delay));
-  }, [isAnimated, pageCount, drawCurrentFrame]);
+  }, [isAnimated, pageCount]);
+
+  // watch(current) 语义对齐：动画书 current 变化（播放推进或键盘翻帧）即
+  // 重绘当前帧并重置待触发定时器；卸载/依赖变化时清掉旧定时器。
+  useEffect(() => {
+    if (!isAnimated) return;
+    drawCurrentFrame();
+    scheduleNextFrame();
+    return () => { if (animTimerRef.current) { clearTimeout(animTimerRef.current); animTimerRef.current = null; } };
+  }, [current, isAnimated, drawCurrentFrame, scheduleNextFrame]);
 
   const resizeCanvas = useCallback(() => {
     const canvas = animCanvasRef.current;
@@ -188,8 +206,12 @@ export default function Reader() {
         }),
       );
       if (!results.some((b) => b !== null)) {
+        // 全帧失败：回退静态阅读路径（Vue 同款——isAnimated 置假，否则
+        // 动画空转、黑画布、footer/滑块全无任何回退）。
+        console.warn('ugoira: all frames failed to load — falling back to static');
         frameDelaysRef.current = [];
         bitmapsRef.current = [];
+        setIsAnimated(false);
         return;
       }
       bitmapsRef.current = results;
@@ -394,6 +416,10 @@ export default function Reader() {
       for (const url of Object.values(stale)) { if (!Object.values(blobsRef.current).includes(url)) URL.revokeObjectURL(url); }
       setCurrent(nextIdx);
       saveProgress(id, nextIdx);
+      // src 语义对齐 Vue computed：删页后立即指向新当前页的 blob（旧 URL
+      // 已被上面的 revoke 收走，残留渲染会裂图）。
+      setSrc(blobsRef.current[nextIdx] ?? null);
+      setSrcPage(nextIdx);
       if (dropped === 0) void deleteThumb(id);
       toast.addToast('success', t('reader.menu.pageDeleted'));
     } catch { toast.addToast('error', t('reader.menu.pageDeleteFailed')); }
@@ -457,25 +483,30 @@ export default function Reader() {
         const start = frameDelaysRef.current.length > 1 ? 0 : Math.min(readProgress(id), Math.max(0, count - 1));
         setCurrent(start);
         setLoading(false);
-      } catch { setLoading(false); }
+      } catch {
+        // 语义对齐 Vue：元数据失败不收 spinner——保持「Loading page X of ?」
+        // 的死端呈现（两侧一致），避免切到一片空白。
+      }
     })();
     return () => {
       for (const url of Object.values(blobsRef.current)) URL.revokeObjectURL(url);
       blobsRef.current = {};
       // Close decoded animation frames so the NEXT animated book actually
       // decodes (preloadFrames skips when bitmaps are still populated) and
-      // nothing leaks. Also reset the frame cursor.
+      // nothing leaks.
       for (const bmp of bitmapsRef.current) bmp?.close();
       bitmapsRef.current = [];
-      animFrameRef.current = 0;
       if (resizeObsRef.current) { resizeObsRef.current.disconnect(); resizeObsRef.current = null; }
     };
   }, [id]);
 
   // ── Load current page ───────────────────────────────────────────────
+  // 语义对齐 Vue：src 只属于「当前页」且动画书不拉 blob——页未就绪时立即
+  // 显示 spinner（拖滑块跳出预取窗口时不再残留旧页，旧 URL 被驱逐 revoke
+  // 后也不会裂图）。
   useEffect(() => {
-    if (!id || pageCount == null) return;
-    if (blobsRef.current[current]) { setSrc(blobsRef.current[current]); return; }
+    if (!id || pageCount == null || isAnimated) return;
+    if (blobsRef.current[current]) { setSrc(blobsRef.current[current]); setSrcPage(current); return; }
     void (async () => {
       try {
         const buf = await api.getBookPage(id, current);
@@ -484,9 +515,10 @@ export default function Reader() {
         const url = URL.createObjectURL(new Blob([buf], { type: mime }));
         blobsRef.current[current] = url;
         setSrc(url);
+        setSrcPage(current);
       } catch { /* ignore */ }
     })();
-  }, [id, current, pageCount]);
+  }, [id, current, pageCount, isAnimated]);
 
   // ── Prefetch / preload frames ───────────────────────────────────────
   useEffect(() => {
@@ -529,8 +561,11 @@ export default function Reader() {
     return () => {
       document.removeEventListener('visibilitychange', onVis);
       if (readTimerRef.current) { clearInterval(readTimerRef.current); readTimerRef.current = null; }
+      // 语义对齐 Vue id-watch：无条件 stop——openBook 未 resolve 时（session
+      // 尚为 null）旧计时也必须收掉，否则新书的 startReadTime 早退、时长
+      // 继续错挂旧书的 localStorage 键。
+      stopReadTime();
       if (readSessionIdRef.current !== null && readBookIdRef.current) {
-        stopReadTime();
         reportReadTime(readBookIdRef.current);
       }
       // Finalize the session: the next book must open its own backend
@@ -560,7 +595,7 @@ export default function Reader() {
         <div className="reader-topbar__title truncate">{title || t('reader.untitled')}</div>
         <span className="spacer" />
         <div className="reader-actions">
-          <button className="icon-btn" title={zoomMode === 'fill' ? t('reader.fitScreen') : t('reader.fitContent')} onClick={toggleZoom}>
+          <button className="icon-btn" title={zoomMode === 'fill' ? t('reader.fitScreen') : t('reader.fitContent')} aria-label={zoomMode === 'fill' ? t('reader.fitScreen') : t('reader.fitContent')} onClick={toggleZoom}>
             <MdiIcon path={zoomMode === 'fill' ? mdiImageSizeSelectActual : mdiImageSizeSelectLarge} size={22} />
           </button>
         </div>
@@ -576,7 +611,7 @@ export default function Reader() {
               </div>
             )}
           </>
-        ) : src ? (
+        ) : src && srcPage === current ? (
           <img key={current} src={src} alt={t('reader.page', { page: current + 1 })} className={`reader-image${zoomMode === 'fill' ? ' reader-image--fill' : ''}`} draggable={false} />
         ) : loading ? (
           <div className="d-flex flex-column align-center justify-center ga-3">
