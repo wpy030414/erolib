@@ -309,6 +309,14 @@ export default function Reader() {
     setMenuOpen(true);
   }, []);
 
+  // Escape closes the menu (md-menu semantics).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
+
   const onSetAsTheme = useCallback(async () => {
     setMenuOpen(false);
     const srcUrl = blobsRef.current[current];
@@ -454,6 +462,13 @@ export default function Reader() {
     return () => {
       for (const url of Object.values(blobsRef.current)) URL.revokeObjectURL(url);
       blobsRef.current = {};
+      // Close decoded animation frames so the NEXT animated book actually
+      // decodes (preloadFrames skips when bitmaps are still populated) and
+      // nothing leaks. Also reset the frame cursor.
+      for (const bmp of bitmapsRef.current) bmp?.close();
+      bitmapsRef.current = [];
+      animFrameRef.current = 0;
+      if (resizeObsRef.current) { resizeObsRef.current.disconnect(); resizeObsRef.current = null; }
     };
   }, [id]);
 
@@ -518,6 +533,10 @@ export default function Reader() {
         stopReadTime();
         reportReadTime(readBookIdRef.current);
       }
+      // Finalize the session: the next book must open its own backend
+      // session (otherwise its time lands on the previous book's session).
+      readSessionIdRef.current = null;
+      warnedNoSessionRef.current = false;
     };
   }, [id, startReadTime, stopReadTime, ensureReadTimeTimer, reportReadTime]);
 
