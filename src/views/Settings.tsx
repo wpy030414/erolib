@@ -10,6 +10,7 @@ import { clearThumbs } from '@/services/thumb-cache';
 import { api } from '@/services/api';
 import { MdiIcon } from '@/components/MdiIcon';
 import { BrandIcon } from '@/components/BrandIcon';
+import { UpdateDialog, type UpdateDialogHandle } from '@/components/UpdateDialog';
 import {
   mdiBroom, mdiCheckCircle, mdiDatabaseOutline, mdiDeleteForever,
   mdiFolderSyncOutline, mdiGithub, mdiPalette, mdiPlay, mdiRss, mdiStop,
@@ -48,6 +49,7 @@ export default function Settings() {
   const [confirmInput, setConfirmInput] = useState('');
   const [showClearAll, setShowClearAll] = useState(false);
   const clearAllDialogRef = useRef<HTMLDialogElement>(null);
+  const updateDialogRef = useRef<UpdateDialogHandle>(null);
 
   useEffect(() => {
     if (showClearAll && clearAllDialogRef.current) {
@@ -115,12 +117,16 @@ export default function Settings() {
             <span className="md3-card__subtitle version-line">
               v{version}
               {updateStore.info?.hasUpdate && (
-                <span className="update-badge" onClick={() => updateStore.check()}>
+                <span
+                  className="update-badge"
+                  title={t('settings.update.hasUpdate', { version: updateStore.info.latest })}
+                  onClick={() => updateDialogRef.current?.open()}
+                >
                   <span className="update-dot" /> {t('settings.update.hasUpdate', { version: updateStore.info.latest })}
                 </span>
               )}
               {updateStore.info && !updateStore.info.hasUpdate && (
-                <span className="update-badge update-badge--up-to-date">
+                <span className="update-badge update-badge--up-to-date" title={t('settings.update.upToDate')}>
                   <span className="update-dot update-dot--success" /> {t('settings.update.upToDate')}
                 </span>
               )}
@@ -162,7 +168,7 @@ export default function Settings() {
         <>
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiTranslate} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.language')}</h3></div>
-            <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)} style={{ ...inputStyle, maxWidth: 240, width: '100%' }}>
+            <select value={locale} aria-label={t('settings.language')} onChange={(e) => setLocale(e.target.value as Locale)} style={{ ...inputStyle, maxWidth: 240, width: '100%' }}>
               {LOCALES.map((l) => <option key={l} value={l}>{LOCALE_LABELS[l]}</option>)}
             </select>
           </section>
@@ -182,9 +188,9 @@ export default function Settings() {
                 <div className="d-flex gap-3 mb-4 flex-wrap">
                   {customThemeList.map((ct) => (
                     <div key={ct.key} className={`custom-theme-item${themeStore.seed === ct.key ? ' custom-theme-item--selected' : ''}`}>
-                      <div className="custom-theme-thumb" style={{ backgroundImage: `url(${ct.thumbnailB64})` }} onClick={() => themeStore.activateCustomTheme(ct.key)} />
+                      <div className="custom-theme-thumb" style={{ backgroundImage: `url(${ct.thumbnailB64})` }} title={ct.sourceTitle} onClick={() => themeStore.activateCustomTheme(ct.key)} />
                       {themeStore.seed !== ct.key && (
-                        <button className="custom-theme-delete" onClick={() => themeStore.removeCustomTheme(ct.key)}>
+                        <button className="custom-theme-delete" aria-label={t('settings.theme.removeCustom')} onClick={() => themeStore.removeCustomTheme(ct.key)}>
                           <svg width={12} height={12} viewBox="0 0 24 24" fill="currentColor"><path d={mdiClose} /></svg>
                         </button>
                       )}
@@ -216,10 +222,10 @@ export default function Settings() {
         <>
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiFolderSyncOutline} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.localSync')}</h3>
-              <input type="checkbox" checked={settingsStore.syncEnabled} onChange={(e) => { settingsStore.setSyncEnabled(e.target.checked); if (e.target.checked && settingsStore.syncDir) void settingsStore.syncNow(); }}
+              <input type="checkbox" aria-label={t('settings.localSync')} checked={settingsStore.syncEnabled} onChange={(e) => { settingsStore.setSyncEnabled(e.target.checked); if (e.target.checked && settingsStore.syncDir) void settingsStore.syncNow(); }}
                 style={{ marginLeft: 'auto', accentColor: 'var(--md-sys-color-primary)' }} />
             </div>
-            <input type="text" value={syncDirName} placeholder={t('settings.localSync.pathHint')} title={settingsStore.syncDir}
+            <input type="text" value={syncDirName} placeholder={t('settings.localSync.pathHint')} title={settingsStore.syncDir} aria-label={t('settings.localSync.path')}
               readOnly disabled={!settingsStore.syncEnabled || settingsStore.syncBusy} onClick={pickSyncDir}
               style={{ ...inputStyle, width: 280, cursor: 'pointer' }} />
             {settingsStore.syncStats && (<p className="mt-3 text-body-2 text-success d-flex align-center"><MdiIcon path={mdiCheckCircle} size={16} /> {t('settings.localSync.stats', settingsStore.syncStats)}</p>)}
@@ -258,6 +264,9 @@ export default function Settings() {
           </section>
         </>
       )}
+
+      {/* Update check / download / install flow (opened from the badge). */}
+      <UpdateDialog ref={updateDialogRef} />
 
       {/* Clear all confirmation dialog */}
       {showClearAll && (
