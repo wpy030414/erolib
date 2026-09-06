@@ -175,13 +175,14 @@ export default function Reader() {
   }, [isAnimated, pageCount]);
 
   // watch(current) 语义对齐：动画书 current 变化（播放推进或键盘翻帧）即
-  // 重绘当前帧并重置待触发定时器；卸载/依赖变化时清掉旧定时器。
+  // 重绘当前帧并重置待触发定时器；帧未加载完（animLoading）不启动播放链
+  // （Vue 在 preloadFrames 末尾才 scheduleNextFrame）。卸载/依赖变化清掉旧定时器。
   useEffect(() => {
-    if (!isAnimated) return;
+    if (!isAnimated || animLoading) return;
     drawCurrentFrame();
     scheduleNextFrame();
     return () => { if (animTimerRef.current) { clearTimeout(animTimerRef.current); animTimerRef.current = null; } };
-  }, [current, isAnimated, drawCurrentFrame, scheduleNextFrame]);
+  }, [current, isAnimated, animLoading, drawCurrentFrame, scheduleNextFrame]);
 
   const resizeCanvas = useCallback(() => {
     const canvas = animCanvasRef.current;
