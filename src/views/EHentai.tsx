@@ -48,7 +48,7 @@ export default function EHentai() {
   async function onLogout() {
     try {
       await api.ehentaiLogout();
-      toast.addToast('info', t('eh.login.loggedOut'));
+      toast.addToast('success', t('eh.login.loggedOut'));
     } catch (e) {
       toast.addToast('error', t('eh.login.logoutFailed', { error: String(e) }));
     } finally {
@@ -72,7 +72,7 @@ export default function EHentai() {
       try {
         const taskId = await api.taskEnqueueEhentaiGallery(cookie ?? '', url, item.title);
         store.setStatus(url, { galleryUrl: url, taskId, taskStatus: 'pending', progressCurrent: 0, progressTotal: 1 });
-        toast.addToast('success', t('eh.browse.queued', { title: item.title }));
+        toast.addToast('info', t('eh.browse.queued', { title: item.title }));
       } catch (e) { toast.addToast('error', t('common.error', { message: String(e) })); }
     }
   }
@@ -108,7 +108,7 @@ export default function EHentai() {
 
       <div className="tag-chips mb-6">
         {CATEGORIES.map((cat) => (
-          <button key={cat} className={`tag-chip${store.category === cat ? ' tag-chip--selected' : ''}`} onClick={() => store.selectCategory(store.category === cat ? null : cat)}>
+          <button key={cat} className={`tag-chip${store.category === cat ? ' tag-chip--selected' : ''}`} aria-pressed={store.category === cat} onClick={() => store.selectCategory(store.category === cat ? null : cat)}>
             <span className="tag-chip__label">{t(`eh.category.${cat}`)}</span>
           </button>
         ))}

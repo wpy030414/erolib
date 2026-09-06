@@ -162,7 +162,13 @@ export function createBrowseFeed<TItem, TKey extends string, TStatus extends Car
   }
 
   async function loadMore() {
-    if (loadingRef || sourceEnded) return;
+    // Re-entry guard mirrors the Vue kernel: it checks the grid-facing
+    // feed.end, NOT sourceEnded. A single fetch can both top the buffer past
+    // 48 and report the source end — sourceEnded would then strand the
+    // remainder forever (guard returns before the flush) and, after a
+    // zero-display hard failure, let sentinel rechecks re-fire the failed
+    // page (feed.end=true there is terminal — only reload() recovers).
+    if (loadingRef || store.getState().feed.end) return;
     loadingRef = true;
     store.setState((s) => ({ feed: { ...s.feed, loading: true } }));
     try {
