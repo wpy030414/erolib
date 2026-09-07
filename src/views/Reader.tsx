@@ -118,7 +118,6 @@ export default function Reader() {
   // ── Theme restore ───────────────────────────────────────────────────
   const prevModeRef = useRef(themeStore.mode);
   const prevSeedRef = useRef(themeStore.seed);
-  const prevBgRef = useRef(themeStore.themeBgImage);
 
   // ── Helpers ─────────────────────────────────────────────────────────
   const clamp = useCallback((v: number) => {
@@ -203,7 +202,7 @@ export default function Reader() {
       const results = await Promise.all(
         Array.from({ length: n }, async (_, p): Promise<ImageBitmap | null> => {
           try { const buf = await api.getBookPage(id, p); return await createImageBitmap(new Blob([buf], { type: mimeFromBytes(buf) })); }
-          catch { return null; }
+          catch (e) { console.warn(`Failed to load frame ${p}:`, e); return null; }
         }),
       );
       if (!results.some((b) => b !== null)) {
@@ -250,7 +249,7 @@ export default function Reader() {
         const mime = mimeFromBytes(buf);
         pageExtRef.current[p] = mime.split('/')[1] ?? 'jpg';
         blobsRef.current[p] = URL.createObjectURL(new Blob([buf], { type: mime }));
-      } catch { /* ignore */ }
+      } catch (e) { console.warn(`Failed to prefetch page ${p}:`, e); }
       finally { prefetchInFlight.current.delete(p); }
     }));
   }, [id, pageCount, current, isAnimated]);
@@ -341,7 +340,6 @@ export default function Reader() {
   }, [goTo]);
 
   const onSetAsTheme = useCallback(async () => {
-    setMenuOpen(false);
     const srcUrl = blobsRef.current[current];
     if (!srcUrl) return;
     const img = new Image();
@@ -373,11 +371,10 @@ export default function Reader() {
       prevModeRef.current = 'dark';
       prevSeedRef.current = themeStore.seed;
       toast.addToast('success', t('reader.menu.themeApplied'));
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[Reader] Failed to extract theme colour:', e); }
   }, [current, id, themeStore, toast, t]);
 
   const onSaveImage = useCallback(async () => {
-    setMenuOpen(false);
     if (isAnimated || !id) return;
     const titleStr = (bookMetaRef.current?.title || 'page').replace(/[/\\?%*:|"<>]/g, '_');
     const tw = String(pageCount ?? 1).length;
@@ -385,16 +382,15 @@ export default function Reader() {
     const ext = pageExtRef.current[current] ?? 'jpg';
     const dest = await dialogSave({
       defaultPath: `${titleStr}_p${pn}.${ext}`,
-      filters: [{ name: `Image (.${ext})`, extensions: [ext] }, { name: t('lib.save'), extensions: ['*'] }],
+      filters: [{ name: `Image (.${ext})`, extensions: [ext] }, { name: t('lib.save.allFiles'), extensions: ['*'] }],
     });
     if (dest) {
       try { await api.saveBookPage(id, current, dest); toast.addToast('success', t('reader.menu.imageSaved')); }
-      catch { toast.addToast('error', t('reader.menu.imageSaveFailed')); }
+      catch (e) { console.warn('[Reader] Failed to save page:', e); toast.addToast('error', t('reader.menu.imageSaveFailed')); }
     }
   }, [isAnimated, id, pageCount, current, toast, t]);
 
   const onDeletePage = useCallback(async () => {
-    setMenuOpen(false);
     if (isAnimated || pageCount == null || !id) return;
     const dropped = current;
     try {
@@ -423,7 +419,7 @@ export default function Reader() {
       setSrcPage(nextIdx);
       if (dropped === 0) void deleteThumb(id);
       toast.addToast('success', t('reader.menu.pageDeleted'));
-    } catch { toast.addToast('error', t('reader.menu.pageDeleteFailed')); }
+    } catch (e) { console.warn('[Reader] Failed to delete page:', e); toast.addToast('error', t('reader.menu.pageDeleteFailed')); }
   }, [isAnimated, pageCount, current, id, toast, t]);
 
   // ── Keyboard ────────────────────────────────────────────────────────
@@ -614,12 +610,12 @@ export default function Reader() {
           </>
         ) : src && srcPage === current ? (
           <img key={current} src={src} alt={t('reader.page', { page: current + 1 })} className={`reader-image${zoomMode === 'fill' ? ' reader-image--fill' : ''}`} draggable={false} />
-        ) : loading ? (
+        ) : (
           <div className="d-flex flex-column align-center justify-center ga-3">
             <svg className="spinner" style={{ color: 'var(--md-sys-color-primary)' }} viewBox="0 0 50 50"><circle className="spinner-track" cx="25" cy="25" r="20" /><circle className="spinner-arc" cx="25" cy="25" r="20" /></svg>
             <span className="text-body-2">{t('reader.loadingPage', { page: current + 1, total: pageCount ?? '?' })}</span>
           </div>
-        ) : null}
+        )}
       </div>
 
       {!isAnimated && (
