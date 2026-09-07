@@ -90,7 +90,7 @@ export default function NiceCat() {
         <SearchBox value={store.keyword} placeholder={t('nc.search.placeholder')} clearLabel={t('common.clear')} onChange={() => {}} onCommit={onSearchCommit} />
       </div>
       {store.homeError && !store.feed.loading && store.feed.items.length === 0 && (
-        <div className="error-state mb-4"><p className="error-state__msg">{store.homeError}</p></div>
+        <div className="error-state"><p className="error-state__msg">{store.homeError}</p></div>
       )}
       <FeedList feed={store.feed} texts={{ empty: t('nc.browse.empty'), end: t('nc.browse.end'), loadingMore: t('nc.browse.loadingMore') }} onLoadMore={() => store.searchMore()}>
         {store.feed.items.map((item) => (
