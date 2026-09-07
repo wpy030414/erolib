@@ -62,7 +62,7 @@ export function SearchBox({
 
   return (
     <div className="search-box">
-      <MdiIcon path={mdiMagnify} size={18} />
+      <MdiIcon path={mdiMagnify} size={18} className="search-icon" />
       <input
         className="search-input"
         type="search"

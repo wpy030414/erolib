@@ -485,7 +485,7 @@ img {
 
 /* ---- FeedList / FeedLoading ---- */
 .feed-end { padding: 20px 0; font-size: 13px; }
-.feed-loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 24px 0; }
+.feed-loading { display: flex; align-items: center; justify-content: center; padding: 16px 0; }
 
 /* ---- WallCover ---- */
 .wall { --tile: calc(100cqw / 3); position: absolute; right: 0; top: 50%; width: 100%; aspect-ratio: 1/1; transform: translateY(-50%); }
@@ -515,8 +515,10 @@ img {
 .format-option { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-medium); background: transparent; color: var(--md-sys-color-on-surface); cursor: pointer; text-align: left; transition: border-color 0.15s ease, background-color 0.15s ease; }
 .format-option:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); }
 .format-option--selected { border-color: var(--md-sys-color-primary); background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent); }
+.format-option__label { font-size: 14px; font-weight: 500; }
+.format-option__desc { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
 .export-progress { display: flex; flex-direction: column; gap: 10px; padding: 16px 20px 24px; }
-.export-progress__label { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+.export-progress__label { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; font-variant-numeric: tabular-nums; }
 
 /* ---- UpdateDialog ---- */
 .update-dialog__content { min-width: min(420px, 82vw); max-width: 82vw; }

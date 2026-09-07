@@ -45,6 +45,7 @@ export default function Library() {
   coverMapRef.current = coverMap;
   const [showCollectionDialog, setShowCollectionDialog] = useState(false);
   const pendingCovers = useRef(new Set<string>());
+  const coverAlive = useRef<Record<string, boolean>>({});
   const title = collectionsStore.isAllActive ? t('nav.library') : `"${collectionsStore.activeCollectionName}"`;
 
   const sentinelRef = useInfiniteSentinel(() => libraryStore.loadMore(), {
@@ -54,11 +55,13 @@ export default function Library() {
   async function loadCover(book: Book) {
     if (book.id in coverMap || pendingCovers.current.has(book.id)) return;
     pendingCovers.current.add(book.id);
+    coverAlive.current[book.id] = true;
     setCoverMap((prev) => ({ ...prev, [book.id]: null }));
     try {
       const cacheKey = book.source_post_id || book.id;
       let blob = await getThumb(cacheKey);
-      if (!blob) { const bytes = await api.getBookCoverThumb(book.id); blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }); void setThumb(cacheKey, blob); }
+      if (!blob) { const bytes = await api.getBookCoverThumb(book.id); if (!coverAlive.current[book.id]) return; blob = new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }); void setThumb(cacheKey, blob); }
+      if (!coverAlive.current[book.id]) return;
       const made = URL.createObjectURL(blob);
       setCoverMap((prev) => ({ ...prev, [book.id]: made }));
     } catch { /* leave placeholder */ }
@@ -71,6 +74,7 @@ export default function Library() {
     const currentIds = new Set(libraryStore.books.map((b) => b.id));
     for (const id of prevIds.current) {
       if (!currentIds.has(id)) {
+        coverAlive.current[id] = false;
         const url = coverMapRef.current[id];
         if (url) URL.revokeObjectURL(url);
         setCoverMap((prev) => { const n = { ...prev }; delete n[id]; return n; });
@@ -118,7 +122,7 @@ export default function Library() {
   async function onImport() {
     const file = await api.openFile([{ name: t('lib.import.filterName'), extensions: ['cb7', 'cbz', 'cbr', 'epub', 'pdf'] }]);
     if (typeof file === 'string') {
-      try { const book = await api.importBook(file); await libraryStore.refresh(); toast.addToast('success', t('lib.imported', { title: (book as any)?.title ?? '' })); }
+      try { const book = await api.importBook(file); await libraryStore.refresh(); toast.addToast('success', t('lib.imported', { title: book.title })); }
       catch (e) { toast.addToast('error', t('lib.importFailed', { error: String(e) })); }
     }
   }

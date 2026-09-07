@@ -28,7 +28,7 @@ function detectInitialLocale(): Locale {
     const stored = window.localStorage.getItem('erolib.locale');
     if (stored === 'zh' || stored === 'en' || stored === 'ja') return stored;
   } catch { /* ignore */ }
-  const nav = navigator.language?.slice(0, 2);
+  const nav = navigator.language?.toLowerCase().slice(0, 2);
   if (nav === 'en') return 'en';
   if (nav === 'ja') return 'ja';
   return 'zh';
@@ -45,7 +45,7 @@ async function syncLocaleToBackend(l: Locale) {
     await api.setLocale(l);
   } catch { /* fire-and-forget */ }
   // Fire registered callbacks (e.g. library refresh)
-  localeChangeCallbacks.forEach((cb) => cb());
+  localeChangeCallbacks.forEach((cb) => cb(l));
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -76,9 +76,9 @@ export async function setLocale(l: Locale): Promise<void> {
   await syncLocaleToBackend(l);
 }
 
-const localeChangeCallbacks: Array<() => void> = [];
+const localeChangeCallbacks: Array<(l: Locale) => void> = [];
 
-export function onLocaleChange(cb: () => void): () => void {
+export function onLocaleChange(cb: (l: Locale) => void): () => void {
   localeChangeCallbacks.push(cb);
   return () => {
     const idx = localeChangeCallbacks.indexOf(cb);
