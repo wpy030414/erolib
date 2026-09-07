@@ -60,11 +60,11 @@ export default function NiceCat() {
         {store.homeError && !store.homeLoading ? (
           <div className="error-state"><p className="error-state__msg">{store.homeError}</p></div>
         ) : !store.homeLoading && store.sections.length === 0 ? (
-          <div className="text-center text-medium-emphasis mt-8">{t('nc.browse.empty')}</div>
+          <div className="text-center text-medium-emphasis" style={{ marginTop: 48 }}>{t('nc.browse.empty')}</div>
         ) : null}
         {store.homeLoading && <FeedLoading>{t('nc.browse.loadingMore')}</FeedLoading>}
         {store.sections.map((section) => (
-          <div key={section.name} className="md3-card md3-card--outlined mb-4" style={{ overflow: 'hidden' }}>
+          <div key={section.name} className="mb-4" style={{ background: 'var(--md-sys-color-surface)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: 'var(--md-sys-shape-corner-medium)', paddingTop: 16, overflow: 'hidden' }}>
             <div className="md3-card__content" style={{ padding: '12px 16px' }}><h3 style={{ font: 'var(--md-sys-typescale-title-medium)', margin: 0 }}>{section.name}</h3></div>
             <div style={{ overflowX: 'auto', padding: '0 16px 16px' }}>
               <div style={{ display: 'flex', gap: 12 }}>

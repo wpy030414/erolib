@@ -44,20 +44,18 @@ export function WallCover({ books, coverMap }: WallCoverProps) {
             <div className="wall__track">
               {/* Duplicate twice for seamless looping */}
               {[0, 1].map((dup) => (
-                <div key={dup}>
-                  {col.map((tile, ri) => (
-                    <div key={`${ci}-${dup}-${ri}-${tile.id}`} className="wall__tile">
-                      {tile.src && (
-                        <img
-                          src={tile.src}
-                          alt={tile.title}
-                          className="wall__img"
-                          loading="lazy"
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <>{col.map((tile, ri) => (
+                  <div key={`${ci}-${dup}-${ri}-${tile.id}`} className="wall__tile">
+                    {tile.src && (
+                      <img
+                        src={tile.src}
+                        alt={tile.title}
+                        className="wall__img"
+                        loading="lazy"
+                      />
+                    )}
+                  </div>
+                ))}</>
               ))}
             </div>
           </div>

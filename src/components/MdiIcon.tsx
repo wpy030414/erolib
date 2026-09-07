@@ -3,9 +3,10 @@ interface MdiIconProps {
   size?: number;
   color?: string;
   className?: string;
+  slot?: string;
 }
 
-export function MdiIcon({ path, size = 24, color, className }: MdiIconProps) {
+export function MdiIcon({ path, size = 24, color, className, slot }: MdiIconProps) {
   return (
     <svg
       className={className}
@@ -15,6 +16,7 @@ export function MdiIcon({ path, size = 24, color, className }: MdiIconProps) {
       aria-hidden="true"
       focusable="false"
       fill={color ?? 'currentColor'}
+      slot={slot}
     >
       <path d={path} />
     </svg>

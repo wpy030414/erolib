@@ -101,14 +101,14 @@ export default function Tasks() {
 
   const statusColor: Record<string, string> = {
     running: 'var(--md-sys-color-tertiary-container)', pending: 'var(--md-sys-color-secondary-container)',
-    paused: 'var(--md-sys-color-surface-container-highest)', completed: 'var(--md-sys-color-primary-container)',
-    failed: 'var(--md-sys-color-error-container)', cancelled: 'var(--md-sys-color-surface-container-highest)',
+    paused: 'var(--md-sys-color-surface-variant)', completed: 'var(--md-sys-color-primary-container)',
+    failed: 'var(--md-sys-color-error-container)', cancelled: 'var(--md-sys-color-surface-variant)',
   };
 
   return (
     <div className="pa-6">
       {/* tasks-header 语义对齐：Vue 中标题在 v-if 链之外，loading/空态也常驻 */}
-      <div className="d-flex align-center gap-4 mb-6">
+      <div className="d-flex align-center gap-4 mb-6" style={{ flexWrap: 'wrap', minHeight: 40 }}>
         <h2 className="text-h5" style={{ margin: 0 }}>{t('tasks.title')}</h2>
       </div>
       {taskStore.loading ? (
@@ -124,22 +124,22 @@ export default function Tasks() {
             className={`md3-card md3-card--outlined task-card${taskStore.selectedTaskId === item.id ? ' task-card--selected' : ''}`}
             onClick={() => taskStore.selectTask(item.id)}
           >
-            <div className="d-flex align-center" style={{ gap: 8, marginBottom: 8 }}>
-              <span className="text-truncate" style={{ flex: 1, fontWeight: 500 }}>{item.title}</span>
-              <span style={{ padding: '2px 10px', borderRadius: 'var(--md-sys-shape-corner-full)', fontSize: 12, background: statusColor[item.status] || 'var(--md-sys-color-surface-container)', whiteSpace: 'nowrap' }}>
+            <div className="d-flex align-center" style={{ gap: 12 }}>
+              <span className="text-truncate" style={{ flex: 1, fontWeight: 500, minWidth: 0 }}>{item.title}</span>
+              <span style={{ padding: '2px 10px', borderRadius: 'var(--md-sys-shape-corner-small)', fontSize: 12, background: statusColor[item.status] || 'var(--md-sys-color-surface-container)', whiteSpace: 'nowrap' }}>
                 {t('tasks.status.' + item.status)}
               </span>
             </div>
-            <div className="d-flex align-center" style={{ gap: 8, marginBottom: 8 }}>
-              <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--md-sys-color-surface-container-highest)', overflow: 'hidden' }}>
+            <div className="d-flex align-center" style={{ gap: 12 }}>
+              <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--md-sys-color-surface-variant)', overflow: 'hidden' }}>
                 <div style={{ width: progressPercent(item) + '%', height: '100%', borderRadius: 3, background: 'var(--md-sys-color-primary)', transition: 'width 0.3s ease' }} />
               </div>
-              <span style={{ fontSize: 12, minWidth: 36, textAlign: 'right' }}>{progressPercent(item)}%</span>
+              <span style={{ minWidth: 36, textAlign: 'right', color: 'var(--md-sys-color-on-surface-variant)' }}>{progressPercent(item)}%</span>
             </div>
             {/* task-logs-wrap 语义对齐：选中展开时 0.2s 淡入 */}
             {taskStore.selectedTaskId === item.id && (
-              <div className="task-logs-body" onContextMenu={(e) => { e.preventDefault(); copyLogs(item); }} style={{ maxHeight: 200, overflowY: 'auto', fontSize: 12, padding: 8, borderRadius: 8, background: 'var(--md-sys-color-surface-container)', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>
-                {item.logs.length > 0 ? item.logs.map((line, i) => <div key={i}>{line}</div>) : <div>{t('tasks.detail.noLogs')}</div>}
+              <div className="task-logs-body" onContextMenu={(e) => { e.preventDefault(); copyLogs(item); }} style={{ maxHeight: 220, overflowY: 'auto', fontSize: 12, padding: '8px 10px', borderRadius: 'var(--md-sys-shape-corner-small)', background: 'var(--md-sys-color-surface-variant)', color: 'var(--md-sys-color-on-surface-variant)', fontFamily: 'var(--md-sys-typescale-font)', fontVariantNumeric: 'tabular-nums', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+                {item.logs.length > 0 ? item.logs.map((line, i) => <div key={i} style={{ marginBottom: 2 }}>{line}</div>) : <div>{t('tasks.detail.noLogs')}</div>}
               </div>
             )}
             {/* task-footer 语义对齐：按钮行 + 右侧速度/摘要同行（space-between） */}

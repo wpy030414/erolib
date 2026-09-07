@@ -45,7 +45,7 @@ export default function Home() {
     : totalMs <= 0 ? { value: '0', unit: 'minute' as const } : { value: String(Math.max(1, Math.round(totalMinutes))), unit: 'minute' as const };
 
   const shuffledLibrary = [...library].sort((a, b) => hashU32(a.id) - hashU32(b.id));
-  const wallBooks = shuffledLibrary.slice(0, WALL_SLOTS);
+  const wallBooks = Array.from({ length: WALL_SLOTS }, (_, i) => shuffledLibrary[i % shuffledLibrary.length] ?? shuffledLibrary[0]).filter(Boolean);
 
   async function loadCover(book: Book): Promise<void> {
     if (book.id in coverMap || pendingCovers.current.has(book.id)) return;
@@ -77,7 +77,7 @@ export default function Home() {
       } catch (e) { setError(t('common.error', { message: String(e) })); }
       finally { setLoading(false); }
     })();
-    return () => { disposalsRef.current.forEach((d) => d()); };
+    return () => { disposalsRef.current.forEach((d) => d()); closeMenu(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

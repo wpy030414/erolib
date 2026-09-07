@@ -31,8 +31,8 @@ export const UpdateDialog = forwardRef<UpdateDialogHandle>((_, ref) => {
 
   return (
     <M3eDialog open={open} onClosed={closeDialog}>
-      <div slot="headline">{t('settings.update.title')}</div>
-      <div slot="content" className="update-dialog__content">
+      <div slot="header">{t('settings.update.title')}</div>
+      <div className="update-dialog__content">
         {/* Checking */}
         {store.checking && (
           <div className="update-dialog__center">

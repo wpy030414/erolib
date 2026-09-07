@@ -106,10 +106,10 @@ export default function EHentai() {
         <M3eButton variant="tonal" disabled={loggingIn} onClick={onLogout}><MdiIcon path={mdiExitToApp} size={18} /> {t('eh.login.relogin')}</M3eButton>
       </div>
 
-      <div className="tag-chips mb-6">
+      <div className="cat-chips mb-6">
         {CATEGORIES.map((cat) => (
-          <button key={cat} className={`tag-chip${store.category === cat ? ' tag-chip--selected' : ''}`} aria-pressed={store.category === cat} onClick={() => store.selectCategory(store.category === cat ? null : cat)}>
-            <span className="tag-chip__label">{t(`eh.category.${cat}`)}</span>
+          <button key={cat} className={`cat-chip${store.category === cat ? ' cat-chip--selected' : ''}`} aria-pressed={store.category === cat} onClick={() => store.selectCategory(store.category === cat ? null : cat)}>
+            <span>{t(`eh.category.${cat}`)}</span>
           </button>
         ))}
       </div>

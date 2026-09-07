@@ -211,8 +211,8 @@ export function CollectionDialog({ open, onClose }: CollectionDialogProps) {
 
       {/* Delete confirmation dialog */}
       <M3eDialog open={deleteOpen} onClosed={cancelDelete}>
-        <div slot="headline">{t('lib.collections.delete')}</div>
-        <div slot="content" className="delete-dialog__content">
+        <div slot="header">{t('lib.collections.delete')}</div>
+        <div className="delete-dialog__content">
           {t('lib.collections.confirmDelete', { name: deleteTargetName })}
         </div>
         <div slot="actions">

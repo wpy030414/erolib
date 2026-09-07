@@ -65,8 +65,8 @@ export function BookCollectionPicker({ bookId, onClose }: BookCollectionPickerPr
 
   return (
     <M3eDialog open={open} onClosed={handleClosed}>
-      <div slot="headline">{t('lib.collections.addToTitle')}</div>
-      <div slot="content" className="picker__content">
+      <div slot="header">{t('lib.collections.addToTitle')}</div>
+      <div className="picker__content">
         {!store.collections.length ? (
           <div className="picker__empty">{t('lib.collections.empty')}</div>
         ) : (

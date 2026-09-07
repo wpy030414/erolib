@@ -214,9 +214,9 @@ export default function Settings() {
           <section className="mb-6">
             <div className="d-flex align-center mb-2"><MdiIcon path={mdiDatabaseOutline} size={22} /><h3 className="text-h6" style={{ margin: '0 0 0 8px' }}>{t('settings.reset.title')}</h3></div>
             <div className="d-flex gap-3">
-              <M3eButton variant="outlined" disabled={clearingCache} onClick={onClearCache}><MdiIcon path={mdiBroom} size={20} /> {t('settings.reset.clearCache')}</M3eButton>
+              <M3eButton variant="outlined" disabled={clearingCache} onClick={onClearCache}><MdiIcon path={mdiBroom} size={20} slot="icon" /> {t('settings.reset.clearCache')}</M3eButton>
               <M3eButton variant="filled" disabled={resetting} onClick={() => { // 语义对齐 Vue：每次打开前重置输入（上次输入残留会让毁灭按钮提前解锁）
-                setConfirmInput(''); setShowClearAll(true); }}><MdiIcon path={mdiDeleteForever} size={20} /> {resetting ? t('settings.reset.running') : t('settings.reset.clearAll')}</M3eButton>
+                setConfirmInput(''); setShowClearAll(true); }}><MdiIcon path={mdiDeleteForever} size={20} slot="icon" /> {resetting ? t('settings.reset.running') : t('settings.reset.clearAll')}</M3eButton>
             </div>
             {resetError && <p className="mt-3 text-body-2 text-error">{resetError}</p>}
           </section>
@@ -241,7 +241,7 @@ export default function Settings() {
                 readOnly disabled={!settingsStore.syncEnabled || settingsStore.syncBusy} onClick={pickSyncDir}
                 style={{ ...bareInputStyle, cursor: 'pointer' }} />
             </M3eFormField>
-            {settingsStore.syncStats && (<p className="mt-3 text-body-2 text-success d-flex align-center"><MdiIcon path={mdiCheckCircle} size={16} /> {t('settings.localSync.stats', settingsStore.syncStats)}</p>)}
+            {settingsStore.syncStats && (<p className="mt-3 text-body-2 text-success d-flex align-center"><MdiIcon path={mdiCheckCircle} size={16} />{' '}{t('settings.localSync.stats', settingsStore.syncStats)}</p>)}
             {settingsStore.syncBusy && <p className="mt-3 text-body-2 text-medium-emphasis">{t('settings.localSync.syncing')}</p>}
             {settingsStore.syncError && <p className="mt-3 text-body-2 text-error">{settingsStore.syncError}</p>}
           </section>
@@ -255,12 +255,12 @@ export default function Settings() {
                   onChange={(e) => settingsStore.saveOpdsPort(e.target.value)} style={bareInputStyle} />
               </M3eFormField>
               {!settingsStore.opdsRunning ? (
-                <M3eButton variant="filled" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiPlay} size={20} /> {t('settings.start')}</M3eButton>
+                <M3eButton variant="filled" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiPlay} size={20} slot="icon" /> {t('settings.start')}</M3eButton>
               ) : (
-                <M3eButton variant="outlined" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiStop} size={20} /> {t('settings.stop')}</M3eButton>
+                <M3eButton variant="outlined" disabled={settingsStore.opdsBusy} onClick={() => settingsStore.toggleOpds()}><MdiIcon path={mdiStop} size={20} slot="icon" /> {t('settings.stop')}</M3eButton>
               )}
             </div>
-            {settingsStore.opdsRunning && settingsStore.opdsUrl && (<p className="mt-3 text-body-2 text-success"><a href={`${settingsStore.opdsUrl}/opds`} target="_blank" rel="noreferrer">{settingsStore.opdsUrl}/opds</a></p>)}
+            {settingsStore.opdsRunning && settingsStore.opdsUrl && (<p className="mt-3 text-body-2 text-success d-flex align-center"><MdiIcon path={mdiCheckCircle} size={16} /> <a href={`${settingsStore.opdsUrl}/opds`} target="_blank" rel="noreferrer">{settingsStore.opdsUrl}/opds</a></p>)}
             {settingsStore.opdsError && <p className="mt-3 text-body-2 text-error">{settingsStore.opdsError}</p>}
           </section>
 
@@ -273,12 +273,12 @@ export default function Settings() {
                   onChange={(e) => settingsStore.saveRssPort(e.target.value)} style={bareInputStyle} />
               </M3eFormField>
               {!settingsStore.rssRunning ? (
-                <M3eButton variant="filled" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiPlay} size={20} /> {t('settings.start')}</M3eButton>
+                <M3eButton variant="filled" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiPlay} size={20} slot="icon" /> {t('settings.start')}</M3eButton>
               ) : (
-                <M3eButton variant="outlined" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiStop} size={20} /> {t('settings.stop')}</M3eButton>
+                <M3eButton variant="outlined" disabled={settingsStore.rssBusy} onClick={() => settingsStore.toggleRss()}><MdiIcon path={mdiStop} size={20} slot="icon" /> {t('settings.stop')}</M3eButton>
               )}
             </div>
-            {settingsStore.rssRunning && settingsStore.rssUrl && (<p className="mt-3 text-body-2 text-success"><a href={`${settingsStore.rssUrl}/rss`} target="_blank" rel="noreferrer">{settingsStore.rssUrl}/rss</a></p>)}
+            {settingsStore.rssRunning && settingsStore.rssUrl && (<p className="mt-3 text-body-2 text-success d-flex align-center"><MdiIcon path={mdiCheckCircle} size={16} /> <a href={`${settingsStore.rssUrl}/rss`} target="_blank" rel="noreferrer">{settingsStore.rssUrl}/rss</a></p>)}
             {settingsStore.rssError && <p className="mt-3 text-body-2 text-error">{settingsStore.rssError}</p>}
           </section>
         </>
@@ -290,8 +290,8 @@ export default function Settings() {
       {/* Clear all confirmation dialog — md-dialog 语义对齐：常驻挂载 + open 切换，
           开/合动画由 m3e-dialog 内置（含 Esc/cancel 路径）。 */}
       <M3eDialog open={showClearAll} onClosed={() => setShowClearAll(false)}>
-        <div slot="headline">{t('settings.reset.clearAll')}</div>
-        <div slot="content">
+        <div slot="header">{t('settings.reset.clearAll')}</div>
+        <div className="clear-all-dialog__content">
           <p className="text-body-2 text-error">{t('settings.reset.confirmWarn')}</p>
           <M3eFormField variant="outlined">
             <label slot="label">{t('settings.reset.typeConfirm', { phrase: confirmPhrase })}</label>
