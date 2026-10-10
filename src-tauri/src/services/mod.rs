@@ -29,4 +29,4 @@ pub use ehentai::{EhentaiClient, GalleryListItem};
 pub use ahentai::AhentaiClient;
 pub use nicecat::NicecatClient;
 pub use search::SearchService;
-pub use storage::StorageService;
+pub use storage::{PageCompression, StorageService};

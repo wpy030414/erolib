@@ -10,7 +10,7 @@ use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::{Book, BookSource};
 use crate::services::locale;
-use crate::services::StorageService;
+use crate::services::{PageCompression, StorageService};
 
 pub struct LibraryService {
     pub(crate) db: Arc<Database>,
@@ -71,7 +71,7 @@ impl LibraryService {
             .map_err(|e| AppError::Other(e.to_string()))?;
 
             self.storage
-                .create_cb7(&images, &parsed, true)
+                .create_cb7(&images, &parsed, PageCompression::Lossy)
                 .map_err(|e| AppError::Other(e.to_string()))?;
             Some(parsed)
         } else if format == "cb7" || format == "cbz" {
@@ -87,7 +87,7 @@ impl LibraryService {
                 storage.create_cb7(
                     &images,
                     &meta.clone().unwrap_or_default(),
-                    true,
+                    PageCompression::Lossy,
                 )?;
                 Ok(meta)
             })
@@ -229,7 +229,9 @@ impl LibraryService {
         if dropped_first_page {
             let file_path = self.get_book_file_path(id).await?;
             let path = Path::new(&file_path);
-            let _ = self.storage.extract_cover(path, id);
+            let _ = self
+                .storage
+                .extract_cover(path, id, PageCompression::Lossy);
         }
         Ok(())
     }
@@ -361,7 +363,7 @@ impl LibraryService {
             .unwrap_or(0);
         let cover_path = self
             .storage
-            .extract_cover(file_path, book_id)
+            .extract_cover(file_path, book_id, PageCompression::Lossy)
             .ok()
             .map(|p| p.to_string_lossy().to_string());
         let now = Utc::now();

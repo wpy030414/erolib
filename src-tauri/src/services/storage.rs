@@ -22,9 +22,51 @@ struct CachedArchive {
 /// bouncing between many books — beyond this the oldest entry is dropped.
 const PAGE_CACHE_MAX: usize = 8;
 
-/// Lossy WebP quality for the unified page format (`ensure_webp`). 80 keeps
-/// manga linework visually lossless while cutting size well below jpeg.
+/// Lossy WebP quality for the `PageCompression::Lossy` mode (`encode_page`).
+/// 80 keeps manga linework visually lossless while cutting size well below
+/// jpeg.
 const WEBP_QUALITY: f32 = 80.0;
+
+/// How page and cover images are encoded when a book enters the library.
+/// Stored in the `settings` KV table (and sent over IPC) as the lowercase
+/// variant name: 'none' | 'lossless' | 'lossy'. Only affects NEW imports and
+/// downloads — existing books are never re-encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PageCompression {
+    /// Store bytes untouched; entry/cover extension comes from magic sniffing.
+    #[default]
+    None,
+    /// Convert every decodable page to lossless WebP unconditionally — format
+    /// uniformity is preferred over size (user decision), so the output MAY
+    /// be larger than the source (typically for jpeg pages). Bytes already
+    /// in WebP pass through.
+    Lossless,
+    /// Lossy WebP at `WEBP_QUALITY` — the pre-setting "unified page format"
+    /// behaviour; the result is only adopted when actually smaller.
+    Lossy,
+}
+
+impl PageCompression {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Lossless => "lossless",
+            Self::Lossy => "lossy",
+        }
+    }
+
+    /// Parse a DB/IPC string; returns None for unrecognized values (callers
+    /// fall back to the `None` default, mirroring `locale::current_locale`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "none" => Some(Self::None),
+            "lossless" => Some(Self::Lossless),
+            "lossy" => Some(Self::Lossy),
+            _ => None,
+        }
+    }
+}
 
 /// Manages on-disk storage of CB7 files, covers, and cache.
 pub struct StorageService {
@@ -54,15 +96,15 @@ impl StorageService {
     }
 
     /// Create a CB7 (7-zip/ZIP) archive containing a ComicInfo.xml and the
-    /// given images. Returns the path to the created file. With `reencode`
-    /// every page runs through `ensure_webp` (the unified page format); it is
-    /// disabled only for ugoira frame sequences, whose per-frame jpeg quality
-    /// and delay timings must survive untouched.
+    /// given images. Returns the path to the created file. Every page runs
+    /// through `encode_page` per `compression`; ugoira frame sequences follow
+    /// the same setting — `None` keeps per-frame jpeg quality and delay
+    /// timings untouched.
     pub fn create_cb7(
         &self,
         images: &[Vec<u8>],
         metadata: &BookMetadata,
-        reencode: bool,
+        compression: PageCompression,
     ) -> Result<PathBuf> {
         let book_id = Uuid::new_v4().to_string();
         let file_path = self.library_path.join(format!("{}.cb7", book_id));
@@ -78,11 +120,7 @@ impl StorageService {
 
         // Images, named sequentially.
         for (index, image) in images.iter().enumerate() {
-            let image = if reencode {
-                Self::ensure_webp(image)
-            } else {
-                image.to_vec()
-            };
+            let image = Self::encode_page(image, compression);
             let ext = guess_image_extension(&image);
             let filename = format!("{:04}.{}", index + 1, ext);
             zip.start_file(&filename, options)?;
@@ -93,12 +131,15 @@ impl StorageService {
         Ok(file_path)
     }
 
-    /// Extract the first image from a CB7 archive as the cover, stored as a
-    /// lossy webp at `covers/{book_id}.webp` (the unified cover format, so
-    /// `serve_cover` and OPDS/RSS can assume one extension + mime).
-    pub fn extract_cover(&self, cb7_path: &Path, book_id: &str) -> Result<PathBuf> {
-        let cover_path = self.cover_path.join(format!("{}.webp", book_id));
-
+    /// Extract the first image from a CB7 archive as the cover, encoded per
+    /// `compression` and written at the magic-sniffed extension of the result
+    /// bytes (see `write_cover`).
+    pub fn extract_cover(
+        &self,
+        cb7_path: &Path,
+        book_id: &str,
+        compression: PageCompression,
+    ) -> Result<PathBuf> {
         let file = std::fs::File::open(cb7_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
 
@@ -113,12 +154,36 @@ impl StorageService {
             {
                 let mut buffer = Vec::new();
                 entry.read_to_end(&mut buffer)?;
-                std::fs::write(&cover_path, Self::ensure_webp(&buffer))?;
-                return Ok(cover_path);
+                return self.write_cover(book_id, &buffer, compression);
             }
         }
 
         anyhow::bail!("No image found in archive: {}", cb7_path.display())
+    }
+
+    /// Encode cover bytes per `compression` and write them at the
+    /// magic-sniffed extension of the RESULT bytes (the lossy mode's
+    /// smaller-only guard can fall back to the source format, so never
+    /// assume `.webp`). Any cover file of a DIFFERENT extension for this
+    /// book is removed first — the read paths probe `.webp` first, so a
+    /// stale file left over from a previous compression mode would otherwise
+    /// permanently shadow the new one.
+    pub fn write_cover(
+        &self,
+        book_id: &str,
+        bytes: &[u8],
+        compression: PageCompression,
+    ) -> Result<PathBuf> {
+        let data = Self::encode_page(bytes, compression);
+        let ext = guess_image_extension(&data);
+        for other in ["webp", "jpg", "jpeg", "png", "avif"] {
+            if other != ext {
+                let _ = std::fs::remove_file(self.cover_path.join(format!("{book_id}.{other}")));
+            }
+        }
+        let path = self.cover_path.join(format!("{book_id}.{ext}"));
+        std::fs::write(&path, &data)?;
+        Ok(path)
     }
 
     /// Delete a book's CB7 file and cover.
@@ -183,16 +248,21 @@ impl StorageService {
         parse_comic_info(&xml)
     }
 
-    /// Re-encode page bytes into lossy WebP (quality `WEBP_QUALITY`), the
-    /// unified page format for the whole library. Sources already in WebP
-    /// pass through untouched; jpg/png are decoded then encoded via
-    /// libwebp (the image crate's own webp encoder is lossless-only, which
-    /// would grow jpeg sources instead of shrinking them). The result is only
-    /// kept when it is actually smaller than the source. AVIF bytes are no
-    /// longer decodable (dav1d was dropped — every book is normalized to
-    /// webp on ingest); they pass through untouched with a warn so a stale
-    /// AVIF page is never silently dropped from a book.
-    pub(crate) fn ensure_webp(raw: &[u8]) -> Vec<u8> {
+    /// Encode one page image per the library compression mode.
+    ///
+    /// Shared passthrough guards (a page is never dropped): `None` returns
+    /// the bytes untouched; sources already in WebP pass through in every
+    /// mode (the format is already unified — re-encoding a lossy webp to
+    /// lossless would only balloon it); AVIF passes through with a warn (no
+    /// decoder since dav1d was dropped); undecodable bytes pass through with
+    /// a warn. `Lossless` converts unconditionally — format uniformity is
+    /// preferred over size (user decision), so the output MAY be larger than
+    /// the source. `Lossy` keeps the D-021 guard: the q80 result is only
+    /// adopted when actually smaller than the source.
+    pub(crate) fn encode_page(raw: &[u8], mode: PageCompression) -> Vec<u8> {
+        if mode == PageCompression::None {
+            return raw.to_vec();
+        }
         // WebP RIFF container: "RIFF" + size + "WEBP".
         if raw.len() >= 12 && raw.starts_with(b"RIFF") && raw[8..12] == *b"WEBP" {
             return raw.to_vec();
@@ -209,10 +279,16 @@ impl StorageService {
         };
         let rgba = img.to_rgba8();
         let encoder = webp::Encoder::from_rgba(rgba.as_raw(), img.width(), img.height());
-        let out = encoder.encode(WEBP_QUALITY);
-        if out.is_empty() || out.len() >= raw.len() {
-            // Empty output is an encoder failure; a non-smaller result means
-            // the source was already as compact as q80 webp — keep it.
+        let (out, adopt_only_if_smaller) = match mode {
+            PageCompression::Lossless => (encoder.encode_lossless(), false),
+            PageCompression::Lossy => (encoder.encode(WEBP_QUALITY), true),
+            PageCompression::None => unreachable!("handled above"),
+        };
+        if out.is_empty() || (adopt_only_if_smaller && out.len() >= raw.len()) {
+            // Empty output is an encoder failure; for the lossy mode a
+            // non-smaller result means the source was already as compact as
+            // q80 webp — keep it. (Lossless adopts unconditionally: format
+            // uniformity is preferred over size.)
             return raw.to_vec();
         }
         out.to_vec()
@@ -275,7 +351,12 @@ impl StorageService {
     /// over via read_comic_info so title/tags/source/delays round-trip; when
     /// absent a bare-bones metadata keeps the archive still importable.
     /// Returns the new page count.
-    pub fn rewrite_without_page(&self, cb7_path: &Path, drop_page: usize) -> Result<usize> {
+    pub fn rewrite_without_page(
+        &self,
+        cb7_path: &Path,
+        drop_page: usize,
+        compression: PageCompression,
+    ) -> Result<usize> {
         // Drop any cached open handle for this path BEFORE reading — the cached
         // File descriptor would keep pointing at the old inode after the rename
         // below, so a later read_page() would silently serve pre-delete content.
@@ -320,10 +401,11 @@ impl StorageService {
             zip.write_all(create_comic_info(&metadata).as_bytes())?;
 
             for (index, image) in pages.iter().enumerate() {
-                // Pages are stored in the unified webp format, so a repacked
-                // archive stays normalized; an older non-webp page is only
-                // kept when ensure_webp finds it already at least as compact.
-                let image = Self::ensure_webp(image);
+                // Re-encode per the current compression mode: a webp-mode
+                // repack stays normalized, while `None` keeps every remaining
+                // byte untouched (a page deletion never silently re-encodes a
+                // whole book).
+                let image = Self::encode_page(image, compression);
                 let ext = guess_image_extension(&image);
                 let filename = format!("{:04}.{}", index + 1, ext);
                 zip.start_file(&filename, options)?;
@@ -572,4 +654,186 @@ pub fn guess_image_extension(bytes: &[u8]) -> &'static str {
         }
     }
     "jpg"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_png() -> Vec<u8> {
+        // 64×64 horizontal gradient — a real, decodable PNG fixture.
+        let img = image::RgbaImage::from_fn(64, 64, |x, _| {
+            image::Rgba([(x * 4) as u8, 128, 255 - (x * 4) as u8, 255])
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .expect("encode png fixture");
+        buf.into_inner()
+    }
+
+    fn tiny_jpeg() -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(64, 64, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 4) as u8, 64, 255])
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .expect("encode jpeg fixture");
+        buf.into_inner()
+    }
+
+    fn is_webp(b: &[u8]) -> bool {
+        b.len() >= 12 && b.starts_with(b"RIFF") && b[8..12] == *b"WEBP"
+    }
+
+    fn temp_storage() -> (StorageService, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("erolib-storage-test-{}", Uuid::new_v4()));
+        (StorageService::new(dir.clone()), dir)
+    }
+
+    #[test]
+    fn page_compression_str_roundtrip() {
+        for m in [
+            PageCompression::None,
+            PageCompression::Lossless,
+            PageCompression::Lossy,
+        ] {
+            assert_eq!(PageCompression::parse(m.as_str()), Some(m));
+        }
+        assert_eq!(PageCompression::parse("bogus"), None);
+        assert_eq!(PageCompression::default(), PageCompression::None);
+    }
+
+    #[test]
+    fn encode_page_none_is_identity() {
+        for input in [tiny_png(), tiny_jpeg(), b"not an image".to_vec()] {
+            assert_eq!(
+                StorageService::encode_page(&input, PageCompression::None),
+                input,
+                "None mode must return the bytes untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_page_lossless_png_becomes_webp() {
+        let png = tiny_png();
+        let out = StorageService::encode_page(&png, PageCompression::Lossless);
+        assert!(is_webp(&out), "lossless mode must always produce webp");
+        let img = image::load_from_memory(&out).expect("decode lossless webp");
+        assert_eq!((img.width(), img.height()), (64, 64));
+    }
+
+    #[test]
+    fn encode_page_lossless_jpeg_converts_unconditionally() {
+        // User decision: lossless = format uniformity over size — a jpeg page
+        // becomes lossless webp even though the output is usually LARGER.
+        let jpg = tiny_jpeg();
+        let out = StorageService::encode_page(&jpg, PageCompression::Lossless);
+        assert!(is_webp(&out), "lossless mode must always produce webp");
+        let img = image::load_from_memory(&out).expect("decode lossless webp");
+        assert_eq!((img.width(), img.height()), (64, 64));
+    }
+
+    #[test]
+    fn encode_page_lossy_never_grows_and_keeps_garbage() {
+        let jpg = tiny_jpeg();
+        let out = StorageService::encode_page(&jpg, PageCompression::Lossy);
+        assert!(out.len() <= jpg.len(), "lossy output must never exceed source");
+        // Either converted (smaller webp) or passed through unchanged.
+        assert!(is_webp(&out) || out == jpg);
+        // Undecodable bytes pass through in every mode (a page is never dropped).
+        let junk = b"garbage bytes".to_vec();
+        assert_eq!(
+            StorageService::encode_page(&junk, PageCompression::Lossy),
+            junk
+        );
+        assert_eq!(
+            StorageService::encode_page(&junk, PageCompression::Lossless),
+            junk
+        );
+    }
+
+    #[test]
+    fn create_cb7_none_preserves_formats_and_bytes() {
+        let (storage, _dir) = temp_storage();
+        let jpg = tiny_jpeg();
+        let png = tiny_png();
+        let meta = BookMetadata {
+            title: "t".into(),
+            ..Default::default()
+        };
+
+        let path = storage
+            .create_cb7(&[jpg.clone(), png.clone()], &meta, PageCompression::None)
+            .expect("create cb7 (none)");
+        let zip = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(zip).unwrap();
+        let mut names: Vec<String> = zip.file_names().map(str::to_string).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["0001.jpg".to_string(), "0002.png".to_string(), "ComicInfo.xml".to_string()]
+        );
+        let mut buf = Vec::new();
+        zip.by_name("0001.jpg").unwrap().read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, jpg, "None mode must store the original bytes");
+
+        // Lossless converts everything deterministically (unconditional).
+        let path = storage
+            .create_cb7(&[jpg, png], &meta, PageCompression::Lossless)
+            .expect("create cb7 (lossless)");
+        let zip = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(zip).unwrap();
+        let mut buf = Vec::new();
+        zip.by_name("0001.webp").unwrap().read_to_end(&mut buf).unwrap();
+        assert!(is_webp(&buf));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_cover_replaces_stale_other_extension() {
+        let (storage, _dir) = temp_storage();
+        let id = Uuid::new_v4().to_string();
+        let jpg = tiny_jpeg();
+
+        // Lossless era: cover lands at {id}.webp (unconditional conversion).
+        let webp_cover = storage
+            .write_cover(&id, &jpg, PageCompression::Lossless)
+            .expect("write webp cover");
+        assert!(webp_cover.extension().is_some_and(|e| e == "webp"));
+
+        // Switch to None: the cover must move to {id}.jpg and the stale
+        // {id}.webp (which read_cover would probe FIRST) must be gone.
+        let jpg_cover = storage
+            .write_cover(&id, &jpg, PageCompression::None)
+            .expect("write jpg cover");
+        assert!(jpg_cover.extension().is_some_and(|e| e == "jpg"));
+        assert!(!storage.cover_path.join(format!("{id}.webp")).exists());
+        assert_eq!(storage.read_cover(&id), Some(jpg));
+    }
+
+    #[test]
+    fn rewrite_without_page_none_keeps_remaining_bytes() {
+        let (storage, _dir) = temp_storage();
+        let jpg = tiny_jpeg();
+        let png = tiny_png();
+        let meta = BookMetadata {
+            title: "t".into(),
+            ..Default::default()
+        };
+
+        let path = storage
+            .create_cb7(&[jpg, png.clone()], &meta, PageCompression::None)
+            .expect("create cb7 (none)");
+        let count = storage
+            .rewrite_without_page(&path, 0, PageCompression::None)
+            .expect("rewrite without page");
+        assert_eq!(count, 1);
+        // The surviving page must be byte-identical to what went in — a
+        // None-mode repack must not re-encode anything.
+        assert_eq!(storage.read_page(&path, 0), Some(png));
+        let _ = std::fs::remove_file(&path);
+    }
 }

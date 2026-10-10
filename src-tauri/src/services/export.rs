@@ -598,13 +598,13 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// ensure_webp: jpeg → webp, webp passthrough, junk fallback.
+    /// encode_page (lossy): jpeg → webp, webp passthrough, junk fallback.
     #[test]
-    fn ensure_webp_converts_and_passes_through() {
-        use crate::services::storage::StorageService;
+    fn encode_page_lossy_converts_and_passes_through() {
+        use crate::services::storage::{PageCompression, StorageService};
 
         let jpeg = red_jpeg();
-        let out = StorageService::ensure_webp(&jpeg);
+        let out = StorageService::encode_page(&jpeg, PageCompression::Lossy);
         assert!(
             out.starts_with(b"RIFF") && out[8..12] == *b"WEBP",
             "jpeg page must be re-encoded to webp"
@@ -614,12 +614,15 @@ mod tests {
         assert_eq!((img.width(), img.height()), (1, 1));
 
         // Already-webp bytes pass through untouched.
-        let passthrough = StorageService::ensure_webp(&out);
+        let passthrough = StorageService::encode_page(&out, PageCompression::Lossy);
         assert_eq!(passthrough, out);
 
         // Undecodable bytes fall back to the original (a page is never dropped).
         let junk = vec![0u8; 64];
-        assert_eq!(StorageService::ensure_webp(&junk), junk);
+        assert_eq!(
+            StorageService::encode_page(&junk, PageCompression::Lossy),
+            junk
+        );
     }
 }
 

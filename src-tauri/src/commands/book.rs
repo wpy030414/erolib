@@ -266,7 +266,11 @@ pub async fn delete_page(
         .map_err(|e| e.to_string())?;
     let storage = state.storage.clone();
     let new_count = tokio::task::spawn_blocking(move || {
-        storage.rewrite_without_page(std::path::PathBuf::from(&file_path).as_path(), page)
+        storage.rewrite_without_page(
+            std::path::PathBuf::from(&file_path).as_path(),
+            page,
+            crate::services::PageCompression::Lossy,
+        )
     })
     .await
     .map_err(|e| format!("page delete join failed: {e}"))?
