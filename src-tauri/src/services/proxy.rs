@@ -337,6 +337,66 @@ mod tests {
         assert!(!is_loopback_host(None));
     }
 
+    /// Smoke test for the real registry read + TCP probe path. The result
+    /// depends on the machine (a Clash/V2Ray "system proxy" may or may not be
+    /// on), so it only asserts well-formedness — but running it with
+    /// `--nocapture` on a machine that *does* have a system proxy is the
+    /// end-to-end proof the Windows detection works. On non-Windows it falls
+    /// back to env vars (usually empty in CI) and returns None.
+    #[test]
+    fn detection_path_is_well_formed() {
+        let detected = detect_uncached();
+        eprintln!("proxy detection -> {detected:?}");
+        if let Some(url) = detected {
+            assert!(url.starts_with("http://"), "unexpected proxy url: {url}");
+        }
+    }
+
+    /// The "no proxy found" outcome must NOT be cached — that is exactly what
+    /// lets a user launch EroLib first and enable Clash afterwards: the next
+    /// request re-detects and picks the proxy up. This test pins that
+    /// behaviour by pointing the detector at a dead port and asserting the
+    /// cache stays empty afterwards.
+    #[test]
+    fn failed_detection_is_not_cached() {
+        const KEYS: [&str; 6] = [
+            "ALL_PROXY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "all_proxy",
+            "https_proxy",
+            "http_proxy",
+        ];
+        let saved: Vec<(&str, Option<String>)> = KEYS
+            .iter()
+            .map(|k| (*k, std::env::var(k).ok()))
+            .collect();
+        for k in KEYS {
+            std::env::remove_var(k);
+        }
+        // A syntactically valid proxy on a closed port. Env is checked first,
+        // so this makes the outcome deterministic regardless of the machine's
+        // registry/system settings; port 9 refuses instantly (no 500ms wait).
+        std::env::set_var("HTTP_PROXY", "http://127.0.0.1:9");
+        *CACHE.lock().unwrap() = None;
+
+        let first = detect_and_cache();
+        assert!(first.is_none(), "dead proxy must not be adopted: {first:?}");
+        assert!(
+            cached().is_none(),
+            "a failed detection must not be cached — enabling the proxy later \
+             relies on the next request re-detecting"
+        );
+
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        *CACHE.lock().unwrap() = None;
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn parses_scutil_https_proxy() {
