@@ -55,7 +55,7 @@ impl EhentaiClient {
     /// exhentai.org sister site (requires an `igneous` cookie). The base is
     /// reused for search, gallery pages, and per-page image downloads.
     pub fn new(cookie_str: &str, ex: bool) -> Result<Self> {
-        let http = Client::builder()
+        let http = crate::services::proxy::install(Client::builder())
             .user_agent(UA)
             .timeout(Duration::from_secs(30))
             // e-hentai sets many cookies (ipb_member_id / ipb_pass_hash /

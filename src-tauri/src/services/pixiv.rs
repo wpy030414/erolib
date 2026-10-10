@@ -218,7 +218,7 @@ pub struct PixivClient {
 
 impl PixivClient {
     pub fn new(cookie_str: &str) -> Result<Self> {
-        let http = Client::builder()
+        let http = crate::services::proxy::install(Client::builder())
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
             // Without a total timeout a stalled Pixiv connection (rate-limit,
             // half-open TLS, hung socket) blocks the whole download forever with
@@ -543,7 +543,7 @@ struct RealReqwest;
 
 impl HttpFetcher for RealReqwest {
     async fn get_location(&self, url: &str, cookie: &str) -> Result<Option<String>> {
-        let no_redirect = Client::builder()
+        let no_redirect = crate::services::proxy::install(Client::builder())
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
             .redirect(reqwest::redirect::Policy::none())
             .build()

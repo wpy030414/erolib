@@ -51,7 +51,7 @@ pub struct AhentaiClient {
 
 impl AhentaiClient {
     pub fn new() -> Result<Self> {
-        let http = Client::builder()
+        let http = crate::services::proxy::install(Client::builder())
             .user_agent(UA)
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::default())

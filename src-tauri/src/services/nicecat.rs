@@ -70,7 +70,7 @@ fn generate_token() -> String {
 // ---------------------------------------------------------------------------
 
 static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
+    crate::services::proxy::install(Client::builder())
         .user_agent(UA)
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::default())
@@ -114,7 +114,7 @@ pub(crate) struct NicecatApiClient {
 
 impl NicecatApiClient {
     pub fn new() -> Result<Self> {
-        let http = Client::builder()
+        let http = crate::services::proxy::install(Client::builder())
             .user_agent(UA)
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::default())

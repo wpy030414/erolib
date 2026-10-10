@@ -72,6 +72,13 @@ rand = "0.8"
 http = "1.4.2"
 tauri-plugin-opener = "2.5.4"
 
+# Reading the per-user WinINET proxy (HKCU\...\Internet Settings\ProxyServer)
+# that Clash Verge / v2rayN's "system proxy" toggle writes — powers
+# services/proxy.rs detection on Windows (the production GUI app doesn't
+# inherit shell env vars).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

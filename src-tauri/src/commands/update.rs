@@ -198,7 +198,7 @@ fn parse_atom_feed(xml: &str) -> Option<(String, String)> {
 pub async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
     let current = app.package_info().version.to_string();
 
-    let http = Client::builder()
+    let http = crate::services::proxy::install(Client::builder())
         .user_agent(UA)
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
