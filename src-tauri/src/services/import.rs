@@ -473,10 +473,11 @@ fn first_page_image_from_resources(
                 .map(image::DynamicImage::ImageRgb8),
         };
         if let Some(img) = img {
-            // Encode as PNG (lossless): `create_cb7` re-encodes every page to
-            // lossy webp on ingest, so a lossy intermediate would double-loss
-            // the pixels. JPEG never reaches this branch (DCTDecode pages are
-            // returned verbatim above).
+            // Encode as PNG (lossless): the page runs through `encode_page`
+            // afterwards — the webp modes re-encode on ingest (a lossy
+            // intermediate would double-loss the pixels) and `none` keeps
+            // these bytes verbatim. JPEG never reaches this branch
+            // (DCTDecode pages are returned verbatim above).
             let mut buf = Cursor::new(Vec::new());
             if img.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
                 return Some(buf.into_inner());

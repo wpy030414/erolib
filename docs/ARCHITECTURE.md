@@ -142,7 +142,7 @@ src-tauri/src/
 │   ├── update.rs     4 命令（检查 + 下载 + 安装 + 退出安装）
 │   ├── sync.rs       1 命令（单向本地同步）
 │   ├── reset.rs      1 命令（清空全部数据）
-│   ├── settings.rs   1 命令（设置语言）
+│   ├── settings.rs   2 命令（设置语言 / 设置页面压缩）
 │   └── cookies.rs    工具模块（macOS WKHTTPCookieStore FFI，无命令暴露）
 ├── services/         业务逻辑层
 │   ├── task_manager.rs 核心任务调度（~2500 行）
@@ -158,7 +158,8 @@ src-tauri/src/
 │   ├── search.rs     搜索服务（LIKE + 标签本地化合并）
 │   ├── similarity.rs SIMILARITY UDF（Levenshtein 归一化）
 │   ├── locale.rs     三语标签翻译物化
-│   ├── storage.rs    CB7 文件管理（create_cb7 / extract_cover / read_page / 整档读页 / 单页删除重打包 / 缓存 / ensure_webp 统一页格式）
+│   ├── settings.rs   压缩设置 KV 读写（settings.compression）
+│   ├── storage.rs    CB7 文件管理（create_cb7 / extract_cover / write_cover / read_page / 整档读页 / 单页删除重打包 / 缓存 / encode_page 按压缩模式编码）
 │   ├── export.rs     导出格式封装（cb7 原样 / epub OPF+XHTML / pdf printpdf+lopdf 元数据流；alpha 合成绕 printpdf SMask 序列化 bug）
 │   ├── import.rs     EPUB/PDF 导入解析（spine 取图 + XObject 图像流 → 统一重打包 CB7）
 │   ├── opds.rs       OPDS Atom feed 生成
@@ -197,7 +198,7 @@ src-tauri/src/
 | sync | 1 | `sync_to_dir` |
 | reset | 1 | `reset_app_data` |
 | search | 2 | `search_books` `get_all_tags` |
-| settings | 1 | `set_locale` |
+| settings | 2 | `set_locale` `set_compression` |
 | server | 4 | `start_opds_server_cmd` `stop_opds_server_cmd` `start_rss_server_cmd` `stop_rss_server_cmd` |
 | pixiv | 10 | `pixiv_get_login` `pixiv_set_login` `pixiv_clear_login` `pixiv_list_bookmarks` `pixiv_list_following_feed` `pixiv_list_recommended` `pixiv_search_illusts` `pixiv_proxy_image` `pixiv_browse_status` `pixiv_open_login_window` |
 | ehentai | 6 | `ehentai_open_login_window` `ehentai_get_login` `ehentai_clear_login` `ehentai_search` `ehentai_proxy_thumb` `ehentai_browse_status` |
@@ -221,7 +222,8 @@ src-tauri/src/
 | task_manager | 日志上限 | 200 行 |
 | task_manager | speed EMA | α=0.3，ticker 400ms |
 | storage | PAGE_CACHE_MAX | 8 |
-| storage | WEBP_QUALITY | 80（统一页格式 lossy WebP 质量） |
+| storage | WEBP_QUALITY | 80（lossy 压缩模式质量） |
+| storage | 页面压缩默认 | `none`（settings 表 `compression` 键，可配 none/lossless/lossy，见 D-022） |
 | export/import | PDF 页尺寸 | 图像像素 @96dpi（1px ≈ 1pt） |
 | OPDS 默认端口 | settings.ts | 5269 |
 | RSS 默认端口 | settings.ts | 1269 |
@@ -247,7 +249,7 @@ src-tauri/src/
                     ├── tasks (下载队列)
                     ├── reading_sessions (阅读时长)
                     ├── books_fts (全文索引，当前未启用)
-                    ├── settings (KV: locale, tag_seed_fp)
+                    ├── settings (KV: locale, tag_seed_fp, compression)
                     ├── tag_translations (1014 条种子)
                     ├── tag_form_map (精确匹配物化)
                     └── tag_resolved (精确+模糊总解析)

@@ -67,7 +67,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 | `tasks` | `id TEXT` (UUID) | ~0-50 | 下载任务队列（status, progress, logs JSON, payload JSON, retry_count） |
 | `reading_sessions` | `id INTEGER AUTOINCREMENT` | 增长中 | 阅读时长追踪（book_id, started_at, ended_at, duration_ms） |
 | `books_fts` | FTS5 虚拟表 | 与 books 同步 | 全文索引（title, original_filename, tags），`porter unicode61` 分词，三触发器自动同步（当前未启用，SearchService 用 LIKE） |
-| `settings` | `key TEXT` PK | 2 | KV 存储（`locale`、`tag_seed_fp`） |
+| `settings` | `key TEXT` PK | 3 | KV 存储（`locale`、`tag_seed_fp`、`compression`） |
 | `tag_translations` | `id INTEGER` PK | 1014 | 标签翻译种子（zh / en / ja_hira / ja_kata / romaji 五列） |
 | `tag_form_map` | `form TEXT` PK COLLATE NOCASE | ~5000 | 精确匹配物化表（form → tid） |
 | `tag_resolved` | `name TEXT` PK COLLATE NOCASE | ~1000 | 精确+模糊总解析表（name → tid） |
@@ -98,7 +98,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 登录时从 WebView 捕获 cookie 双写；登出时 JSON 文件 `remove_file` + WKWebView 精确 `deleteCookie`（按版块（pixiv.net / e-hentai.org / exhentai.org）选择性清理，不误伤主窗口数据。
 
-### localStorage — 15 个键模式（前端 UI 偏好）
+### localStorage — 16 个键模式（前端 UI 偏好）
 
 | 键 | 来源 | 数据 |
 |---|---|---|
@@ -111,6 +111,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 | `erolib.rssPort` | `stores/settings.ts` | RSS 服务器端口（默认 `1269`） |
 | `erolib.localSyncEnabled` | `stores/settings.ts` | 本地同步开关（`'1'`/`'0'`） |
 | `erolib.localSyncDir` | `stores/settings.ts` | 本地同步目标目录路径 |
+| `erolib.compression` | `stores/settings.ts` | 新导入/下载的页面压缩模式（`none\|lossless\|lossy`，默认 `none`；启动推送后端 `settings.compression`） |
 | `erolib.ehentai.ex` | `stores/ehentai-browse.ts` | EXHentai 模式开关（`'1'`/`'0'`） |
 | `erolib.reader.zoomMode` | `views/Reader.vue` | 缩放模式（`fill\|contain`） |
 | `erolib.reader.progress.*` | `views/Reader.vue` | 按 `bookId` 的阅读页码 |
@@ -157,6 +158,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - 前端 `stores/tasks.ts` 全局监听 `task://progress`（更新列表 + 书库刷新）与 `task://toast`（终态 toast）；`views/Tasks.vue` 左右分栏——运行中卡片右下角显示速度，详情 pane 显示步骤日志 / 创建完成时间 / 操作区。
 - **分批下载**（`download_pages_concurrent`）：所有 source 统一走 8 并发 JoinSet，每页一条日志 `📥 第 i/n 页 完成`，错误日志 `❌ 第 i 页失败`；图片落临时目录供断点续传；每页完成后推送进度。
 - **动图（ugoira, illustType==2）**：`process_pixiv_ugoira` 拉 `ugoira_meta`（frames + originalSrc zip）→ 解压**原始 jpg 帧序列**直接进 cb7，**不二次编码**；逐帧延时存 `Book.delays`（DB JSON）。阅读器按延时定时播放循环——转换瞬时 / 加载快 / 无损 / 原分辨率。兼容旧 gif/apng 书。
+- **页面压缩可配**（`settings.compression`，默认 `none`）：决定**新导入/新下载**的页与封面编码——`none` 保持原样（默认）；`lossless` 恒转无损 WebP（格式统一优先于体积，**允许膨胀**，已是 WebP 的源直通）；`lossy` q80 + 「更小才采用」守卫（原统一行为）。ugoira 帧同样遵循（默认 `none` = D-005 原帧行为），`delays` 永不触碰。封面经 `write_cover` 按结果字节魔数定扩展名（`none` 档会出 `covers/{id}.jpg` 等），写入前清理异扩展名残留防遮蔽；读取端 `read_cover`/`serve_cover` 本就多扩展名兼容。**不回溯迁移存量书**。
 
 ## Pixiv 浏览
 
