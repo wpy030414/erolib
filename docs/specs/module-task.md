@@ -18,7 +18,7 @@
 |---|---|
 | `src-tauri/src/services/task_manager.rs` | 调度主逻辑（~2690 行） |
 | `src-tauri/src/services/task.rs` | 数据模型 |
-| `src-tauri/src/services/aria2.rs` | aria2 JSON-RPC 客户端 |
+| `src-tauri/src/services/downloader.rs` | 原生 reqwest 流式下载器 |
 | `src-tauri/src/services/proxy.rs` | 系统 HTTP 代理检测 |
 | `src-tauri/src/commands/tasks.rs` | Tauri 命令层（13 个命令） |
 | `src/stores/tasks.ts` | 前端状态管理 |
@@ -166,7 +166,7 @@ Pending ──run──→ Running ──ok──→ Completed
 
 ## 10. 约束
 
-- 所有图片下载必须走 aria2（`download_pages_concurrent`），来源客户端仅用 reqwest 抓元数据
+- 所有图片下载必须走原生下载器（`download_pages_concurrent` → `Downloader::download_file`），来源客户端仅用 reqwest 抓元数据
 - 任务标题必须带来源前缀
 - 完成后必须 `register_stored_book`（不复制文件，直接注册已写好的 CB7）
 - `book_id` 回填后前端才能一键跳阅读器

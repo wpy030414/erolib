@@ -41,7 +41,7 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 - 🎨 **四大下载源**：Pixiv / EHentai / EXHentai / ASMHentai / NiceCat，统一任务管线，断点续传
 - 🌐 **OPDS / RSS 共享**：内置 HTTP 服务器，局域网内设备开箱即达，直出单页图 + HTML 图廊
 - 🎨 **MD3 动态主题**：4 个内置种子色 + 自定义主题（从书页提取主色），三语界面（中文 / English / 日本語）
-- 🔄 **软件自动更新**：启动时静默检查 GitHub releases，下载走 aria2，支持进度显示
+- 🔄 **软件自动更新**：启动时静默检查 GitHub releases，下载走内置原生下载器，支持进度显示
 - 🏷️ **标签翻译系统**：1014 条种子词条，精确 + 模糊匹配（Levenshtein ≥ 0.8）
 
 > 📚 详细功能说明请参阅 [PRD.md](docs/PRD.md)。
@@ -57,7 +57,7 @@ Tauri 2 · Vue 3 · Rust · Material Design 3
 | **macOS**（Apple Silicon） | `EroLib_*_aarch64.dmg` |
 | **Windows** | `EroLib_*_x64-setup.exe` / `.msi` |
 
-- 🐾 **aria2 已内置打包**，无需额外安装任何下载工具。
+- 🐾 **零外部依赖**：内置原生下载器，无需安装任何下载工具。
 - macOS 首次打开若提示「无法验证开发者」，前往 **系统设置 → 隐私与安全性 → 仍要打开**。
 - Windows 如被 SmartScreen 拦截，选择「仍要运行」。
 
@@ -97,7 +97,7 @@ pnpm tauri build      # 构建生产包（.app / .dmg / .exe / .msi）
 - [Tauri 2](https://tauri.app) 桌面框架（插件：http / shell / dialog / fs / clipboard-manager / opener）
 - [axum](https://github.com/tokio-rs/axum) 0.7 + tower-http · OPDS / RSS HTTP 服务器
 - [sqlx](https://github.com/launchbadge/sqlx) 0.7 + SQLite（WAL / 8 连接池 / `busy_timeout=5000` / `foreign_keys=ON`）
-- [aria2](https://aria2.github.io) 下载引擎（内置二进制，JSON-RPC on `localhost:6800`）
+- 原生 [reqwest](https://github.com/seanmonstar/reqwest) 流式下载器（`services/downloader.rs`，8 并发 + `.part` 原子落盘 + 5 次重试）
 - [reqwest](https://github.com/seanmonstar/reqwest) 0.11 · [scraper](https://github.com/causal-agent/scraper) 0.18 · 网络与解析
 - [image](https://github.com/image-rs/image) 0.25 · [zip](https://github.com/zip-rs/zip) 0.6 · [quick-xml](https://github.com/tafia/quick-xml) 0.31
 
@@ -117,8 +117,8 @@ pnpm tauri build      # 构建生产包（.app / .dmg / .exe / .msi）
 
 ## ❓ FAQ
 
-**Q：需要自己安装 aria2 吗？**
-不需要。aria2 二进制已随应用打包（macOS / Windows），开箱即用。
+**Q：需要自己安装下载工具吗？**
+不需要。下载器已内置于应用，开箱即用。
 
 **Q：Pixiv / EHentai 怎么登录？**
 点击对应页面的「登录」按钮，会打开应用内浏览器；完成登录后 EroLib 会自动采取 cookie 并识别用户，无需手动复制。

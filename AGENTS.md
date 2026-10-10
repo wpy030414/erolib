@@ -16,7 +16,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 - **内容社区 / 评论 / 评分 / 分享**：不做社交功能
 - **付费内容 / 广告 / 内购**：不做商业化功能
 - **非成人向漫画管理**：功能兼容但不作为设计目标
-- **Linux 平台原生支持**：当前仅 macOS + Windows（缺 aria2 二进制）
+- **Linux 平台原生支持**：当前仅 macOS + Windows
 - **多用户 / 权限系统**：单用户桌面应用
 - **Web 版 / PWA**：纯 Tauri 桌面应用
 - **自定义插件系统**：不开放扩展接口
@@ -79,7 +79,7 @@ EroLib（工口图书馆）—— Tauri 2 + Vue 3 本地漫画库管理器，下
 ```
 library/       {uuid}.cb7                  # ZIP 容器 (ComicInfo.xml + 图片页)
 covers/        {book_id}.{jpg|png|webp}    # 提取的首图封面
-downloads/     {task_id}/                   # 下载中的临时页文件（aria2 输出）
+downloads/     {task_id}/                   # 下载中的临时页文件（.part → 最终名原子落盘）
 pixiv_session.json                          # Pixiv 登录凭证 JSON
 ehentai_session.json                        # EHentai 登录凭证 JSON
 ```
@@ -145,16 +145,16 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 
 ### 代理检测（不持久化）
 
-`services/proxy.rs` `detect_http_proxy()`：环境变量（`ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` + 小写变体）+ macOS `scutil --proxy` 系统代理设置。结果进 `tokio::sync::Mutex` 缓存 60s（避免每张图 spawn scutil），aria2 `all-proxy` option 注入 SOCKS 自动跳过。
+`services/proxy.rs` 检测顺序：环境变量（`ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` + 小写变体）→ **Windows 注册表** `HKCU\...\Internet Settings\ProxyServer`（Clash Verge / v2rayN「设为系统代理」所写；兼容 `host:port` 与 `http=;https=` 分协议格式，忽略 ProxyEnable 标志）→ macOS `scutil --proxy`。命中后 **TCP 探测**（500ms）确认代理真的在监听，否则回落直连（防代理退出后注册表残留导致下载全挂）。结果进 `std::sync::Mutex` 缓存 60s。`install(builder)` 经 `reqwest::Proxy::custom` 注入**所有** reqwest 客户端（`Downloader` + 四来源元数据 + 更新检查），逐请求查缓存——开关代理 60s 内生效且无需重建 client；**loopback 目标永远直连**。SOCKS 一律跳过（reqwest 未启用 socks feature）。
 
 ## 下载与任务系统
 
 - **所有下载统一经 TaskManager**（`src-tauri/src/services/task_manager.rs`），无进程内回退。任务 payload 是枚举 `TaskPayload`：`PixivSingleWork{cookie,work_id}` / `EhentaiGallery` / `AhentaiGallery` / `NicecatGallery`。`TaskSource` 对应为 `Pixiv` / `Ehentai` / `Ahentai` / `Nicecat`。
-- **下载后端**：四个 source 统一走 **分批并发下载**（`download_pages_concurrent`，8 并发/批，批间检查取消/暂停，图片落临时目录供断点续传），**全部来源的图片下载统一走 aria2**（`download_one_image` → `Aria2Client::add_uri`）。各来源的 `reqwest::Client` 仅用于**元数据抓取**（页面列表、标签、标题等 API/HTML 解析），不参与图片二进制下载。
-- **aria2 自动 HTTP 代理**：`services/proxy.rs` `detect_http_proxy()` 取 env（`ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` + 小写）+ macOS `scutil --proxy`（Clash / V2Ray「设为系统代理」后写入系统配置），结果 60s 缓存（避免一本几十张图每张都 spawn scutil）；跳过 aria2 不支持的 SOCKS。`Aria2Client::add_uri` 检测到则注入 `all-proxy` option，Pixiv / EHentai 等翻墙下载零配置。
+- **下载后端**：四个 source 统一走 **分批并发下载**（`download_pages_concurrent`，8 并发 JoinSet/批，批间检查取消/暂停），**全部来源的图片下载统一走原生下载器**（`download_one_image` → `services/downloader.rs` `Downloader::download_file`：reqwest 流式 + 5 次尝试 1s→2s→5s→5s + 每 chunk 30s 活动超时 + `{name}.part` → rename **原子落盘**，杜绝半截文件被断点缓存误判）。图片落临时目录供断点续传（resume 只认最终文件名）。各来源的 `reqwest::Client` 仅用于**元数据抓取**（页面列表、标签、标题等 API/HTML 解析），与下载器共用 `proxy::install` 代理注入。
+- **下载器自动 HTTP 代理**：`Downloader` 的 reqwest client 经 `services/proxy.rs` `install()` 注入系统代理（见上「代理检测」），Pixiv / EHentai 等翻墙下载零配置。
 - **任务模型**（`services/task.rs` `TaskSnapshot`）含 `speed`（实时下行速度 B/s）、`logs`（步骤日志 JSON 数组，上限 ~200 行）、`book_id`（完成后回填，前端一键跳阅读器）。`enqueue` 保留最新 **100 条**（先 `DELETE … NOT IN (SELECT … ORDER BY created_at DESC LIMIT 99)` 再插入）。
 - **完成任务重新下载**（`task_redownload`）：本地档案实际页数（zip 图像条目数，ugoira 比帧数）对比来源当前远端页数——相等 no-op（`already_complete`）；缺页/文件丢失 remove_book + retry 整本重下（`redownloaded`）；本地多于远端拒绝（疑似源站删减，覆盖丢内容）；无书行走 plain retry（`restarted`）。远端列表先行获取，失败不动书库；同源并发守卫 + `refresh_payload_cookie` 刷新过期 cookie。`TaskPayload::source_url()` 必须与各 `process_*` 写库字符串逐字节一致。
-- aria2 进度：`wait_for_gid_with_progress` 轮询 `tell_status`，回调里 `set_progress(.., speed)` + `append_log`；成功后 `register_stored_book` → `set_book_id`。
+- 进度与速度：下载器 `on_progress` 回调（~250ms 限频，per-chunk 字节累计）逐 slot 写入共享进度表；per-task ticker（400ms）聚合各 slot 字节并差分算出瞬时速度 → `set_speed`（EMA 平滑）。每页完成 `append_log` + `set_progress`；成功后 `register_stored_book` → `set_book_id`。
 - 前端 `stores/tasks.ts` 全局监听 `task://progress`（更新列表 + 书库刷新）与 `task://toast`（终态 toast）；`views/Tasks.vue` 左右分栏——运行中卡片右下角显示速度，详情 pane 显示步骤日志 / 创建完成时间 / 操作区。
 - **分批下载**（`download_pages_concurrent`）：所有 source 统一走 8 并发 JoinSet，每页一条日志 `📥 第 i/n 页 完成`，错误日志 `❌ 第 i 页失败`；图片落临时目录供断点续传；每页完成后推送进度。
 - **动图（ugoira, illustType==2）**：`process_pixiv_ugoira` 拉 `ugoira_meta`（frames + originalSrc zip）→ 解压**原始 jpg 帧序列**直接进 cb7，**不二次编码**；逐帧延时存 `Book.delays`（DB JSON）。阅读器按延时定时播放循环——转换瞬时 / 加载快 / 无损 / 原分辨率。兼容旧 gif/apng 书。
@@ -186,7 +186,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - listing 页仅提取 id / title / thumb_url / category；`page_count` 始终 0、`uploader` 始终 None（节省带宽简化设计）。下载时才通过 `fetch_gallery_meta` 抓详情页补全标签 / 作者 / 页数，并用 `strip_tag_count()` 清洗 tag 名末尾的 ` (12,345)` 计数后缀。
 - 卡片两态（无页码 badge、无作者副标题）：本地有 → 阅读器；未下载 → 入队下载；下载中走 `task://progress` 监听。
 - 图片 CDN：`images.asmhentai.com/{load_dir}/{id}/{page}.jpg`；封面走 `ahentai_proxy_thumb` 代理 + IndexedDB 缓存。
-- 任务标题统一 `ASMHentai: {title}`；`process_ahentai` 走统一 aria2 下载管线（`download_pages_concurrent`），含速度追踪。
+- 任务标题统一 `ASMHentai: {title}`；`process_ahentai` 走统一原生下载管线（`download_pages_concurrent`），含速度追踪。
 
 ## NiceCat 浏览
 
@@ -194,7 +194,7 @@ ehentai_session.json                        # EHentai 登录凭证 JSON
 - 浏览式（`stores/nicecat-browse.ts`）：首页话题板块（`HomeFeed/randomFeed`，横向滚动）+ 关键词搜索。搜索走两阶段——`ComicSearch/search` 解析关键词到多个标签，取 `comic_number` 最大的单一最优标签，再 `ComicSearch/searchTag` 取结果页 + `searchId` 游标；前端回传 `cursor` 字段翻页（空 = 页 1，非空 = 推进游标），页粒度 60，游标耗尽或短页即 end。
 - 卡片三态同 Pixiv / EHentai（`components/SourceCard` + `useBrowseFeed` 复用）：本地有 → 阅读器；下载中 → 遮罩 + 环形进度；未下载 → 红点。`nicecat_browse_status` 按 `source_plugin='nicecat'` + `source_post_id` 归一化匹配本地书与在途任务。
 - 封面走 `nicecat_proxy_thumb` 代理绕过 `vurm.fun` CDN 防盗链（需 `Referer` + `Origin`）。
-- **下载**（`process_nicecat`，`task_manager.rs`）：纯 HTTP 元数据抓取——并发拉 `ComicInfo/info`（元信息：标题 / 作者 / 标签）+ `ComicOrder/getComicOrder`（翻页图 URL，需当日 `dateKey` = Base64(SHA-256(本地午夜毫秒))），解析出页图 URL 后进统一 aria2 下载管线打包 cb7。**无 WebView**。
+- **下载**（`process_nicecat`，`task_manager.rs`）：纯 HTTP 元数据抓取——并发拉 `ComicInfo/info`（元信息：标题 / 作者 / 标签）+ `ComicOrder/getComicOrder`（翻页图 URL，需当日 `dateKey` = Base64(SHA-256(本地午夜毫秒))），解析出页图 URL 后进统一原生下载管线打包 cb7。**无 WebView**。
 - 任务标题 `NiceCat: {title}`；payload `NicecatGallery { comic_id, title }`，`TaskSource::Nicecat`。
 - **RC4 令牌**：每请求新随机 token（一次性，复用 403）。`generate_token` = Base64(RC4(key, JSON({uid, auth})))，key `Zo1Eq4V2mr269K4doL9U4093U25acjMQ`，auth `ec8be430bc634535b258b3591a414a67`（`nicecat.rs`）。
 

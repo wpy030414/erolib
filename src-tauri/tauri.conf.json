@@ -43,11 +43,6 @@
       "signingIdentity": null,
       "minimumSystemVersion": "12.0"
     },
-    "resources": [
-      "binaries/aria2c-bin/macos/aria2c",
-      "binaries/aria2c-bin/macos/libs/*",
-      "binaries/aria2c-bin/windows/aria2c.exe"
-    ],
     "shortDescription": "EroLib — 工口图书馆",
     "targets": ["dmg", "msi"]
   },

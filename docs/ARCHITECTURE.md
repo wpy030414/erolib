@@ -14,7 +14,7 @@
 │  │  views/ stores/         │   │  commands/  services/    │ │
 │  │  components/            │◄─►│  db/  models/            │ │
 │  │  composables/           │IPC│                          │ │
-│  │  services/ i18n/        │   │  TaskManager (aria2)     │ │
+│  │  services/ i18n/        │   │  TaskManager (downloader)│ │
 │  │                         │   │  OPDS/RSS (axum)         │ │
 │  └─────────────────────────┘   └──────────┬───────────────┘ │
 │                                            │                 │
@@ -25,7 +25,7 @@
 │                                                             │
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │              File System (app_local_data_dir)            │ │
-│  │  library/*.cb7  covers/*.jpg  downloads/  aria2/         │ │
+│  │  library/*.cb7  covers/*.jpg  downloads/                 │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -147,8 +147,8 @@ src-tauri/src/
 ├── services/         业务逻辑层
 │   ├── task_manager.rs 核心任务调度（~2500 行）
 │   ├── task.rs       数据模型（TaskSource / TaskStatus / TaskPayload / Task / TaskSnapshot）
-│   ├── aria2.rs      aria2 JSON-RPC 客户端 + 本地 daemon 启动
-│   ├── proxy.rs      系统 HTTP 代理自动检测（env + scutil，60s 缓存）
+│   ├── downloader.rs 原生 reqwest 流式下载器（.part 原子落盘）
+│   ├── proxy.rs      系统 HTTP 代理自动检测（env + Win 注册表 + scutil + TCP 探测，60s 缓存）
 │   ├── pixiv.rs      Pixiv API 客户端
 │   ├── ehentai.rs    EHentai HTML 解析客户端
 │   ├── ahentai.rs    ASMHentai HTML 解析客户端
@@ -212,9 +212,9 @@ src-tauri/src/
 
 | 服务 | 常量 | 值 |
 |---|---|---|
-| aria2 | RPC endpoint | `http://localhost:6800/jsonrpc` |
-| aria2 | daemon 参数 | `--split=2 --max-connection-per-server=2 --max-concurrent-downloads=16` |
-| aria2 | HTTP timeout | 30s |
+| downloader | 底层 | reqwest 流式 GET（8 并发 JoinSet） |
+| downloader | 重试 | 5 次尝试，1s→2s→5s→5s；30s 活动超时 |
+| downloader | 落盘 | `{name}.part` → rename 原子发布 |
 | proxy | 缓存 TTL | 60s |
 | task_manager | 并发数 | 8（Semaphore） |
 | task_manager | 任务上限 | 100（保留最新 99 + 新插 1） |
@@ -261,7 +261,6 @@ src-tauri/src/
      │   └── *.cb7       └── thumbs/
      ├── covers/
      ├── downloads/
-     ├── aria2/
      ├── update/
      ├── pixiv_session.json
      └── ehentai_session.json
@@ -305,11 +304,11 @@ tag_translations 1───N tag_form_map N───1 tag_resolved N───1 t
       ▼
   run_task_worker (tokio::spawn)
       │
-      ├── process_pixiv_single()    → reqwest 元数据 + aria2 8 并发下载
+      ├── process_pixiv_single()    → reqwest 元数据 + 原生下载器 8 并发
       ├── process_pixiv_ugoira()    → 拉 zip + 解压 jpg 帧 + delays JSON
-      ├── process_ehentai()         → 串行爬 /s/ + aria2 8 并发 CDN
-      ├── process_ahentai()         → reqwest 元数据 + aria2 8 并发下载
-      └── process_nicecat()         → RC4 API 元数据 + aria2 8 并发下载
+      ├── process_ehentai()         → 串行爬 /s/ + 原生下载器 8 并发 CDN
+      ├── process_ahentai()         → reqwest 元数据 + 原生下载器 8 并发
+      └── process_nicecat()         → RC4 API 元数据 + 原生下载器 8 并发
               │
               ▼
       完成：register_stored_book → create_cb7 → set_book_id

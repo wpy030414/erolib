@@ -16,13 +16,13 @@ mod search;
 pub mod settings;
 pub mod similarity;
 mod storage;
-pub mod aria2;
+pub mod downloader;
 pub mod proxy;
 pub mod task;
 pub mod task_manager;
 
-pub use aria2::Aria2Client;
 pub use collection_service::CollectionService;
+pub use downloader::Downloader;
 pub use library::LibraryService;
 pub use opds::OpdsService;
 pub use rss::RssService;

@@ -60,7 +60,7 @@ interface UpdateProgress {
 
 | 事件 | 载荷 | 触发时机 |
 |---|---|---|
-| `update://progress` | `UpdateProgress` | aria2 下载进度回调 |
+| `update://progress` | `UpdateProgress` | 原生下载器进度回调 |
 
 ## 6. 检查流程
 
@@ -85,8 +85,8 @@ interface UpdateProgress {
 
 ```
 1. 前端调 download_update(url, name)
-2. 后端走 aria2 下载（复用代理检测）
-3. aria2 进度回调 → emit update://progress
+2. 后端走原生下载器（复用代理检测）
+3. 下载器进度回调 → emit update://progress
 4. 下载完成 → 返回本地路径
 5. 前端显示「安装」按钮
 ```
@@ -116,7 +116,7 @@ interface UpdateProgress {
 ## 11. 约束
 
 - 检查更新必须静默（不打扰用户）
-- 下载必须走 aria2（复用代理检测 + 断点续传）
+- 下载必须走原生下载器（复用代理检测 + `.part` 原子落盘）
 - 版本号从 `tauri.conf.json` 读取，不硬编码
 - Atom feed 无需 GitHub API token（公开仓库匿名可访问）
 - macOS 安装需要用户确认（不自动替换）
@@ -124,4 +124,4 @@ interface UpdateProgress {
 
 ## 12. 相关模块
 
-- [module-task.md](./module-task.md) — 任务系统（复用 aria2 下载管线）
+- [module-task.md](./module-task.md) — 任务系统（复用原生下载管线）

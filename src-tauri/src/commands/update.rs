@@ -5,16 +5,17 @@
 //!      XML, always served regardless of rate-limit / auth state), parse the
 //!      latest release tag + notes, then construct the download URL from the
 //!      known filename pattern.
-//!   2. `download_update` — pull that asset through aria2 (so the user's HTTP
-//!      proxy applies), emitting `update://progress` events along the way.
+//!   2. `download_update` — pull that asset through the native downloader (so
+//!      the user's HTTP proxy applies), emitting `update://progress` events
+//!      along the way.
 //!   3. `install_update` / `quit_and_install` — open the downloaded dmg/msi
 //!      with the system handler; the latter exits first so a running .app can
 //!      be replaced on macOS.
 //!
 //! We deliberately do NOT route this through TaskManager: an update package is
 //! a single-file download with no book to import, so it lives outside the
-//! book-task table. It still uses the same aria2 engine, so progress/speed and
-//! proxy behaviour match the rest of the app.
+//! book-task table. It still uses the same downloader engine, so progress/speed
+//! and proxy behaviour match the rest of the app.
 //!
 //! ## Why the Atom feed rather than the REST API or the HTML page
 //!
@@ -29,7 +30,6 @@
 //!   a predictable pattern: `…/releases/download/{tag}/{filename}`.
 
 use std::cmp::Ordering;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
@@ -38,9 +38,8 @@ use scraper::{Html, Selector};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
-use tokio::time::Duration;
 
-use crate::services::aria2::Aria2Client;
+use crate::services::Downloader;
 
 /// GitHub repo that publishes the release installers (owner/name only — the
 /// path is fixed by the releases API).
@@ -246,8 +245,9 @@ pub async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
     })
 }
 
-/// Download the given asset through aria2 into `$APPLOCALDATA/update/`,
-/// emitting `update://progress` as bytes arrive. Returns the saved file path.
+/// Download the given asset through the native downloader into
+/// `$APPLOCALDATA/update/`, emitting `update://progress` as bytes arrive.
+/// Returns the saved file path.
 #[tauri::command]
 pub async fn download_update(app: AppHandle, url: String, name: String) -> Result<String, String> {
     let dir = app
@@ -255,42 +255,36 @@ pub async fn download_update(app: AppHandle, url: String, name: String) -> Resul
         .app_local_data_dir()
         .map_err(|e| format!("resolve app_local_data_dir: {e}"))?
         .join("update");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create update dir: {e}"))?;
 
-    let aria2 = Aria2Client::new(app.clone()).map_err(|e| format!("init aria2: {e}"))?;
-
-    let gid = aria2
-        .add_uri(&url, None, None, Some(&name), Some(&dir))
-        .await
-        .map_err(|e| format!("enqueue update download: {e}"))?;
+    let downloader = Downloader::new();
 
     // Updates are not user-cancellable mid-flight from the dialog (cancel is a
-    // nice-to-have); a shared never-set flag satisfies the worker signature.
+    // nice-to-have); shared never-set flags satisfy the worker signature.
     let cancelled = AtomicBool::new(false);
     let paused = AtomicBool::new(false);
 
     let app_for_emit = app.clone();
-    let path: PathBuf = aria2
-        .wait_for_gid_with_progress(
-            &gid,
-            Duration::from_millis(500),
+    downloader
+        .download_file(
+            &url,
+            None,
+            None,
+            &dir,
+            &name,
+            200,
             &cancelled,
             &paused,
             move |upd| {
                 let app = app_for_emit.clone();
                 async move {
-                    let percent = if upd.total_length > 0 {
-                        ((upd.completed_length * 100) / upd.total_length) as u32
-                    } else {
-                        0
-                    };
+                    let percent = (upd.completed * 100).checked_div(upd.total).unwrap_or(0) as u32;
                     let _ = app.emit(
                         "update://progress",
                         UpdateProgress {
                             percent,
                             speed: upd.speed,
-                            completed: upd.completed_length,
-                            total: upd.total_length,
+                            completed: upd.completed,
+                            total: upd.total,
                         },
                     );
                 }
@@ -299,7 +293,7 @@ pub async fn download_update(app: AppHandle, url: String, name: String) -> Resul
         .await
         .map_err(|e| format!("download update: {e}"))?;
 
-    Ok(path.to_string_lossy().to_string())
+    Ok(dir.join(&name).to_string_lossy().to_string())
 }
 
 /// Open a downloaded installer with the system handler (macOS mounts the dmg,

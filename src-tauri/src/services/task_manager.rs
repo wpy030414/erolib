@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -19,15 +19,16 @@ use crate::db::Database;
 use crate::models::{BookMetadata, BookSource};
 use crate::services::pixiv::{find_existing_by_source, PixivClient};
 use crate::services::task::{TaskPayload, TaskSnapshot, TaskSource, TaskStatus};
-use crate::services::aria2::ProgressUpdate;
+use crate::services::downloader::ProgressReport;
 use crate::services::{
-    settings, Aria2Client, AhentaiClient, EhentaiClient, LibraryService, StorageService,
+    settings, AhentaiClient, Downloader, EhentaiClient, LibraryService, StorageService,
 };
 
 /// Aggregated per-slot progress for one in-flight image download: (completed
-/// bytes, total bytes, instantaneous speed). Shared between the per-gid aria2
-/// poll callback (writer) and the per-task ticker (reader/sum).
-type SlotProgress = (i64, i64, i64);
+/// bytes, total bytes). Shared between the downloader's progress callback
+/// (writer) and the per-task ticker (reader — it sums the slots and derives
+/// the speed from the delta between ticks).
+type SlotProgress = (i64, i64);
 
 /// RAII handle that aborts the progress ticker when dropped — covers normal
 /// return AND early `?`/bail paths so the ticker never outlives its loop.
@@ -62,10 +63,10 @@ pub struct TaskManager {
     app: AppHandle,
     db: Arc<Database>,
     storage: Arc<StorageService>,
-    aria2: Aria2Client,
+    downloader: Downloader,
     workers: Mutex<HashMap<String, Arc<TaskRuntime>>>,
     /// Per-task EMA (exponential moving average) of the instantaneous download
-    /// speed, so the readout glides instead of jittering on every aria2 poll.
+    /// speed, so the readout glides instead of jittering on every ticker tick.
     ema_speeds: Mutex<HashMap<String, f64>>,
     /// Weak self-reference set after construction so workers can obtain an
     /// `Arc<Self>` without an `unsafe` clone via ptr::read.
@@ -203,14 +204,12 @@ impl TaskManager {
         db: Arc<Database>,
         storage: Arc<StorageService>,
     ) -> Result<Self> {
-        let aria2 = Aria2Client::new(app.clone()).context(
-            "create aria2 client (lazy; will connect on first download)",
-        )?;
+        let downloader = Downloader::new();
         Ok(Self {
             app,
             db,
             storage,
-            aria2,
+            downloader,
             workers: Mutex::new(HashMap::new()),
             ema_speeds: Mutex::new(HashMap::new()),
             self_weak: Mutex::new(None),
@@ -746,7 +745,7 @@ impl TaskManager {
         // Smooth the instantaneous speed with an EMA so the readout glides
         // instead of jittering on every poll. The first sample seeds the EMA
         // (no ramp-up from 0); α=0.3 favours the recent sample enough to track
-        // real changes while damping aria2's per-poll noise.
+        // real changes while damping the per-tick sampling noise.
         const ALPHA: f64 = 0.3;
         let smoothed = {
             let mut emas = self.ema_speeds.lock().await;
@@ -765,7 +764,7 @@ impl TaskManager {
         .await
         .context("set task speed")?;
         // Push the smoothed speed to the frontend so the card's bottom-right
-        // readout glides; aria2 polls ~4×/sec.
+        // readout glides; the ticker fires every 400ms.
         let _ = self.emit_progress(id).await;
         Ok(())
     }
@@ -1108,7 +1107,7 @@ async fn process_pixiv_single(
 /// pushes a smooth speed readout for the task. The progress bar itself is
 /// driven solely by image-count updates from `download_pages_concurrent`
 /// (one tick per completed page) — the ticker never overwrites it with
-/// byte-level aria2 progress, so the bar always shows "pages done / total
+/// byte-level downloader progress, so the bar always shows "pages done / total
 /// pages" regardless of whether the content is an image gallery or a
 /// ugoira/animated zip. Returns a `TickerGuard` whose Drop aborts the
 /// ticker. No-op (dummy guard) when `task_id` is None — batch tasks don't
@@ -1128,31 +1127,44 @@ fn spawn_progress_ticker(
     TickerGuard(tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(400));
         interval.tick().await; // discard the immediate first tick
+        let mut last_sum: Option<i64> = None;
+        let mut last_at = Instant::now();
         loop {
             interval.tick().await;
             if runtime.cancelled.load(Ordering::Relaxed) {
                 break;
             }
-            // Sum only the speed component across all in-flight gids so the
-            // speed readout reflects aggregate throughput. The byte totals
-            // (agg.0/agg.1) are intentionally ignored — the progress bar
-            // tracks completed images, not partial byte downloads.
-            let agg_speed = progress
+            // Sum only the completed-bytes component across all in-flight
+            // downloads so the speed readout reflects aggregate throughput.
+            // The speed is derived from the delta between ticks — computed
+            // here rather than per-download, so 8 concurrent slots aggregate
+            // into one smooth number instead of jittering against each other.
+            let sum = progress
                 .lock()
-                .map(|g| g.values().fold(0i64, |s, v| s + v.2))
+                .map(|g| g.values().fold(0i64, |s, v| s + v.0))
                 .unwrap_or(0);
-            let _ = manager.set_speed(&tid, agg_speed).await;
+            let now = Instant::now();
+            if let Some(prev) = last_sum {
+                let dt = now.duration_since(last_at).as_secs_f64();
+                if dt > 0.0 {
+                    let speed = (((sum - prev) as f64 / dt).max(0.0)) as i64;
+                    let _ = manager.set_speed(&tid, speed).await;
+                }
+            }
+            last_sum = Some(sum);
+            last_at = now;
         }
     }))
 }
 
-/// Download one image via aria2 with a Rust-side retry (2 retries, 1s/2s
-/// backoff) layered on aria2's built-in `max-tries=5`. Owns every handle
-/// (`Arc<TaskManager>` + `Arc<TaskRuntime>`) and takes only owned / `'static`
-/// arguments, so the returned future is `'static + Send` — required because
-/// each per-image download is `tokio::spawn`'d as its own task (bounded by a
-/// semaphore) inside the worker. `slot` + `progress` feed the per-task ticker a
-/// byte-level view of this gid so the progress bar glides mid-download.
+/// Download one image through the native streaming downloader (5 attempts,
+/// 1s→2s→5s→5s backoff built in — the old aria2 inner/outer retry layers
+/// folded into one schedule). Owns every handle (`Arc<TaskManager>` +
+/// `Arc<TaskRuntime>`) and takes only owned / `'static` arguments, so the
+/// returned future is `'static + Send` — required because each per-image
+/// download is `tokio::spawn`'d as its own task (bounded by a semaphore)
+/// inside the worker. `slot` + `progress` feed the per-task ticker a
+/// byte-level view of this download so the progress bar glides mid-download.
 /// Returns `Ok(None)` for an empty URL (caller skips the page).
 async fn download_one_image(
     manager: Arc<TaskManager>,
@@ -1179,79 +1191,33 @@ async fn download_one_image(
         return Ok(None);
     }
 
-    let backoffs = [Duration::from_secs(1), Duration::from_secs(2)];
-    let mut last_err: Option<anyhow::Error> = None;
-    for attempt in 0..3u32 {
-        if attempt > 0 {
-            // Cancel-aware backoff so pause→cancel still aborts promptly.
-            let ticks = backoffs[(attempt as usize) - 1].as_secs() * 2;
-            for _ in 0..ticks {
-                if runtime.cancelled.load(Ordering::Relaxed) {
-                    anyhow::bail!("cancelled");
-                }
-                sleep(Duration::from_millis(500)).await;
-            }
-        }
-        let gid = match manager
-            .aria2
-            .add_uri(&url, Some(referer), origin, Some(&out), Some(&temp_dir))
-            .await
-        {
-            Ok(g) => g,
-            Err(e) => {
-                last_err = Some(e.context(format!("add uri {}", url)));
-                continue;
-            }
-        };
-        let path = match manager
-            .aria2
-            .wait_for_gid_with_progress(
-                &gid,
-                Duration::from_millis(250),
-                &runtime.cancelled,
-                &runtime.paused,
-                {
-                    // Record this gid's latest byte progress so the per-task
-                    // ticker can sum across all in-flight downloads.
+    let bytes = manager
+        .downloader
+        .download_file(
+            &url,
+            Some(referer),
+            origin,
+            &temp_dir,
+            &out,
+            min_bytes,
+            &runtime.cancelled,
+            &runtime.paused,
+            {
+                // Record this download's latest byte progress so the per-task
+                // ticker can aggregate across all in-flight downloads.
+                let progress = Arc::clone(&progress);
+                move |upd: ProgressReport| {
                     let progress = Arc::clone(&progress);
-                    move |upd: ProgressUpdate| {
-                        let progress = Arc::clone(&progress);
-                        async move {
-                            if let Ok(mut g) = progress.lock() {
-                                g.insert(
-                                    slot,
-                                    (upd.completed_length as i64, upd.total_length as i64, upd.speed as i64),
-                                );
-                            }
+                    async move {
+                        if let Ok(mut g) = progress.lock() {
+                            g.insert(slot, (upd.completed as i64, upd.total as i64));
                         }
                     }
-                },
-            )
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = manager.aria2.remove(&gid).await;
-                last_err = Some(e.context(format!("download {}", url)));
-                continue;
-            }
-        };
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(b) => b,
-            Err(e) => {
-                let _ = manager.aria2.remove(&gid).await;
-                last_err = Some(anyhow::anyhow!("read {}: {e}", path.display()));
-                continue;
-            }
-        };
-        if bytes.len() < min_bytes {
-            let _ = manager.aria2.remove(&gid).await;
-            last_err = Some(anyhow::anyhow!("suspiciously small image from {}", url));
-            continue;
-        }
-        return Ok(Some(bytes));
-    }
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download failed: {}", url)))
+                }
+            },
+        )
+        .await?;
+    Ok(Some(bytes))
 }
 
 /// A previously-registered library book for the same source work. Used by the
@@ -1290,7 +1256,7 @@ enum PageErrorPolicy {
     SkipPage,
 }
 
-/// Description of one page to download via aria2 inside a task worker.
+/// Description of one page to download via the native downloader inside a task worker.
 struct PageDownload {
     index: usize,
     url: String,
@@ -1302,7 +1268,7 @@ struct PageDownload {
 
 /// Shared concurrent page downloader used by every source processor.
 ///
-/// Spawns all pages into an 8-concurrent aria2 JoinSet, draining in real time.
+/// Spawns all pages into an 8-concurrent download JoinSet, draining in real time.
 /// Downloaded images are persisted to `temp_dir` as individual files so the
 /// next run can resume via file cache.
 async fn download_pages_concurrent(
@@ -1348,7 +1314,7 @@ async fn download_pages_concurrent(
         let _ = manager.append_log(task_id, &format!("📥 已恢复 {completed}/{total} 页 (缓存命中)")).await;
     }
 
-    // Spawn all remaining pages into the JoinSet — aria2/reqwest auto-consume
+    // Spawn all remaining pages into the JoinSet — the downloader auto-consumes
     // from the 8-wide semaphore. Log one line per completed page so every
     // module gets the same fine-grained log format.
     let remaining: Vec<&PageDownload> = pages.iter().filter(|p| results[p.index].is_none()).collect();
@@ -1406,7 +1372,10 @@ async fn download_pages_concurrent(
                     }
                     PageErrorPolicy::SkipPage => {
                         let current = idx + 1;
-                        let _ = manager.append_log(task_id, &format!("❌ 第 {current} 页失败: {e}")).await;
+                        // `{e:#}` renders the whole anyhow chain (outer
+                        // context + root cause) so the log actually shows
+                        // *why* a page failed, not just the URL.
+                        let _ = manager.append_log(task_id, &format!("❌ 第 {current} 页失败: {e:#}")).await;
                     }
                 },
                 Err(e) => {
@@ -1618,27 +1587,22 @@ async fn process_pixiv_ugoira(
         let _ = manager.emit_progress(tid).await;
     }
 
-    // 2. Download the original zip via aria2 (i.pximg.net needs the Pixiv Referer).
-    let gid = manager
-        .aria2
-        .add_uri(
+    // 2. Download the original zip through the native downloader
+    //    (i.pximg.net needs the Pixiv Referer). Speed comes straight from the
+    //    download's windowed report — a single file, no slot aggregation.
+    let tid = task_id.unwrap_or("");
+    let zip_bytes = manager
+        .downloader
+        .download_file(
             &meta.original_src,
             Some("https://www.pixiv.net/"),
             None,
-            Some("ugoira.zip"),
-            Some(temp_dir),
-        )
-        .await
-        .context("add ugoira zip uri")?;
-    let tid = task_id.unwrap_or("");
-    let zip_path = manager
-        .aria2
-        .wait_for_gid_with_progress(
-            &gid,
-            Duration::from_millis(250),
+            temp_dir,
+            "ugoira.zip",
+            200,
             &runtime.cancelled,
             &runtime.paused,
-            |upd: ProgressUpdate| async move {
+            |upd: ProgressReport| async move {
                 if !tid.is_empty() {
                     let _ = manager.set_speed(tid, upd.speed as i64).await;
                 }
@@ -1646,9 +1610,6 @@ async fn process_pixiv_ugoira(
         )
         .await
         .context("download ugoira zip")?;
-    let zip_bytes = tokio::fs::read(&zip_path)
-        .await
-        .context("read ugoira zip")?;
     if let Some(tid) = task_id {
         let _ = manager.add_bytes(tid, zip_bytes.len() as i64).await;
     }
@@ -1881,7 +1842,7 @@ async fn process_ehentai(
     //     is cookie-gated and hard rate-limited, so it stays serial with the
     //     original ~400ms cadence. Resume cache hits skip straight to the slot.
     //   Phase 2 (8 concurrent): the resolved image-CDN URLs only need a
-    //     Referer (not the cookie), so they fan out 8-wide through aria2.
+    //     Referer (not the cookie), so they fan out 8-wide through the downloader.
     //     Each is `tokio::spawn`'d as its own `'static + Send` task bounded by
     //     a Semaphore(8); results land in a pre-sized Vec indexed by page,
     //     preserving cb7 page order regardless of completion order.
@@ -1914,8 +1875,8 @@ async fn process_ehentai(
         let out = format!("page-{:04}", idx);
 
         // Resume support: if this page was already downloaded to the temp dir
-        // (previous run paused/killed mid-flight), reuse its bytes. aria2
-        // writes exactly `page-{idx:04}` (no extension).
+        // (previous run paused/killed mid-flight), reuse its bytes. The
+        // downloader writes exactly `page-{idx:04}` (no extension).
         let cached_path = temp_dir.join(&out);
         let mut cache_hit = false;
         if cached_path.is_file() {
@@ -2027,7 +1988,7 @@ async fn process_ehentai(
 
     // Cancelled mid-flight (user cancel): bail before packaging so we don't
     // register a partial gallery. In-flight downloads already removed their
-    // aria2 gids via the cancel path while the join drained.
+    // downloads via the cancel path while the join drained.
     if runtime.cancelled.load(Ordering::Relaxed) {
         anyhow::bail!("cancelled");
     }
@@ -2189,7 +2150,7 @@ async fn process_ahentai(
         load_dir.trim_matches('/').to_string()
     };
 
-    // Download all pages via aria2 through the shared concurrent helper.
+    // Download all pages via the native downloader through the shared concurrent helper.
     let downloads: Vec<PageDownload> = (1..=total)
         .map(|page| PageDownload {
             index: page as usize - 1,
@@ -2580,7 +2541,7 @@ async fn process_nicecat(
         .await;
     let _ = manager.emit_progress(&task.id).await;
 
-    // Download all pages via aria2 through the shared concurrent helper.
+    // Download all pages via the native downloader through the shared concurrent helper.
     let downloads: Vec<PageDownload> = page_urls
         .iter()
         .enumerate()

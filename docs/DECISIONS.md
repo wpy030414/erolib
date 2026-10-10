@@ -23,7 +23,7 @@
 
 ---
 
-## D-002：统一 TaskManager + aria2 下载管线
+## D-002：统一 TaskManager + aria2 下载管线（下载引擎部分已被 D-023 取代）
 
 **背景**：四个来源（Pixiv / EHentai / ASMHentai / NiceCat）都需要下载图片序列。
 
@@ -39,6 +39,11 @@
 - 每个来源独立下载逻辑：代码重复，功能不一致
 - 纯 reqwest 下载：缺少断点续传和代理自动配置
 - 进程内下载（不用 aria2）：无法利用 aria2 的成熟生态
+
+**后续（D-023, 2026-10）**：aria2 已被原生 reqwest 下载器取代——本条中
+「统一 TaskManager / 8 并发 / 来源客户端仅抓元数据」的设计仍然成立，仅
+「引擎选 aria2」及其理由作废（当时的「纯 reqwest 缺少代理自动配置」正是
+D-023/D-024 补上的能力）。
 
 ---
 
@@ -240,7 +245,7 @@
 
 ---
 
-## D-014：自动更新走 GitHub releases Atom feed + aria2 下载
+## D-014：自动更新走 GitHub releases Atom feed + aria2 下载（下载部分已被 D-023 取代）
 
 **背景**：用户需要方便地获取新版本，而非手动去 GitHub 下载。
 
@@ -256,6 +261,10 @@
 - GitHub REST API `/releases/latest`：需要 token 或受 rate limit 约束
 - Tauri 官方 updater plugin：对自定义逻辑（如 Atom feed 解析）支持不足
 - 手动下载（不自动更新）：用户需要自己去 GitHub 找新版本
+
+**后续（D-023, 2026-10）**：更新包下载改走原生
+`Downloader::download_file`（复用 D-024 的代理注入），Atom feed 解析、
+`update://progress` 事件与安装流程不变。
 
 ---
 
@@ -444,3 +453,81 @@ ugoira 帧与封面遵循同一设置（默认 `none` = D-005 行为）。封面
 **风险注记**：`none` 档下 AVIF 源书保持 AVIF，PDF 导出对该书失败（dav1d 已
 移除，`export.rs` 对 AVIF bail）——预存限制非回归（原 `ensure_webp` 对 AVIF
 同样直通），阅读器/缩略图不受影响。
+
+---
+
+## D-023：原生 reqwest 下载器取代 aria2 子进程（2026-10）
+
+**背景**：用户报告 Windows 上下载「难、慢」，彻查发现系统代理检测在 Windows
+上完全失明（见 D-024）。借此机会重新评估下载引擎：EroLib 的下载需求本质是
+「带 Referer/Origin 的并发单文件 GET + 重试 + 进度」，而 aria2 作为独立 C++
+进程带来了三项持续成本——① 需为 macOS（dylibbundler 重打包）与 Windows
+（静态 PE）分别内置二进制；② 代理注入依赖 RPC 的 per-gid `all-proxy` option，
+与元数据侧 reqwest 的代理行为割裂（本次故障的直接原因）；③ 孤儿 daemon 残留
+（主程序退出后 aria2c 仍监听 6800，实测复现）。aria2 真正独有且被用到的能力
+（多连接分段、BT、metalink）对图片下载无价值。
+
+**选择**：删除 aria2 依赖，新增 `services/downloader.rs` `Downloader`
+（reqwest 流式 GET）：内置 Chrome UA + Referer/Origin；5 次尝试（1s→2s→5s→
+5s，把原 aria2 内层 `max-tries=5` 与外层 3 次重试折叠为一套调度）；每 chunk
+30s 活动超时（对齐原 `--timeout=60`）；**`{name}.part` → rename 原子落盘**。
+`download_pages_concurrent` 的 8 并发 JoinSet、取消/暂停语义、临时目录断点
+复用全部保留。ugoira zip 与自动更新下载一并切换。
+
+**理由**：
+- 代理检测（D-024）与元数据 client 共用同一套 `proxy::install` 注入，消灭
+  两套代理行为的割裂
+- 删除全部平台二进制打包（`binaries/aria2c-bin/`、`tauri.conf.json` resources、
+  RPC daemon 生命周期管理），Linux 的技术障碍同步消失（边界是否放开另行决策）
+- 顺手修复既有隐患：旧方案直写最终文件名，下载中途被杀会留下 ≥min_bytes 的
+  半截文件，被断点缓存按「≥200 字节」误判为完整页；`.part` → rename 后不可能
+
+**替代方案**：
+- 保留 aria2 + 仅修代理检测：改动小，但三项进程成本与孤儿 daemon 问题保留
+- 静态集成 aria2（libaria2/FFI）：aria2 是 GPLv2 应用而非库，需 fork + C++
+  FFI + 重原生依赖树，维护成本远超收益（许可证本身不是障碍：原进程边界不传染，
+  个人本地使用亦无实际约束）
+- 引入第三方 Rust 下载 crate：需求过简（GET + 重试 + 落盘），自实现约 200 行
+
+**风险注记**：重试调度由「aria2 内 5 次 × 外层 3 次」（最坏 15 次）收敛为
+5 次，失败率极低的下载场景无实质差异；暂停语义保持原样（进行中的传输继续
+流动，仅不发起新尝试）。
+
+---
+
+## D-024：Windows 系统代理检测（注册表 + TCP 探测）与 reqwest 统一注入（2026-10）
+
+**背景**：Windows 11 上 Clash 系统代理已开启（注册表 `ProxyEnable=1`,
+`ProxyServer=127.0.0.1:7897`），但下载全走直连。三个断点：`proxy.rs` 的系统
+代理检测仅有 macOS `scutil` 分支（Windows 编译期剔除）；GUI 启动的 exe 不继承
+shell 环境变量；reqwest 0.11 只读环境变量（读 Windows 注册表的 `system-proxy`
+是 0.12 特性）。WebView2 浏览自行走系统代理，造成「浏览正常、下载难/慢」的
+割裂体验。
+
+**选择**：`services/proxy.rs` 新增 Windows 分支读
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ProxyServer`
+（`winreg` crate，`cfg(windows)`），兼容 `host:port` 与 `http=;https=;socks=`
+分协议格式（HTTPS 优先、忽略 socks/ftp）；检测命中后 **TCP 探测**（500ms）确认
+代理在监听，否则回落直连；缓存改 `std::sync::Mutex`、TTL 60s 不变。新增
+`install(builder)`：经 `reqwest::Proxy::custom` 把检测注入所有 reqwest 客户端
+（逐请求查缓存、loopback 直连），`Downloader` 与四来源元数据客户端共用。
+`normalize_proxy_url` 把 `https://` 前缀剥为 `http://`（代理协议恒为 HTTP
+CONNECT，本地端口不 speak TLS）。
+
+**理由**：
+- 忽略 `ProxyEnable` 与 macOS 语义一致：TUN 模式用户不开「系统代理」开关，
+  但 daemon 始终在监听——TCP 探测则兜住「代理已退出但注册表残留」的反向风险
+- `Proxy::custom` 逐请求查缓存 → 用户中途开关代理 60s 内自动生效，无需重建
+  client（若用构建时固定的 `Proxy::all` 则做不到）
+- 不升级 reqwest 0.12：升级只能修元数据侧，下载引擎（D-023 后为自有 client）
+  与 aria2 均需同一套检测，统一走 `install()` 才是单一事实源
+
+**替代方案**：
+- 升级 reqwest 0.12 用其 `system-proxy`：覆盖不了下载器侧（D-023 前为 aria2
+  独立进程），且 version bump 的连带风险大于收益
+- 读 PAC（`AutoConfigURL`）：Clash/v2rayN 默认不用 PAC 模式，不做
+- 支持 SOCKS：reqwest 0.11 未启 socks feature，且 Clash 混合端口本就说 HTTP
+
+**风险注记**：TCP 探测使「代理端口残留但进程已退」从「下载全挂」变为「直连」
+（纯改善）；远程企业代理的探测预算 500ms，慢链路上偶有误判为不可用 → 直连
+（该场景非目标用户）。

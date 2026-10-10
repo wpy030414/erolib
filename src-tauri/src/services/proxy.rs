@@ -47,22 +47,6 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 static CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
-/// Detect an HTTP/HTTPS proxy URL, e.g. for logging or one-shot use.
-///
-/// Returns `Some("http://host:port")` when a usable proxy is found, or `None`
-/// (traffic goes direct). Cached for `CACHE_TTL`. The platform detectors are
-/// cheap-but-synchronous (registry read / `scutil` spawn / TCP probe), so the
-/// heavy path runs on the blocking pool.
-pub async fn detect_http_proxy() -> Option<String> {
-    if let Some(url) = cached() {
-        return Some(url);
-    }
-    tokio::task::spawn_blocking(detect_and_cache)
-        .await
-        .ok()
-        .flatten()
-}
-
 /// Serve from cache while fresh.
 fn cached() -> Option<String> {
     let guard = CACHE.lock().ok()?;
