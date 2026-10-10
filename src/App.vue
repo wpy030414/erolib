@@ -159,6 +159,9 @@ onMounted(() => {
   onLocaleChange(() => {
     void useLibraryStore().refresh();
   });
+  // Same startup push for the page-compression setting — the backend row
+  // stays 'none' until the frontend's localStorage value is pushed.
+  void settingsStore.pushCompression().catch(() => {});
 });
 
 onBeforeUnmount(() => {

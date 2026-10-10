@@ -145,6 +145,32 @@
         </div>
       </section>
 
+      <!-- Compression (page encoding for new imports/downloads) -->
+      <section class="mb-6">
+        <div class="d-flex align-center mb-2">
+          <MdiIcon :path="mdiImageMultipleOutline" :size="22" class="mr-2" />
+          <h3 class="text-h6">{{ t('settings.compression') }}</h3>
+        </div>
+
+        <md-outlined-select
+          ref="compressionSelectRef"
+          :label="t('settings.compression')"
+          style="max-width: 240px"
+        >
+          <md-select-option
+            v-for="item in compressionItems"
+            :key="item.value"
+            :value="item.value"
+          >
+            {{ item.label }}
+          </md-select-option>
+        </md-outlined-select>
+
+        <p class="text-body-2 text-medium-emphasis mt-3 mb-0">
+          {{ t('settings.compression.hint') }}
+        </p>
+      </section>
+
       <!-- Usage data -->
       <section class="mb-6">
         <div class="d-flex align-center mb-2">
@@ -327,6 +353,7 @@ import {
   mdiDeleteForever,
   mdiFolderSyncOutline,
   mdiGithub,
+  mdiImageMultipleOutline,
   mdiPalette,
   mdiPlay,
   mdiRss,
@@ -337,7 +364,7 @@ import {
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { api } from '@/services/api';
 import { useI18n, LOCALES, LOCALE_LABELS, type Locale } from '@/i18n';
-import { useSettingsStore } from '@/stores/settings';
+import { useSettingsStore, type Compression } from '@/stores/settings';
 import { useThemeStore } from '@/stores/theme';
 import { useToastStore } from '@/stores/toast';
 import { useUpdateStore } from '@/stores/update';
@@ -414,6 +441,13 @@ const resetError = ref<string | null>(null);
 
 const localeItems = computed(() =>
   LOCALES.map((l) => ({ value: l, label: LOCALE_LABELS[l] })),
+);
+
+const compressionItems = computed(() =>
+  (['none', 'lossless', 'lossy'] as const).map((v) => ({
+    value: v,
+    label: t(`settings.compression.${v}`),
+  })),
 );
 
 onMounted(async () => {
@@ -521,12 +555,20 @@ watch(tab, (v) => {
 type SelectElement = HTMLElement & { value: string };
 type SwitchElement = HTMLElement & { selected: boolean };
 const selectRef = ref<SelectElement | null>(null);
+const compressionSelectRef = ref<SelectElement | null>(null);
 const switchRef = ref<SwitchElement | null>(null);
 const syncSwitchRef = ref<SwitchElement | null>(null);
 
 function onLocaleChange() {
   if (selectRef.value) {
     setLocale(selectRef.value.value as Locale);
+  }
+}
+function onCompressionChange() {
+  if (compressionSelectRef.value) {
+    settingsStore.setCompression(
+      compressionSelectRef.value.value as Compression,
+    );
   }
 }
 function onDarkChange() {
@@ -561,6 +603,11 @@ onMounted(() => {
   // fixes consecutive switches.
   if (selectRef.value) selectRef.value.value = locale.value;
   selectRef.value?.addEventListener('change', onLocaleChange);
+  // Same MWC-owns-selection pattern as the locale select above.
+  if (compressionSelectRef.value) {
+    compressionSelectRef.value.value = settingsStore.compression;
+  }
+  compressionSelectRef.value?.addEventListener('change', onCompressionChange);
   switchRef.value?.addEventListener('change', onDarkChange);
   syncSwitchRef.value?.addEventListener('change', onSyncChange);
 });
@@ -568,6 +615,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   tabsRef.value?.removeEventListener('change', onTabChange);
   selectRef.value?.removeEventListener('change', onLocaleChange);
+  compressionSelectRef.value?.removeEventListener('change', onCompressionChange);
   switchRef.value?.removeEventListener('change', onDarkChange);
   syncSwitchRef.value?.removeEventListener('change', onSyncChange);
 });

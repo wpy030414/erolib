@@ -67,6 +67,12 @@ const en: Record<string, string> = {
   'settings.theme.custom': 'Custom themes',
   'settings.theme.removeCustom': 'Remove custom theme',
 
+  'settings.compression': 'Compression',
+  'settings.compression.none': 'None (keep originals)',
+  'settings.compression.lossless': 'Lossless WebP',
+  'settings.compression.lossy': 'Lossy WebP',
+  'settings.compression.hint': 'Applies to newly imported or downloaded books only; existing books are unchanged',
+
   'settings.title': 'Settings',
   'settings.tab.basic': 'Basic',
   'settings.tab.sharing': 'Sharing',

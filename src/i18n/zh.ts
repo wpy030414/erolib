@@ -67,6 +67,12 @@ const zh: Record<string, string> = {
   'settings.theme.custom': '自定义主题',
   'settings.theme.removeCustom': '移除自定义主题',
 
+  'settings.compression': '压缩',
+  'settings.compression.none': '不压缩（保持原样）',
+  'settings.compression.lossless': '无损 WebP',
+  'settings.compression.lossy': '有损 WebP',
+  'settings.compression.hint': '仅对新导入/下载的书籍生效，已有书籍保持不变',
+
   'settings.title': '设置',
   'settings.tab.basic': '基础',
   'settings.tab.sharing': '共享',

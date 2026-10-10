@@ -8,6 +8,13 @@ const RSS_PORT_KEY = 'erolib.rssPort';
 const LOCAL_SYNC_ENABLED_KEY = 'erolib.localSyncEnabled';
 const LOCAL_SYNC_DIR_KEY = 'erolib.localSyncDir';
 
+const COMPRESSION_KEY = 'erolib.compression';
+
+/** How NEW imports/downloads are page-encoded. Mirrors the backend
+ *  `PageCompression` enum; 'none' keeps original bytes untouched. */
+export type Compression = 'none' | 'lossless' | 'lossy';
+const COMPRESSIONS: Compression[] = ['none', 'lossless', 'lossy'];
+
 // Default ports: 5269 for OPDS, 1269 for RSS
 const DEFAULT_OPDS_PORT = '5269';
 const DEFAULT_RSS_PORT = '1269';
@@ -28,6 +35,12 @@ function savePort(key: string, value: string) {
   }
 }
 
+function loadCompression(): Compression {
+  if (typeof window === 'undefined') return 'none';
+  const raw = window.localStorage.getItem(COMPRESSION_KEY);
+  return COMPRESSIONS.includes(raw as Compression) ? (raw as Compression) : 'none';
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const opdsPort = ref(loadPort(OPDS_PORT_KEY, DEFAULT_OPDS_PORT));
   const rssPort = ref(loadPort(RSS_PORT_KEY, DEFAULT_RSS_PORT));
@@ -39,6 +52,11 @@ export const useSettingsStore = defineStore('settings', () => {
   const rssBusy = ref(false);
   const opdsError = ref<string | null>(null);
   const rssError = ref<string | null>(null);
+
+  // Page compression for new imports/downloads ('none' | 'lossless' |
+  // 'lossy'); localStorage is the source of truth, pushed to the backend
+  // like `locale`.
+  const compression = ref<Compression>(loadCompression());
 
   // One-way local sync (library → a chosen directory). Persisted in localStorage
   // like the server ports; the actual mirror runs in the backend.
@@ -133,6 +151,21 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  function setCompression(v: Compression) {
+    if (!COMPRESSIONS.includes(v)) return;
+    compression.value = v;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(COMPRESSION_KEY, v);
+    }
+    void api.setCompression(v).catch(() => {});
+  }
+
+  /** App.vue calls on mount — keeps the backend `settings` row aligned with
+   *  localStorage (the backend defaults to 'none' until pushed). */
+  function pushCompression() {
+    return api.setCompression(compression.value);
+  }
+
   function setSyncDir(v: string) {
     syncDir.value = v;
     if (typeof window !== 'undefined') {
@@ -172,10 +205,12 @@ export const useSettingsStore = defineStore('settings', () => {
     rssPort.value = DEFAULT_RSS_PORT;
     syncEnabled.value = false;
     syncDir.value = '';
+    compression.value = 'none';
     window.localStorage.removeItem(OPDS_PORT_KEY);
     window.localStorage.removeItem(RSS_PORT_KEY);
     window.localStorage.removeItem(LOCAL_SYNC_ENABLED_KEY);
     window.localStorage.removeItem(LOCAL_SYNC_DIR_KEY);
+    window.localStorage.removeItem(COMPRESSION_KEY);
   }
 
   return {
@@ -194,6 +229,7 @@ export const useSettingsStore = defineStore('settings', () => {
     syncBusy,
     syncError,
     syncStats,
+    compression,
     saveOpdsPort,
     saveRssPort,
     startOpds,
@@ -204,6 +240,8 @@ export const useSettingsStore = defineStore('settings', () => {
     toggleRss,
     setSyncEnabled,
     setSyncDir,
+    setCompression,
+    pushCompression,
     syncNow,
     syncIfEnabled,
     autoStartAll,

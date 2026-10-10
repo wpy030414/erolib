@@ -108,6 +108,10 @@ export const api = {
   setLocale: (locale: string) =>
     invoke<void>('set_locale', { localeStr: locale }),
 
+  // Persist the page-compression mode applied to new imports/downloads.
+  setCompression: (mode: 'none' | 'lossless' | 'lossy') =>
+    invoke<void>('set_compression', { mode }),
+
   // OPDS Server (kept; lives under Settings Sharing tab).
   startOpdsServer: (port: number) =>
     invoke<string>('start_opds_server_cmd', { port }),

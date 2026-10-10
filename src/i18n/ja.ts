@@ -67,6 +67,12 @@ const ja: Record<string, string> = {
   'settings.theme.custom': 'カスタムテーマ',
   'settings.theme.removeCustom': 'カスタムテーマを削除',
 
+  'settings.compression': '圧縮',
+  'settings.compression.none': '圧縮なし（元のまま）',
+  'settings.compression.lossless': 'ロスレス WebP',
+  'settings.compression.lossy': '非可逆 WebP',
+  'settings.compression.hint': '新しく取り込む・ダウンロードする本にのみ適用され、既存の本は変更されません',
+
   'settings.title': '設定',
   'settings.tab.basic': '基本',
   'settings.tab.sharing': '共有',
