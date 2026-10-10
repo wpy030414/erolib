@@ -10,7 +10,8 @@ use crate::db::Database;
 use crate::errors::AppError;
 use crate::models::{Book, BookSource};
 use crate::services::locale;
-use crate::services::{PageCompression, StorageService};
+use crate::services::settings;
+use crate::services::StorageService;
 
 pub struct LibraryService {
     pub(crate) db: Arc<Database>,
@@ -47,13 +48,16 @@ impl LibraryService {
             .storage
             .library_path
             .join(format!("{}.cb7", book_id));
+        // Page encoding follows the compression setting (none keeps originals,
+        // the webp modes re-encode); read once for the whole import.
+        let compression = settings::current_compression(&self.db).await;
 
-        // All zip formats are repacked into a library cb7 with pages
-        // re-encoded to the unified webp format; metadata comes from the
-        // format's own carrier (OPF / PDF info / ComicInfo.xml). cbr (rar)
-        // can't be read by the zip backend and keeps the verbatim copy —
-        // which the reader can't open either, so it imports with 0 pages
-        // (pre-existing behavior, unchanged).
+        // All zip formats are repacked into a library cb7 with pages encoded
+        // per the compression setting; metadata comes from the format's own
+        // carrier (OPF / PDF info / ComicInfo.xml). cbr (rar) can't be read
+        // by the zip backend and keeps the verbatim copy — which the reader
+        // can't open either, so it imports with 0 pages (pre-existing
+        // behavior, unchanged).
         let meta = if format == "epub" || format == "pdf" {
             let (images, parsed) = tokio::task::spawn_blocking({
                 let path = path.to_path_buf();
@@ -71,7 +75,7 @@ impl LibraryService {
             .map_err(|e| AppError::Other(e.to_string()))?;
 
             self.storage
-                .create_cb7(&images, &parsed, PageCompression::Lossy)
+                .create_cb7(&images, &parsed, compression)
                 .map_err(|e| AppError::Other(e.to_string()))?;
             Some(parsed)
         } else if format == "cb7" || format == "cbz" {
@@ -87,7 +91,7 @@ impl LibraryService {
                 storage.create_cb7(
                     &images,
                     &meta.clone().unwrap_or_default(),
-                    PageCompression::Lossy,
+                    compression,
                 )?;
                 Ok(meta)
             })
@@ -229,9 +233,8 @@ impl LibraryService {
         if dropped_first_page {
             let file_path = self.get_book_file_path(id).await?;
             let path = Path::new(&file_path);
-            let _ = self
-                .storage
-                .extract_cover(path, id, PageCompression::Lossy);
+            let compression = settings::current_compression(&self.db).await;
+            let _ = self.storage.extract_cover(path, id, compression);
         }
         Ok(())
     }
@@ -361,9 +364,12 @@ impl LibraryService {
         let file_size = std::fs::metadata(file_path)
             .map(|m| m.len() as i64)
             .unwrap_or(0);
+        // Every downloader/importer funnels through here — read the
+        // compression setting once so covers follow the same mode as pages.
+        let compression = settings::current_compression(&self.db).await;
         let cover_path = self
             .storage
-            .extract_cover(file_path, book_id, PageCompression::Lossy)
+            .extract_cover(file_path, book_id, compression)
             .ok()
             .map(|p| p.to_string_lossy().to_string());
         let now = Utc::now();

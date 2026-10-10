@@ -189,6 +189,7 @@ fn main() {
             commands::search::search_books,
             commands::search::get_all_tags,
             commands::settings::set_locale,
+            commands::settings::set_compression,
             commands::server::start_opds_server_cmd,
             commands::server::stop_opds_server_cmd,
             commands::server::start_rss_server_cmd,

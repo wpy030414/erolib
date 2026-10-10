@@ -13,6 +13,7 @@ pub mod ehentai;
 pub mod ahentai;
 pub mod nicecat;
 mod search;
+pub mod settings;
 pub mod similarity;
 mod storage;
 pub mod aria2;

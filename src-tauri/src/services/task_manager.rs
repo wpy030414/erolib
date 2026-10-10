@@ -21,7 +21,7 @@ use crate::services::pixiv::{find_existing_by_source, PixivClient};
 use crate::services::task::{TaskPayload, TaskSnapshot, TaskSource, TaskStatus};
 use crate::services::aria2::ProgressUpdate;
 use crate::services::{
-    Aria2Client, AhentaiClient, EhentaiClient, LibraryService, PageCompression, StorageService,
+    settings, Aria2Client, AhentaiClient, EhentaiClient, LibraryService, StorageService,
 };
 
 /// Aggregated per-slot progress for one in-flight image download: (completed
@@ -1544,6 +1544,7 @@ async fn process_pixiv_work(
     if let Some(tid) = task_id {
         let _ = manager.append_log(tid, "📦 打包 CB7").await;
     }
+    let compression = settings::current_compression(&manager.db).await;
     let file_path = manager
         .storage
         .create_cb7(
@@ -1559,7 +1560,7 @@ async fn process_pixiv_work(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
-            PageCompression::Lossy,
+            compression,
         )
         .context("create cb7")?;
     if let Some(tid) = task_id {
@@ -1712,6 +1713,10 @@ async fn process_pixiv_ugoira(
     if let Some(tid) = task_id {
         let _ = manager.append_log(tid, "📦 打包 CB7 (ugoira)").await;
     }
+    // Ugoira frames follow the same compression setting as still pages —
+    // `none` keeps the original per-frame jpeg quality (D-005 behaviour),
+    // the webp modes re-encode each frame; delays are never touched.
+    let compression = settings::current_compression(&manager.db).await;
     let file_path = manager
         .storage
         .create_cb7(
@@ -1728,7 +1733,7 @@ async fn process_pixiv_ugoira(
                 delays: Some(delays_json.clone()),
                 ..Default::default()
             },
-            PageCompression::None,
+            compression,
         )
         .context("create cb7 (ugoira)")?;
     if let Some(tid) = task_id {
@@ -1759,7 +1764,7 @@ async fn process_pixiv_ugoira(
         if let Ok(bytes) = client.download_image(url).await {
             let _ = manager
                 .storage
-                .write_cover(&book_id, &bytes, PageCompression::Lossy);
+                .write_cover(&book_id, &bytes, compression);
         }
     }
     Ok(Some(book_id))
@@ -2065,6 +2070,7 @@ async fn process_ehentai(
         meta.title.clone()
     };
 
+    let compression = settings::current_compression(&manager.db).await;
     let file_path = manager
         .storage
         .create_cb7(
@@ -2080,7 +2086,7 @@ async fn process_ehentai(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
-            PageCompression::Lossy,
+            compression,
         )
         .context("create cb7")?;
 
@@ -2253,6 +2259,7 @@ async fn process_ahentai(
         published_at: None,
     };
 
+    let compression = settings::current_compression(&manager.db).await;
     let file_path = manager
         .storage
         .create_cb7(
@@ -2267,7 +2274,7 @@ async fn process_ahentai(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
-            PageCompression::Lossy,
+            compression,
         )
         .context("create cb7")?;
     let _ = manager.append_log(&task.id, "📦 打包完成").await;
@@ -2632,6 +2639,7 @@ async fn process_nicecat(
         published_at: published_at.clone(),
     };
 
+    let compression = settings::current_compression(&manager.db).await;
     let file_path = manager
         .storage
         .create_cb7(
@@ -2646,7 +2654,7 @@ async fn process_nicecat(
                 scraped_at: source.scraped_at.map(|t| t.to_rfc3339()),
                 ..Default::default()
             },
-            PageCompression::Lossy,
+            compression,
         )
         .context("create cb7")?;
     let _ = manager.append_log(&task.id, "📦 打包完成").await;
